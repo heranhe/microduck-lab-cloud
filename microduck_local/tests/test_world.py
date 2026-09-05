@@ -172,6 +172,38 @@ def test_a_team_is_a_colorway_and_a_legacy_scene_still_loads():
         validate_scenario(raw)
 
 
+def test_a_team_wears_its_colorway_in_the_compiled_model():
+    """`MjSpec.attach` prefixes materials per duck, so a colorway is a write to
+    THAT duck's shells and beak and nobody else's. Colour is not mass: the
+    step-for-step lock against the walk env (tests/test_arena.py) is what says
+    this changed nothing about the physics."""
+    import mujoco
+
+    from microduck_local.world import make_pitch
+    from microduck_local.world.compose import SHELL_MATERIALS, TRIM_MATERIALS, compose, paint_team
+    from microduck_local.world.scenario import TEAM_COLORWAYS
+    if not C.SCENE_WALK_XML.exists():
+        pytest.skip("microduck_rl checkout not found")
+    m = compose(make_pitch())
+
+    def rgb(duck, mat):
+        mid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_MATERIAL, f"{duck}/{mat}")
+        assert mid >= 0, f"{duck}/{mat} is not in the model"
+        return tuple(round(float(v), 3) for v in m.mat_rgba[mid][:3])
+
+    for duck, team in (("d0", "cream"), ("d1", "sky")):
+        for mat in SHELL_MATERIALS:
+            assert rgb(duck, mat) == tuple(round(v, 3) for v in TEAM_COLORWAYS[team]["shell"])
+        for mat in TRIM_MATERIALS:
+            assert rgb(duck, mat) == tuple(round(v, 3) for v in TEAM_COLORWAYS[team]["trim"])
+    assert rgb("d0", "left_shell_material") != rgb("d1", "left_shell_material")
+    # Every named material is really in the model: 0 would mean an upstream CAD
+    # re-export moved the names and the paint silently did nothing.
+    assert paint_team(m, "d0", "lavender") == len(SHELL_MATERIALS) + len(TRIM_MATERIALS)
+    assert paint_team(m, "d0", "puce") == 0
+    assert rgb("d1", "left_shell_material") == tuple(round(v, 3) for v in TEAM_COLORWAYS["sky"]["shell"])
+
+
 def test_a_team_facing_both_goals_is_refused_at_validation_not_at_load():
     """It used to raise out of `PitchMetrics` — after the world had been swapped
     in, so /sim answered 500 and went on streaming the previous world's score.

@@ -2,7 +2,9 @@
 // arithmetic behind the headings (lib/sim.ts groupLearned).
 
 import { describe, expect, it } from "vitest";
-import { groupLearned, LEARNED_GROUPS, type LearnedInfo } from "./sim";
+
+import { applyFloorClick } from "@/components/SimEditor";
+import { groupLearned, LEARNED_GROUPS, type LearnedInfo, type Scenario } from "./sim";
 
 const b = (name: string, group: string | null, title: string | null = null): LearnedInfo => ({
   name, group, title, description: null,
@@ -52,5 +54,47 @@ describe("menuBrains", () => {
     const m = menuBrains(runs, null, true);
     expect(m.groups.length).toBe(3);
     expect(m.hidden).toBe(0);
+  });
+});
+
+describe("applyFloorClick: placing a duck on a pitch", () => {
+  // The editor's job in Track 4.2: a duck placed on a pitch joins the team of
+  // the half it stands in and faces the goal that team attacks. Any other
+  // placement is refused by the server on save (a team facing both goals),
+  // so the default has to be the legal one.
+  const pitch = (): Scenario => ({
+    version: 1,
+    name: "p",
+    seed: 0,
+    floor: { size: [4, 3] },
+    walls: [],
+    boxes: [],
+    balls: [{ pos: [0, 0], radius: 0.035, mass: 0.015 }],
+    ducks: [],
+    goal_width: 0.7,
+    collision: "walk",
+  });
+  const place = (draft: Scenario, x: number) =>
+    applyFloorClick({ draft, tool: "duck", wallStart: null }, x, 0).draft.ducks.at(-1)!;
+
+  it("puts a duck in its own half's team, facing the other goal", () => {
+    const a = place(pitch(), -1);
+    expect([a.team, a.brain, a.spawn[2]]).toEqual(["cream", "chase", 0]);
+    const b = place({ ...pitch(), ducks: [a] }, 1);
+    expect([b.team, b.brain, b.spawn[2]]).toEqual(["sky", "chase", Math.PI]);
+  });
+
+  it("follows the teams already on the pitch rather than assuming cream", () => {
+    const sky = { ...place(pitch(), -1), team: "sky" as const };
+    const mate = place({ ...pitch(), ducks: [sky] }, -1.2);
+    expect(mate.team).toBe("sky");
+    expect(place({ ...pitch(), ducks: [sky] }, 1.2).team).toBe("cream");
+  });
+
+  it("leaves a duck teamless off a pitch", () => {
+    const room = { ...pitch(), goal_width: 0 };
+    const d = place(room, -1);
+    expect(d.team).toBeUndefined();
+    expect(d.brain).toBeUndefined();
   });
 });

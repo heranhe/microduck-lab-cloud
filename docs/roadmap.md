@@ -1534,7 +1534,15 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       naming the duck, at PUT time, instead of the 500-after-swap above.
       `eval-pitch` rows keep working (the metric dicts are keyed by team
       name; `_fmt` sorts them).
-- [ ] **2.2 The world paints it.** After `compose`, write the colorway's
+- [x] **2.2 The world paints it — DONE (2026-09-05).** `compose.paint_team`
+      writes the colorway into that duck's own `*_shell_material` (both body
+      halves, both head halves) and its trim into the beak, feet and ankles —
+      `MjSpec.attach` prefixes materials per duck, so it is a write to one
+      duck and no other. It returns how many it painted so a caller can assert
+      9 rather than discover an upstream CAD rename by seeing nothing; the
+      test does. `duck_info` streams `team` and `role`. This is what
+      `render-striker` and any MuJoCo view of a world show; the browser draws
+      from the single-robot scene and tints itself (2.3). The original: After `compose`, write the colorway's
       shell rgba into the duck's `*_shell_material` (left, right, top and
       bottom head) and the trim colour (orange for cream / sky, yellow for
       graphite / lavender) into `foot_*`, `ankle_*`, `jaw_material` —
@@ -1542,7 +1550,18 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       else. `duck_info` streams `team` (and the swatch); the physics is
       unchanged (a colour is not a mass), which `tests/test_arena.py`'s
       step-for-step lock against the walk env must keep saying.
-- [ ] **2.3 The viewer paints it.** `buildBodyGeometries(scene, colorway)`
+- [x] **2.3 The viewer paints it — DONE (2026-09-05).**
+      `buildBodyGeometries(scene, team)` bakes the colorway into the vertex
+      colours, and `SimDucks` builds ONE set per colorway (at most four,
+      whatever the roster), not one per duck. The scoreboard is per team with
+      swatches, and it shows `goalsFor` rather than the mouth counts — the
+      mouths moved into its tooltip — plus own goals, back-kicks as `n/N` and
+      the crowd fraction, red when a team kicks backwards more often than not.
+      The inspector shows the selected duck's team and role. Verified on
+      `pitch-2v2`: cream v sky on the pitch, the sky duck visibly blue in
+      d0's head camera, `d2 · alpha_walking · sky` in the inspector. The tint
+      itself is locked by `lib/duckskin.test.ts` — under that lighting a
+      screenshot cannot tell a cream shell from a white one. The original: `buildBodyGeometries(scene, colorway)`
       recolours geoms by material name at build time and is cached per
       colorway (four at most, so still one geometry set per colorway, not
       per duck); `<Duck>` takes the colorway from `SimDuck.team`; the
@@ -1552,7 +1571,16 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       tooltip where they belong. → **check:** eight ducks on screen still
       hold the WebGL context (the README's pitfall) — four geometry sets,
       not eight.
-- [ ] **2.4 The editor.** Per duck: a team select (the four colorways or
+- [x] **2.4 The editor — DONE (2026-09-05).** Per duck: a team select (the
+      four colorways), a role select (disabled until it has a team), and a
+      brain select built from `GET /world`'s registry — which is how `chase`
+      became reachable at all; the hard-coded four never listed the brain the
+      pitch actually runs. A "make a pitch" button sets the goals, drops a
+      ball on the spot and splits the ducks by the half they already stand in,
+      so the scene it produces is legal the moment it is toggled. A duck
+      placed on a pitch joins the team of its own half facing the right way
+      (`lib/sim.test.ts`), and the spawn rings on the floor wear the team's
+      colour. `ScenarioDuck` gained `team`, `role` and `odom`. The original: Per duck: a team select (the four colorways or
       none) and a role select (item 3.5); the brain select built from
       `world.brains` (every registry kind, `chase` included) instead of the
       hard-coded four; `ScenarioDuck` gains `team`, `role`, `odom`. A

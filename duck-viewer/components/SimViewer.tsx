@@ -43,6 +43,7 @@ import {
   tofZonePoints,
   CAM_FOV_DEG,
   TOF_PRESETS,
+  teamColor,
   type FrameEvent,
   type SimFrame,
   type ScenarioListing,
@@ -51,7 +52,7 @@ import {
   type WorldInfo,
 } from "@/lib/sim";
 import { camAspect, renderInset } from "@/lib/inset";
-import { buildBodyGeometries, Duck } from "./Duck";
+import { buildBodyGeometries, Duck, type BodyGeometry } from "./Duck";
 import CameraKeys from "./CameraKeys";
 import { BrainPanel } from "./SimBrain";
 import { consumeDragged, HANDLE, useDrag } from "./useDrag";
@@ -153,19 +154,37 @@ const ORBIT_TARGET: [number, number, number] = [0, 0.12, 0];
 const CAM_MIN_DIST = 0.3;
 const CAM_MAX_DIST = 12;
 
-/** Every duck of the frame, rendered by the lab page's Duck component. */
+/** Every duck of the frame, rendered by the lab page's Duck component.
+ *
+ *  Geometry is built once PER COLORWAY, not per duck: a team's colours are
+ *  baked into the vertex-color channel, and there are at most four teams, so
+ *  a 3v3 pitch costs two geometry sets and a room costs one. (Per duck is
+ *  what lost the WebGL context at eight ducks before the bodies were merged.) */
 function SimDucks({ scene, client }: { scene: Scene; client: SimClient }) {
-  const bodies = useMemo(() => buildBodyGeometries(scene), [scene]);
-  const [roster, setRoster] = useState<{ id: string; name: string }[]>([]);
+  const plain = useMemo(() => buildBodyGeometries(scene), [scene]);
+  const byTeam = useRef(new Map<string, BodyGeometry[]>());
+  const [roster, setRoster] = useState<{ id: string; name: string; team: string | null }[]>([]);
   const sig = useRef("");
   const refs = useRef(new Map<string, React.MutableRefObject<DuckFrame | null>>());
+  useEffect(() => {
+    byTeam.current.clear();     // a new scene: the cached geometry is stale
+  }, [scene]);
+  const bodiesFor = (team: string | null) => {
+    if (!team) return plain;
+    let g = byTeam.current.get(team);
+    if (!g) {
+      g = buildBodyGeometries(scene, team);
+      byTeam.current.set(team, g);
+    }
+    return g;
+  };
   useFrame(() => {
     const f = client.frame;
     if (!f) return;
-    const s = f.ducks.map((d) => `${d.id}\t${d.name}`).join("\n");
+    const s = f.ducks.map((d) => `${d.id}\t${d.name}\t${d.team ?? ""}`).join("\n");
     if (s !== sig.current) {
       sig.current = s;
-      setRoster(f.ducks.map((d) => ({ id: d.id, name: d.name })));
+      setRoster(f.ducks.map((d) => ({ id: d.id, name: d.name, team: d.team ?? null })));
       const sel = getSelectedDuck();
       if (sel && !f.ducks.some((d) => d.id === sel)) setSelectedDuck(null);
     }
@@ -182,7 +201,7 @@ function SimDucks({ scene, client }: { scene: Scene; client: SimClient }) {
           ref = { current: null };
           refs.current.set(d.id, ref);
         }
-        return <Duck key={d.id} duckId={d.id} bodies={bodies} frameRef={ref} offset={[0, 0]} label={d.name} />;
+        return <Duck key={d.id} duckId={d.id} bodies={bodiesFor(d.team)} frameRef={ref} offset={[0, 0]} label={d.name} />;
       })}
     </>
   );
@@ -494,18 +513,24 @@ function EditorFloor({ state, onClick }: { state: EditorState; onClick: (x: numb
         <planeGeometry args={[fx, fy]} />
         <meshBasicMaterial color="#43c2b8" transparent opacity={0.06} depthWrite={false} />
       </mesh>
-      {state.draft.ducks.map((d) => (
-        <group key={d.id} position={[d.spawn[0], d.spawn[1], 0.01]} rotation={[0, 0, d.spawn[2]]}>
-          <mesh>
-            <ringGeometry args={[0.1, 0.13, 32]} />
-            <meshBasicMaterial color="#f2b632" side={THREE.DoubleSide} />
-          </mesh>
-          <mesh position={[0.16, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
-            <coneGeometry args={[0.03, 0.08, 12]} />
-            <meshBasicMaterial color="#f2b632" />
-          </mesh>
-        </group>
-      ))}
+      {state.draft.ducks.map((d) => {
+        // A spawn marker wears its team's colour, so a roster is legible on
+        // the floor before anything is loaded — and the arrow shows the
+        // heading, which on a pitch is what decides the goal it attacks.
+        const c = teamColor(d.team) ?? "#f2b632";
+        return (
+          <group key={d.id} position={[d.spawn[0], d.spawn[1], 0.01]} rotation={[0, 0, d.spawn[2]]}>
+            <mesh>
+              <ringGeometry args={[0.1, 0.13, 32]} />
+              <meshBasicMaterial color={c} side={THREE.DoubleSide} />
+            </mesh>
+            <mesh position={[0.16, 0, 0]} rotation={[0, 0, -Math.PI / 2]}>
+              <coneGeometry args={[0.03, 0.08, 12]} />
+              <meshBasicMaterial color={c} />
+            </mesh>
+          </group>
+        );
+      })}
       {state.wallStart && (
         <mesh position={[state.wallStart[0], state.wallStart[1], 0.01]}>
           <ringGeometry args={[0.03, 0.05, 24]} />
@@ -1563,8 +1588,17 @@ export default function SimViewer() {
           <>
             {selDuck ? (
               <div style={{ marginBottom: 8 }}>
-                <div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {selDuck.team && (
+                    <span
+                      style={{ width: 10, height: 10, borderRadius: 2, background: teamColor(selDuck.team) ?? "#555", border: "1px solid rgba(0,0,0,.4)" }}
+                      title={`team ${selDuck.team}${selDuck.role ? ` · ${selDuck.role}` : ""}`}
+                    />
+                  )}
                   <b>{selDuck.id}</b> · {selDuck.policy ? selDuck.policy.split(":").pop() : "stand"}
+                  {selDuck.team && (
+                    <span style={{ color: "#9aa5b1" }}>· {selDuck.team}{selDuck.role ? ` ${selDuck.role}` : ""}</span>
+                  )}
                 </div>
                 <div style={{ color: "#9aa5b1" }}>
                   falls {selDuck.falls} · speed {selDuck.speed.toFixed(2)} / {selDuck.cmdSpeed.toFixed(2)} m/s
@@ -1784,6 +1818,7 @@ export default function SimViewer() {
           state={editor}
           setState={setEditor}
           top={inspectorTop}
+          brains={world?.brains}
           onClose={() => setEditor(null)}
           onLoaded={(w) => {
             setWorld(w);
@@ -1793,46 +1828,71 @@ export default function SimViewer() {
           }}
         />
       )}
-      {status.soccer && (
+      {status.soccer && (() => {
+        // The scoreboard is per TEAM, not per goal mouth. The mouth counts
+        // (`left`/`right`) are what the World keeps, and reading them as team
+        // scores is the inversion eval_pitch carries a warning paragraph
+        // about — so the panel shows `goalsFor`, which is that translation
+        // done once on the server, and keeps the mouths in the tooltip.
+        const soc = status.soccer;
+        const teams = Object.keys(soc.possession ?? soc.goalsFor ?? {}).sort();
+        const num = (rec: Record<string, number | null> | undefined, t: string) => Number(rec?.[t] ?? 0);
+        const row = (label: string, title: string, cell: (t: string) => React.ReactNode) => (
+          <>
+            <span style={{ color: "#5f6b78" }} title={title}>{label}</span>
+            {teams.map((t) => <span key={`${label}${t}`}>{cell(t)}</span>)}
+          </>
+        );
+        return (
         <div ref={pitchRef} style={{ position: "absolute", top: inspectorTop, left: PAD, maxWidth: `calc(100vw - ${INSPECTOR_W + PAD * 3}px)`, boxSizing: "border-box", background: "rgba(16,18,22,0.9)", border: "1px solid #2b313b", borderRadius: 6, color: "#e9edf1", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, padding: "8px 10px", zIndex: 20 }}>
           <div style={{ color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>Pitch</div>
-          <div style={{ fontSize: 22, fontWeight: 600 }}>
-            {status.soccer.left} <span style={{ fontSize: 12, color: "#9aa5b1" }}>left</span> · {status.soccer.right} <span style={{ fontSize: 12, color: "#9aa5b1" }}>right</span>
+          <div style={{ fontSize: 22, fontWeight: 600, display: "flex", gap: 10, alignItems: "center" }}
+               title={`goal mouths: left ${soc.left} · right ${soc.right}`}>
+            {teams.map((t, i) => (
+              <span key={t} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {i > 0 && <span style={{ color: "#5f6b78", marginRight: 4 }}>·</span>}
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: teamColor(t) ?? "#9aa5b1", border: "1px solid rgba(0,0,0,.35)" }} />
+                {soc.goalsFor ? num(soc.goalsFor, t) : "—"}
+                <span style={{ fontSize: 12, color: "#9aa5b1" }}>{t}</span>
+              </span>
+            ))}
           </div>
           <div style={{ color: "#9aa5b1", fontSize: 11 }} title="a goal within 4 s of a kick is the kick's; the rest were walked into">
-            {status.soccer.kicked ?? 0} kicked · {status.soccer.bumped ?? 0} walked in
+            {soc.kicked ?? 0} kicked · {soc.bumped ?? 0} walked in
+            {soc.ownGoals ? ` · own ${teams.reduce((a, t) => a + num(soc.ownGoals, t), 0)}` : ""}
+            {soc.goalsUnattributed ? ` · ${soc.goalsUnattributed} unplaced` : ""}
           </div>
-          {status.soccer.possession && (
-            <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid #2b313b", display: "grid", gridTemplateColumns: "auto 1fr 1fr", gap: "2px 8px", fontSize: 11 }}>
+          {soc.possession && (
+            <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid #2b313b", display: "grid", gridTemplateColumns: `auto repeat(${teams.length}, 1fr)`, gap: "2px 8px", fontSize: 11 }}>
               <span style={{ color: "#5f6b78" }} title="goals are ~2.5 a run and resolve almost nothing; these are what the benchmark judges by">
                 per min
               </span>
-              <span style={{ color: "#9aa5b1" }}>left</span>
-              <span style={{ color: "#9aa5b1" }}>right</span>
-              <span style={{ color: "#5f6b78" }} title="seconds a minute one of ours is nearest the ball inside 0.25 m — the cheap screen (9 seeds to see a 25% change)">
-                possession
-              </span>
-              <span style={{ color: "#43c2b8" }}>{(status.soccer.possession.left ?? 0).toFixed(1)}s</span>
-              <span style={{ color: "#43c2b8" }}>{(status.soccer.possession.right ?? 0).toFixed(1)}s</span>
-              <span style={{ color: "#5f6b78" }} title="metres a minute the ball is carried toward the goal this team attacks — the discriminator (43 seeds), but inflated by churn: read it with signed progress">
-                advance
-              </span>
-              <span style={{ color: "#ff8c00" }}>{(status.soccer.ballAdvance?.left ?? 0).toFixed(2)}</span>
-              <span style={{ color: "#ff8c00" }}>{(status.soccer.ballAdvance?.right ?? 0).toFixed(2)}</span>
-              <span style={{ color: "#5f6b78" }} title="the same, signed — pushing the ball back toward your own goal is charged for. Churn cannot inflate this one.">
-                signed
-              </span>
-              <span style={{ color: (status.soccer.ballProgress?.left ?? 0) < 0 ? "#d9534f" : "#e9edf1" }}>{(status.soccer.ballProgress?.left ?? 0).toFixed(2)}</span>
-              <span style={{ color: (status.soccer.ballProgress?.right ?? 0) < 0 ? "#d9534f" : "#e9edf1" }}>{(status.soccer.ballProgress?.right ?? 0).toFixed(2)}</span>
+              {teams.map((t) => (
+                <span key={`h${t}`} style={{ color: teamColor(t) ?? "#9aa5b1" }}>{t}</span>
+              ))}
+              {row("possession", "seconds a minute one of ours is nearest the ball inside 0.25 m — the cheap screen (9 seeds to see a 25% change)",
+                   (t) => <span style={{ color: "#43c2b8" }}>{num(soc.possession, t).toFixed(1)}s</span>)}
+              {row("advance", "metres a minute the ball is carried toward the goal this team attacks — the discriminator (43 seeds), but inflated by churn: read it with signed progress",
+                   (t) => <span style={{ color: "#ff8c00" }}>{num(soc.ballAdvance, t).toFixed(2)}</span>)}
+              {row("signed", "the same, signed — pushing the ball back toward your own goal is charged for. Churn cannot inflate this one.",
+                   (t) => <span style={{ color: num(soc.ballProgress, t) < 0 ? "#d9534f" : "#e9edf1" }}>{num(soc.ballProgress, t).toFixed(2)}</span>)}
+              {soc.ownGoals && row("own goals", "goals this team put into the mouth it defends — credited to the kicker inside 4 s, else to the last team on the ball",
+                   (t) => <span style={{ color: num(soc.ownGoals, t) > 0 ? "#d9534f" : "#e9edf1" }}>{num(soc.ownGoals, t)}</span>)}
+              {soc.kickCount && row("kicks back", "kicks whose ball ended up nearer this team's OWN goal 2 s later, out of its kicks — measured off the ball, not off what the brain meant",
+                   (t) => <span style={{ color: num(soc.kicksBack, t) > num(soc.kickCount, t) / 2 ? "#d9534f" : "#e9edf1" }}>
+                     {num(soc.kicksBack, t)}/{num(soc.kickCount, t)}</span>)}
+              {soc.crowd && soc.crowd[teams[0]] !== null && row("crowd", "the fraction of the time two of this team's ducks are within 0.5 m of the ball at once — a pile-up",
+                   (t) => <span style={{ color: num(soc.crowd, t) > 0.25 ? "#d9534f" : "#e9edf1" }}>{(num(soc.crowd, t) * 100).toFixed(0)}%</span>)}
             </div>
           )}
-          {status.soccer.kickoff > 0 ? (
-            <div style={{ color: "#ffd166" }}>GOAL {status.soccer.lastGoal} · kickoff in {status.soccer.kickoff.toFixed(1)} s</div>
+          {soc.kickoff > 0 ? (
+            <div style={{ color: "#ffd166" }}>GOAL in the {soc.lastGoal} mouth · kickoff in {soc.kickoff.toFixed(1)} s</div>
           ) : (
-            <div style={{ color: "#9aa5b1" }}>goals · chase brains, one ball · a goal restarts from the spawns</div>
+            <div style={{ color: "#9aa5b1" }}>one ball · a goal restarts from the spawns</div>
           )}
         </div>
-      )}
+        );
+      })()}
       {status.tidy && (
         <div style={{ ...PANEL, top: inspectorTop, left: editor ? 270 : PAD, maxWidth: `calc(100vw - ${INSPECTOR_W + PAD * 3}px)`, boxSizing: "border-box", color: "#c9d0d8" }}>
           <div style={{ color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>Tidy score</div>

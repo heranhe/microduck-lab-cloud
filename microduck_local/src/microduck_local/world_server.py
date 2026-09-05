@@ -414,8 +414,14 @@ class WorldState:
 
 
 def duck_info(w: World, d, brains: dict | None = None) -> dict:
+    # `team` is a colorway and `role` is the job it plays (world/scenario.py):
+    # what the page paints the duck and what it labels it. Both come off the
+    # scenario, so a duck that is not on a pitch carries None for both.
+    spec = next((x for x in w.scenario.ducks if x.id == d.id), None)
     return {
         "id": d.id,
+        "team": None if spec is None else spec.team,
+        "role": None if spec is None else spec.role,
         "name": d.id if d.policy_id is None else f"{d.id} · {d.policy_id.split(':', 1)[-1]}",
         "policy": d.policy_id,
         "falls": d.falls,

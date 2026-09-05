@@ -8,7 +8,18 @@
 
 import { useState } from "react";
 import { LAB_HTTP } from "@/lib/lab";
-import { loadWorld, type Scenario, type WorldInfo } from "@/lib/sim";
+import {
+  loadWorld,
+  ROLE_NAMES,
+  TEAM_COLORWAYS,
+  TEAM_NAMES,
+  teamColor,
+  type RoleName,
+  type Scenario,
+  type ScenarioDuck,
+  type TeamName,
+  type WorldInfo,
+} from "@/lib/sim";
 
 export type EditorTool = "wall" | "box" | "ball" | "duck" | "person" | "toy" | "basket" | null;
 
@@ -86,10 +97,22 @@ export function applyFloorClick(st: EditorState, x: number, y: number): EditorSt
     case "duck": {
       let n = d.ducks.length;
       while (d.ducks.some((k) => k.id === `d${n}`)) n++;
-      return {
-        ...st,
-        draft: { ...d, ducks: [...d.ducks, { id: `d${n}`, spawn: [x, y, 0], policy: "pollen:alpha_walking", tof: "datasheet" }] },
+      // On a pitch a duck joins the team whose half it is standing in, facing
+      // the goal it attacks — which is the only placement that is not an
+      // immediate scenario error, and the one a person means by clicking
+      // their own half.
+      const pitch = (d.goal_width ?? 0) > 0;
+      const home = (d.ducks.find((k) => k.spawn[0] < 0)?.team ?? "cream") as TeamName;
+      const away = (d.ducks.find((k) => k.spawn[0] > 0)?.team ?? (home === "sky" ? "cream" : "sky")) as TeamName;
+      const mine = x < 0 ? home : away;
+      const duck: ScenarioDuck = {
+        id: `d${n}`,
+        spawn: [x, y, pitch ? (x < 0 ? 0 : Math.PI) : 0],
+        policy: "pollen:alpha_walking",
+        tof: "datasheet",
+        ...(pitch ? { brain: "chase", team: mine } : {}),
       };
+      return { ...st, draft: { ...d, ducks: [...d.ducks, duck] } };
     }
     case "person": {
       const persons = d.persons ?? [];
@@ -131,6 +154,7 @@ export function SimEditor({
   onClose,
   onLoaded,
   top,
+  brains,
 }: {
   state: EditorState;
   setState: (s: EditorState) => void;
@@ -138,6 +162,9 @@ export function SimEditor({
   onLoaded: (w: WorldInfo) => void;
   /** y the page's top bar actually ends at — it wraps rows on a narrow window. */
   top?: number;
+  /** Brain kinds the server has (`GET /world`), so the picker offers what
+   *  actually exists rather than a list that goes stale. */
+  brains?: string[];
 }) {
   // Built-ins are read-only on the server, so a draft of one saves as a copy.
   const [name, setName] = useState(state.draft.name ? `${state.draft.name}-edit` : "my-room");
@@ -145,6 +172,26 @@ export function SimEditor({
   const [busy, setBusy] = useState(false);
   const d = state.draft;
   const setDraft = (draft: Scenario) => setState({ ...state, draft });
+  const setDuck = (i: number, patch: Partial<ScenarioDuck>) =>
+    setDraft({ ...d, ducks: d.ducks.map((q, j) => (j === i ? { ...q, ...patch } : q)) });
+  const pitch = (d.goal_width ?? 0) > 0;
+  const brainKinds = brains ?? ["wander", "follow", "chase", "tidy", "script"];
+  /** Make it a pitch, or stop being one: goals on the short walls, and the
+   *  ducks split by the half they already stand in so the scene is legal the
+   *  moment it is toggled (a team facing both goals is refused on save). */
+  const togglePitch = () => {
+    if (pitch) {
+      setDraft({ ...d, goal_width: 0, ducks: d.ducks.map((q) => ({ ...q, team: null, role: null })) });
+      return;
+    }
+    const ducks = d.ducks.map((q) => ({
+      ...q,
+      brain: q.brain ?? "chase",
+      team: (q.spawn[0] < 0 ? "cream" : "sky") as TeamName,
+      spawn: [q.spawn[0], q.spawn[1], q.spawn[0] < 0 ? 0 : Math.PI] as [number, number, number],
+    }));
+    setDraft({ ...d, goal_width: 0.7, ducks, balls: d.balls.length ? d.balls : [{ pos: [0, 0], radius: 0.035, mass: 0.015 }] });
+  };
   const tool = (t: EditorTool) => setState({ ...state, tool: state.tool === t ? null : t, wallStart: null });
   const toolBtn = (t: EditorTool, label: string) => (
     <button key={label} style={{ ...BTN, borderColor: state.tool === t ? "#f2b632" : "#2b313b" }} onClick={() => tool(t)}>
@@ -216,6 +263,13 @@ export function SimEditor({
       </div>
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
         floor {floorInput(0)} × {floorInput(1)} m
+        <button
+          style={{ ...BTN, borderColor: pitch ? "#43c2b8" : "#2b313b", marginLeft: "auto" }}
+          onClick={togglePitch}
+          title="goals on both short walls, a ball on the spot, and every duck on the team of its own half — cream at −x, sky at +x"
+        >
+          {pitch ? "⚽ pitch" : "make a pitch"}
+        </button>
       </div>
       {d.walls.map((w, i) =>
         row(`wall ${i}: (${w.from.join(",")}) → (${w.to.join(",")})`, () => setDraft({ ...d, walls: d.walls.filter((_, k) => k !== i) }), `w${i}`)
@@ -225,25 +279,59 @@ export function SimEditor({
       )}
       {d.balls.map((b, i) => row(`ball ${i}: ${b.pos[0]},${b.pos[1]}`, () => setDraft({ ...d, balls: d.balls.filter((_, k) => k !== i) }), `k${i}`))}
       {d.ducks.map((k, i) => (
-        <div key={`d${i}`} style={{ display: "flex", justifyContent: "space-between", gap: 6, color: "#c9d0d8", alignItems: "center" }}>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {k.id}: {k.spawn[0]},{k.spawn[1]} · {k.policy?.split(":").pop() ?? "stand"}
-          </span>
-          <select
-            value={k.brain ?? ""}
-            onChange={(e) => setDraft({ ...d, ducks: d.ducks.map((q, j) => (j === i ? { ...q, brain: e.target.value || null } : q)) })}
-            style={{ ...BTN, padding: "0 3px" }}
-            title="brain in auto mode"
-          >
-            <option value="">auto</option>
-            <option value="wander">wander</option>
-            <option value="follow">follow</option>
-            <option value="tidy">tidy</option>
-            <option value="script">script</option>
-          </select>
-          <button style={{ ...BTN, padding: "0 5px" }} onClick={() => setDraft({ ...d, ducks: d.ducks.filter((_, j) => j !== i) })} title="remove">
-            ✕
-          </button>
+        <div key={`d${i}`} style={{ color: "#c9d0d8", marginBottom: 2 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "center" }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", gap: 5, alignItems: "center" }}>
+              {k.team && (
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: teamColor(k.team) ?? "#555", border: "1px solid rgba(0,0,0,.4)" }} />
+              )}
+              {k.id}: {k.spawn[0]},{k.spawn[1]} · {k.policy?.split(":").pop() ?? "stand"}
+            </span>
+            <select
+              value={k.brain ?? ""}
+              onChange={(e) => setDuck(i, { brain: e.target.value || null })}
+              style={{ ...BTN, padding: "0 3px" }}
+              title="brain in auto mode"
+            >
+              {/* Every kind the server actually has, so `chase` (the soccer
+                  brain) and the learned ones are reachable — a hard-coded
+                  four could not name the brain the pitch runs. */}
+              <option value="">auto</option>
+              {brainKinds.map((b) => (
+                <option key={b} value={b}>{b.startsWith("learned:") ? b.slice(8) : b}</option>
+              ))}
+            </select>
+            <button style={{ ...BTN, padding: "0 5px" }} onClick={() => setDraft({ ...d, ducks: d.ducks.filter((_, j) => j !== i) })} title="remove">
+              ✕
+            </button>
+          </div>
+          {pitch && (
+            <div style={{ display: "flex", gap: 4, alignItems: "center", paddingLeft: 14, marginTop: 1 }}>
+              <select
+                value={k.team ?? ""}
+                onChange={(e) => setDuck(i, { team: (e.target.value || null) as TeamName | null, ...(e.target.value ? {} : { role: null }) })}
+                style={{ ...BTN, padding: "0 3px", color: teamColor(k.team) ?? "#e9edf1" }}
+                title="the team's colorway — what the duck is painted, and the only thing that tells two ducks apart on the robot"
+              >
+                <option value="">no team</option>
+                {TEAM_NAMES.map((t) => (
+                  <option key={t} value={t}>{TEAM_COLORWAYS[t].label}</option>
+                ))}
+              </select>
+              <select
+                value={k.role ?? ""}
+                onChange={(e) => setDuck(i, { role: (e.target.value || null) as RoleName | null })}
+                style={{ ...BTN, padding: "0 3px" }}
+                disabled={!k.team}
+                title="what it plays; blank = the team board picks one attacker and the rest support"
+              >
+                <option value="">any role</option>
+                {ROLE_NAMES.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       ))}
       {(d.pickables ?? []).map((q, i) => row(`${q.id}: ${q.kind} at ${q.pos[0]},${q.pos[1]}`, () => setDraft({ ...d, pickables: (d.pickables ?? []).filter((_, j) => j !== i) }), `t${i}`))}

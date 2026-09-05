@@ -12,7 +12,50 @@ export const TOF_PRESETS: TofPreset[] = ["ideal", "datasheet", "hostile"];
 export interface ScenarioWall { from: [number, number]; to: [number, number]; height: number; thickness: number }
 export interface ScenarioBox { pos: [number, number, number]; size: [number, number, number]; yaw: number; mass: number; rgba: [number, number, number, number] }
 export interface ScenarioBall { pos: [number, number]; radius: number; mass: number }
-export interface ScenarioDuck { id: string; spawn: [number, number, number]; policy: string | null; tof: TofPreset | null; detector?: TofPreset | null; brain?: string | null }
+export interface ScenarioDuck {
+  id: string;
+  spawn: [number, number, number];
+  policy: string | null;
+  tof: TofPreset | null;
+  detector?: TofPreset | null;
+  brain?: string | null;
+  /** Odometry drift preset. Carried so the editor's save round-trips it. */
+  odom?: string;
+  /** Soccer: the team's colorway and the job this duck plays. */
+  team?: TeamName | null;
+  role?: RoleName | null;
+}
+
+/** A team IS a colorway (microduck_local/world/scenario.py TEAM_COLORWAYS):
+ *  the four Pollen ships, each with the trim-and-beak colour that goes with
+ *  it. Two ducks of one colorway cannot be told apart on the robot either,
+ *  which is what a team is. Keep in step with the Python table — a test
+ *  cannot see across the two repos, so the values are duplicated on purpose
+ *  and the comment is the link. */
+export const TEAM_COLORWAYS = {
+  cream: { shell: "#f7e6cb", trim: "#f28c21", label: "Cream" },
+  graphite: { shell: "#6c6a68", trim: "#fac71a", label: "Graphite" },
+  lavender: { shell: "#bfa9cf", trim: "#fac71a", label: "Lavender" },
+  sky: { shell: "#a9dbe8", trim: "#f28c21", label: "Sky" },
+} as const;
+export type TeamName = keyof typeof TEAM_COLORWAYS;
+export const TEAM_NAMES = Object.keys(TEAM_COLORWAYS) as TeamName[];
+export const ROLE_NAMES = ["defender", "midfielder", "striker"] as const;
+export type RoleName = (typeof ROLE_NAMES)[number];
+
+/** MJCF material names a colorway repaints (world/compose.py). The viewer
+ *  builds its duck geometry from the single-robot scene, so it tints by these
+ *  names client-side; the server paints the same ones in the composed model
+ *  for MuJoCo's own renders. */
+export const SHELL_MATERIALS = ["left_shell_material", "right_shell_material",
+  "top_head_shell_material", "bottom_head_shell_material"];
+export const TRIM_MATERIALS = ["jaw_material", "foot_left_material", "foot_right_material",
+  "ankle_left_material", "ankle_right_material"];
+
+/** The shell colour of a team, for a swatch or a label. */
+export function teamColor(team: string | null | undefined): string | null {
+  return team && team in TEAM_COLORWAYS ? TEAM_COLORWAYS[team as TeamName].shell : null;
+}
 export interface ScenarioPerson { id: string; pos: [number, number]; yaw: number; path: [number, number][]; speed: number; radius: number; height: number }
 export interface ScenarioPickable { id: string; kind: "brick" | "block" | "sock"; pos: [number, number]; yaw: number }
 export interface ScenarioBasket { pos: [number, number]; size: [number, number]; rim: number }
@@ -36,6 +79,8 @@ export interface Scenario {
   basket?: ScenarioBasket | null;
   /** > 0: a pitch — goals this wide centred on both short walls (the World counts them). */
   goal_width?: number;
+  /** Which goal MOUTH each team attacks, for a roster not all facing it. */
+  attacks?: Partial<Record<TeamName, "left" | "right">>;
   collision: "walk" | "all";
 }
 export interface ScenarioListing { name: string; builtin: boolean; ducks: number; objects: number; modified: number | null }
@@ -135,6 +180,9 @@ export interface BrainInputs {
 export interface SimDuck {
   id: string;
   name: string;
+  /** Soccer: the team's colorway (what the duck is painted) and its job. */
+  team?: TeamName | null;
+  role?: RoleName | null;
   policy: string | null;
   falls: number;
   step: number;
@@ -185,8 +233,13 @@ export interface SimFrame {
    *  per-team rates are what the benchmark actually judges by: goals are
    *  ~2.5 a run and cannot resolve a change (146 seeds for a 25% shift),
    *  while possession takes 9 and ballAdvance 43. */
-  soccer: ({ left: number; right: number; ball: [number, number]; lastGoal: "left" | "right" | null; kickoff: number; kicked?: number; bumped?: number }
-    & Partial<Record<"ballAdvance" | "ballProgress" | "possession" | "possessionWide", Record<string, number>>>) | null;
+  soccer: ({ left: number; right: number; ball: [number, number]; lastGoal: "left" | "right" | null; kickoff: number; kicked?: number; bumped?: number;
+    /** Goals neither the kicker nor the last touch could be pinned to. */
+    goalsUnattributed?: number }
+    & Partial<Record<"ballAdvance" | "ballProgress" | "possession" | "possessionWide"
+      | "ballOwnHalf" | "spread" | "crowd" | "depth"
+      | "goalsFor" | "goalsAgainst" | "ownGoals" | "kickCount" | "kicksBack" | "kickCarry",
+      Record<string, number | null>>>) | null;
   /** Brain round-trip latency applied to every intent (roadmap 12.10), ms; 0 = onboard. */
   tetherMs?: number;
   /** Occupancy maps per duck, in each duck's ODOMETRY frame (brain-layer output, ~2 Hz; null on the other frames). */

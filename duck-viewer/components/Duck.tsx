@@ -18,6 +18,7 @@ import { assignDrag } from "@/lib/assign";
 import { captureWantsCleanFrame } from "@/lib/record";
 import { getSelectedDuck } from "@/lib/select";
 import { getDuckLabels } from "@/lib/ui";
+import { SHELL_MATERIALS, TEAM_COLORWAYS, TRIM_MATERIALS, teamColor, type TeamName } from "@/lib/sim";
 
 // FALLBACK body-name → color, used only against servers that predate rgba
 // streaming (whole body painted one guessed color).
@@ -41,8 +42,23 @@ function bodyColor(name: string): string {
 // empty; it stays as the place to put the next export's mistakes.
 const MATERIAL_FIX: Record<string, string> = {};
 
-/** Resolved sRGB→linear color for one geom (override → MJCF rgba → fallback). */
-function geomColor(g: SceneGeom, bodyName: string, out: THREE.Color): THREE.Color {
+/** A team's repaint of the printed parts, by MJCF material name: the four
+ *  shells take the colorway, the beak/feet/ankles take its trim. The server
+ *  paints the same names in the composed world (world/compose.py); the viewer
+ *  has to do its own because it draws every duck from ONE single-robot scene. */
+function teamPaint(team: string | null | undefined): Record<string, string> {
+  const look = teamColor(team) && team && team in TEAM_COLORWAYS ? TEAM_COLORWAYS[team as TeamName] : null;
+  if (!look) return {};
+  const out: Record<string, string> = {};
+  for (const m of SHELL_MATERIALS) out[m] = look.shell;
+  for (const m of TRIM_MATERIALS) out[m] = look.trim;
+  return out;
+}
+
+/** Resolved sRGB→linear color for one geom (team → override → MJCF rgba → fallback). */
+function geomColor(g: SceneGeom, bodyName: string, out: THREE.Color, paint: Record<string, string> = {}): THREE.Color {
+  const team = g.mat ? paint[g.mat] : undefined;
+  if (team) return out.set(team);
   const fix = g.mat ? MATERIAL_FIX[g.mat] : undefined;
   if (fix) return out.set(fix);
   if (g.rgba) return out.setRGB(g.rgba[0], g.rgba[1], g.rgba[2], THREE.SRGBColorSpace);
@@ -55,8 +71,15 @@ export interface BodyGeometry {
 }
 
 /** Merge every geom of every body into one geometry per body (body-local
- *  frame), painting each geom's material color into a vertex-color channel. */
-export function buildBodyGeometries(scene: Scene): BodyGeometry[] {
+ *  frame), painting each geom's material color into a vertex-color channel.
+ *
+ *  `team` repaints the printed parts in that colorway. The colour is baked
+ *  into the geometry, so a caller wanting two teams on screen builds one set
+ *  PER COLORWAY and shares it across that team's ducks — not one per duck.
+ *  Eight ducks with a set each is what lost the WebGL context before the
+ *  bodies were merged at all (duck-viewer/README.md). */
+export function buildBodyGeometries(scene: Scene, team?: string | null): BodyGeometry[] {
+  const paint = teamPaint(team);
   const meshGeos = scene.meshes.map((m) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(m.v, 3));
@@ -74,7 +97,7 @@ export function buildBodyGeometries(scene: Scene): BodyGeometry[] {
         quat.set(g.quat[1], g.quat[2], g.quat[3], g.quat[0]); // wxyz → xyzw
         mat.compose(new THREE.Vector3(...g.pos), quat, new THREE.Vector3(1, 1, 1));
         geo.applyMatrix4(mat);
-        geomColor(g, name, col);
+        geomColor(g, name, col, paint);
         const n = geo.getAttribute("position").count;
         const colors = new Float32Array(n * 3);
         for (let i = 0; i < n; i++) col.toArray(colors, i * 3);

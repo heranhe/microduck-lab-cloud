@@ -25,7 +25,7 @@ import mujoco
 import numpy as np
 
 from .. import contract as C
-from .scenario import PICKABLE_KINDS, Scenario
+from .scenario import PICKABLE_KINDS, TEAM_COLORWAYS, Scenario
 
 # Toys live in their own geom group: range sensors see them (they are
 # obstacles and pick targets), but the detector's line-of-sight test looks
@@ -42,6 +42,43 @@ ROBOT_XML = {
 
 def duck_prefix(duck_id: str) -> str:
     return f"{duck_id}/"
+
+
+# Which of the robot's ~38 materials carry a team's colours (roadmap Track
+# 4.2.2). The shells are the big readable area — the two body halves and the
+# two head halves — and the trim is what the press kit calls trim and beak.
+# Everything else (servos, PCBs, the lens, the soles) is the same on every
+# duck, as it is on the real robot: a colorway is a set of printed shells.
+SHELL_MATERIALS = ("left_shell_material", "right_shell_material",
+                   "top_head_shell_material", "bottom_head_shell_material")
+TRIM_MATERIALS = ("jaw_material", "foot_left_material", "foot_right_material",
+                  "ankle_left_material", "ankle_right_material")
+
+
+def paint_team(model: mujoco.MjModel, duck_id: str, colorway: str) -> int:
+    """Give one duck its team's colours, in the compiled model.
+
+    `MjSpec.attach` prefixes materials per duck (`d0/left_shell_material`), so
+    this is a write to that duck's own materials and no other duck's. Returns
+    how many it painted — 0 means the names moved in an upstream CAD re-export
+    and the paint silently did nothing, which is worth a caller's assert.
+
+    Colour is not mass: nothing here touches physics, and
+    `tests/test_arena.py` still locks a world step-for-step against the walk
+    env. What it does change is every MuJoCo render of a world
+    (`render-striker`, a viewer opened on one). The browser viewer draws from
+    the single-robot scene and tints client-side."""
+    look = TEAM_COLORWAYS.get(colorway)
+    if look is None:
+        return 0
+    n = 0
+    for names, rgb in ((SHELL_MATERIALS, look["shell"]), (TRIM_MATERIALS, look["trim"])):
+        for name in names:
+            mid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, duck_prefix(duck_id) + name)
+            if mid >= 0:
+                model.mat_rgba[mid] = [*rgb, 1.0]
+                n += 1
+    return n
 
 
 def _yaw_quat(yaw: float) -> list[float]:
@@ -147,6 +184,9 @@ def compose(scenario: Scenario) -> mujoco.MjModel:
                               objtype=mujoco.mjtObj.mjOBJ_BODY,
                               name1=f"{duck_prefix(duck.id)}jaw_soft", name2=t.id, active=False)
     model = spec.compile()
+    for duck in scenario.ducks:
+        if duck.team:
+            paint_team(model, duck.id, duck.team)
     # Feet win the friction pair, as the walk env sets for every model.
     for duck in scenario.ducks:
         for side in ("left", "right"):
