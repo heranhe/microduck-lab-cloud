@@ -2024,6 +2024,91 @@ directly.
       before building either: the presets are assumptions, and the docstring
       of `OdomNoise` says so.
 
+### 4b. Does a duck know where its own kick sends the ball? — MEASURED (2026-09-05)
+
+It did not, and chasing that question found something larger. The brain lays a
+kick line `u`, stands square to it, hunts along it afterwards and tells its
+teammates about it — and the ball leaves the foot at an angle to all of that.
+`scripts/probe_kick_line.py` measures the angle in PLAY (the ball's travel over
+`CARRY_S` after each swing) rather than on a bench, over **237 kicks**:
+
+| foot | measured in play | 95% CI | the bench map said |
+|---|---:|---:|---:|
+| left | **+23.6°** | [+13.1, +34.1] | +21.6° |
+| right | **−28.7°** | [−33.8, −23.6] | −11.0° |
+
+The bench was right about the left foot and **18° wrong about the right** — it
+swept a ball across a standing duck's foot at the sweet spot, and in play the
+ball is nowhere near it (below). `kick_exit_*` carry the in-play numbers now.
+
+- [x] **Rotating the STANCE to cancel the angle — REFUTED, with the
+      mechanism.** `kick_deflect_*` set to the measured values, 24 paired
+      seeds of 2v2: goals **2.08 → 1.38** (p = 0.045), ballAdvance
+      **0.839 → 0.655** (p = 0.023), kicks **151 → 78**, and the aim error it
+      was supposed to remove got **worse**, 45.4° → 67.3° mean absolute. The
+      deflection is a function of where the ball sits relative to the foot
+      (15°/cm near 2 cm, 4.5°/cm at 4–8 cm), so rotating the stance moves the
+      ball to a different part of that function and produces a different,
+      larger deflection — the right foot went from −27.3° to −48.6° off the
+      body. **A fixed rotation cannot cancel an offset that its own rotation
+      changes.**
+- [x] **Using it as KNOWLEDGE — neutral, ships on.** `hunt_exit`: hunt along
+      the true exit line and publish THAT to the board (`Team.publish_kick`).
+      24 paired seeds and 24 fresh: nothing resolves on either block or
+      pooled — goals +0.125 (p = 0.49), falls −0.083 (p = 0.77), possession
+      −0.514 (p = 0.32), advance +0.023 (p = 0.48), signed progress −0.026
+      (p = 0.54), back-kicks 34% → 37% (p = 0.45). A real null, not a dead
+      path: the arms differ seed by seed. It ships on because the alternative
+      is knowingly walking along a line the ball never took, and the search
+      behind the hunt finds the ball anyway. **No performance claim.**
+
+#### And then the probe was asked where the ball actually WAS — THE DUCK NEVER KICKS THE BALL PROPERLY
+
+Over 191 kicks (24 seeds × 300 s of 2v2), the ball's position relative to the
+kicking body at the instant of the swing:
+
+| | measured | what the kick needs |
+|---|---:|---:|
+| ball ahead of the trunk | **0.238 m** (IQR 0.197–0.299) | 0.06–0.10 m |
+| ball to the side | **0.141 m** (IQR 0.077–0.248) | 0.04–0.08 m |
+| **on the sweet spot** | **0 of 191** | — |
+| whiffed (ball moved < 10 cm) | **18%** | — |
+| ball drift since the spot was planned | **0.220 m** (90th 0.400) | — |
+| age of the plan being swung at | **3.26 s** | — |
+
+**Not one kick in 191 had the ball where the kick policy was measured to send
+it 1.6–2.3 m.** Every "kick" in this benchmark is a glancing contact at a
+quarter of a metre — which is why the exit angle scatters 40°, why nearly a
+fifth of swings move the ball less than 10 cm, and why the shipped kick
+distance (17.7 cm of ball travel in the 2 s after a swing, README) is a tenth
+of what the bench measured.
+
+That single fact re-reads most of this track. **The kick map, the two-stage
+line-up, `lineup_lat`, the aim clamp and the deflection compensation were all
+arguing about the direction of a shot that was never struck.** It also
+explains why they behaved the way they did: the clamp helped because it only
+changes which way a glancing contact goes, and the deflection compensation
+hurt because it moved a body whose foot was not on the ball anyway.
+
+The cause is in the last two rows, and it is not precision — it is
+**staleness**. The line-up plans a spot from a sighting at `refresh_min`
+(0.35 m) or further, walks blind (the level camera loses a floor ball inside
+~0.3 m), and swings 3.3 s later at a ball that has moved 0.22 m. That is the
+whole of the 0.16 m shortfall. It is also why every arm that made the line-up
+LONGER lost: **a longer line-up is a staler plan.**
+
+- [~] **The three ways out, in the order they cost.** (1) Arrive sooner —
+      `lineup_range` 0.6 → 0.35 or `lineup_s` 4.0 → 1.5, measuring now and
+      judged on the on-spot fraction and the whiff rate, never on goals.
+      (2) Aim where the ball WILL be — the tracker's `predict` with the decel
+      model, currently off (`predict_s` = 0), which is the only option that
+      addresses drift rather than avoiding it. (3) Refuse to swing at a stale
+      plan — cheap, but the blind zone guarantees the sighting is old, so it
+      risks starving the duck of kicks entirely.
+      → **decide on:** the on-spot fraction (0 of 191 today) and the whiff
+      rate (18%). Both are per-kick events with ~150–190 of them a battery,
+      so they resolve where goals cannot. Only then the ledger.
+
 ### 5. Learned role brains — after 3 lands, and only if a learned striker can reach the ball
 
 **Still gated, and item 3 landing does not open the gate.** The condition in
