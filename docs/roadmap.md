@@ -2083,6 +2083,18 @@ What is left, in the order it is worth doing:
 5. **The clear** (3.1). Deliberately not built: the clamp already aims as
    far up-pitch as the cone allows, and the case a clear would add — the
    walk-round — is the arm that measured worse.
+6. **Line-up precision** (4b). Now that the kick's BIAS is measured and out
+   of the brain's model, what is left of the kick error is scatter: 33–49°
+   of sd about the mean, far wider than the goal subtends from anywhere
+   useful. Two arms have tried this and lost (`two_stage`, `lineup_lat`),
+   both judged on goals, before the angle could be measured at all.
+   `scripts/probe_kick_line.py` prints the sd, so the next attempt can be
+   judged on the quantity it actually moves.
+7. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
+   teammates' frames wander 0.456 m apart over a run, so "the ball is at
+   (x, y)" stops being a place the teammate can act on. Everything soccer
+   here runs at `ideal`, where the frames agree exactly — so nothing measured
+   is affected, and nothing measured is evidence about a robot either.
 
 And one thing this track did NOT settle, which every item above kept
 running into: **the score.** Goals need 136 seeds to move 25% and own goals
