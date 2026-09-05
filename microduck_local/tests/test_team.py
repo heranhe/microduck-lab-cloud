@@ -4,6 +4,7 @@ walk-round via-point, a push when the goal is far), its head-down ball
 tracking and its wall rule, and a pitch with teams."""
 
 import math
+import os
 
 import numpy as np
 import pytest
@@ -289,6 +290,62 @@ def test_pitch_with_teams_and_brain_kwargs():
     from microduck_local.world import Duck, Scenario
     plain = Scenario(name="x", floor=(4, 4), ducks=[Duck("d0", (0, 0, 0), None, None, None, "chase")])
     assert brain_kwargs(plain.ducks[0], World(plain), {}) == {}
+
+
+def test_a_measurement_sweep_reaches_a_roster_and_not_only_a_lone_duck():
+    """The playbook's rule 0, caught here rather than by a suspiciously flat
+    arm: `brain_kwargs` used to hand a roster `ChaseParams()` — the shipped
+    defaults — so every knob a battery set through `MICRODUCK_CHASE` was
+    silently discarded on any 2v2 or 3v3, and both arms of such an A/B ran
+    the same brain. The roster default (the bump sense) still applies, unless
+    the caller names that knob itself."""
+    from microduck_local import contract as C
+    from microduck_local.world import World, make_pitch
+    if not C.SCENE_WALK_XML.exists():
+        pytest.skip("microduck_rl checkout not found")
+
+    def params(spec: str, per_side: int):
+        os.environ["MICRODUCK_CHASE"] = spec
+        try:
+            sc = make_pitch(per_side=per_side)
+            kw = brain_kwargs(sc.ducks[0], World(sc), {})
+            return kw.get("p") or ChaseParams.from_env()
+        finally:
+            os.environ.pop("MICRODUCK_CHASE", None)
+
+    for n in (1, 2, 3):
+        assert params("aim_mode=goal", n).aim_mode == "goal"          # the sweep reaches every roster
+    assert params("", 2).bump_stand_s == ChaseParams().team_bump_stand_s   # …and the roster default still applies
+    assert params("", 1).bump_stand_s == 0.0                          # a lone attacker keeps the default
+    # An explicit value wins over the roster default — and it is asked for BY
+    # NAME, because the caller's 0 and the shipped 0 are the same number.
+    assert params("bump_stand_s=0", 2).bump_stand_s == 0.0
+    assert params("bump_stand_s=0.9", 2).bump_stand_s == 0.9
+    assert ChaseParams.env_names("bump_stand_s=0, aim_mode=clamp") == {"bump_stand_s", "aim_mode"}
+    assert ChaseParams.env_names("") == set()
+
+
+def test_the_aim_mode_decides_what_a_kick_does_when_the_goal_is_round_the_ball():
+    """Track 4.3.1. A duck that reached the ball from the goal side has its
+    own goal straight down the line of sight, and the shipped rule kicks
+    along that line: 30 of 53 kicks in the baseline sent the ball backwards."""
+    import math
+
+    from microduck_local.brain.tracker import Track
+    ball = Track(0, "ball", bearing=0.0, elevation=0.0, width=0.1, range=0.5, conf=1.0, born_t=0.0, last_t=0.0)
+    odom = (0.5, 0.0, math.pi)                       # at +0.5 facing -x, the ball at the origin
+    got = {}
+    for mode in ("los", "clamp", "goal"):
+        b = Chase(ChaseParams(aim_mode=mode), goal=(1.5, 0.0), duck_id="d0")
+        got[mode] = b._plan(odom, ball)[3]           # the heading the kick should fly along
+    assert abs(got["los"] - math.pi) < 1e-6                       # straight at our own goal
+    assert abs(got["clamp"]) == pytest.approx(math.pi - ChaseParams().aim_max)   # the cone's edge, goal side
+    assert abs(got["goal"]) < 1e-6                                # at the goal, whatever the walk-round costs
+    # With the goal already inside the cone every mode agrees: this changes
+    # only the case the shipped rule gives up on.
+    for mode in ("los", "clamp", "goal"):
+        b = Chase(ChaseParams(aim_mode=mode), goal=(1.5, 0.0), duck_id="d0")
+        assert abs(b._plan((-0.5, 0.0, 0.0), ball)[3]) < 1e-6
 
 
 def test_kickoff_forgets_the_plan_and_keeps_the_tally():

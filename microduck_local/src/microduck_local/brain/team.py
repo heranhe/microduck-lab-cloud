@@ -302,16 +302,29 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
            "goal_w": world.goal_width}
     # A roster with teammates plays in a crowd, so it gets the bump sense
     # (`ChaseParams.team_bump_stand_s`) where a lone attacker does not - in
-    # 1v1 the rule measured worse on both goals and falls. Taken off the
-    # LIVE defaults with `replace`, so a caller that overrides ChaseParams
-    # (a measurement sweep) is not silently overridden back.
+    # 1v1 the rule measured worse on both goals and falls.
+    #
+    # The base is `from_env`, not `ChaseParams()`. It used to be the bare
+    # defaults, and the comment beside it claimed a measurement sweep would
+    # not be overridden back - it was. Every knob a battery set through
+    # `MICRODUCK_CHASE` was silently discarded on ANY roster with two ducks a
+    # side, so a 2v2 or 3v3 A/B would have run the shipped defaults in both
+    # arms and reported the seed noise between them as the effect. That is
+    # the playbook's rule 0 exactly ("a knob that changes NOTHING is broken,
+    # not null"), and it is caught here by a test rather than by an arm that
+    # comes back suspiciously flat.
     mates = sum(1 for x in world.scenario.ducks if duck_spec.team and x.team == duck_spec.team)
     if mates > 1:
         from dataclasses import replace
 
         from .controllers import ChaseParams
-        base = ChaseParams()
-        out["p"] = replace(base, bump_stand_s=base.team_bump_stand_s)
+        base = ChaseParams.from_env()
+        # …and the roster default applies only where the caller has not
+        # already spoken: `bump_stand_s=0` on the command line means that
+        # value, not the roster's. Asked by NAME, because the caller's
+        # explicit 0 and the shipped default 0 are the same number.
+        out["p"] = (base if "bump_stand_s" in ChaseParams.env_names()
+                    else replace(base, bump_stand_s=base.team_bump_stand_s))
     return out
 
 

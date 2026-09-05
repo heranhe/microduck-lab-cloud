@@ -629,6 +629,23 @@ class ChaseParams:
     # goal. 0 = off (kick from anywhere).
     kick_cone: float = 0.0
     aim_max: float = 1.05          # aim at the goal only within this of the line of sight (rad)
+    # What to do when the goal is FURTHER round the ball than `aim_max`, i.e.
+    # when kicking at it means walking round to the far side. Three answers,
+    # and the shipped one is the reason 30 of 53 kicks in the Track 4 baseline
+    # sent the ball back toward the kicker's own goal:
+    #   "los"    give up on the goal and kick along the line of sight — which
+    #            is straight at our own goal whenever the duck reached the
+    #            ball from the goal side, and the support geometry puts it
+    #            there (a supporter stands `support_back` goal-side of the
+    #            ball and walks in from there when it becomes the attacker).
+    #   "clamp"  kick at the edge of the cone on the goal's side: the same
+    #            walk-round `aim_max` already allows, and never worse than
+    #            `aim_max` off the best available line.
+    #   "goal"   always at the goal, whatever the walk-round costs. Measured
+    #            OFF in the first form (4 kicks and 2 falls a run for 1.0
+    #            goals against 1.75 for the cone rule) — on four seeds, on
+    #            goals, with an instrument that could not see an own goal.
+    aim_mode: str = "los"
     # The head. Level, the camera loses a floor ball ~0.3 m out. Pitched
     # by `_gaze` (a law that puts the ball on the camera's axis: measured
     # 0.6 of command = 0.647 rad of camera, 0.20 m up) while WALKING at a
@@ -936,6 +953,18 @@ class ChaseParams:
     yield_cooldown_s: float = 3.0
 
     @staticmethod
+    def env_names(spec: str | None = None) -> set[str]:
+        """The knob NAMES a battery set through `MICRODUCK_CHASE`.
+
+        A default cannot be told from a caller's explicit value by comparing
+        them — `bump_stand_s=0` on the command line and the shipped 0.0 are
+        the same number — so the roster default in `brain/team.py` asks which
+        names were spoken rather than guessing from the values."""
+        if spec is None:
+            spec = os.environ.get("MICRODUCK_CHASE", "")
+        return {item.partition("=")[0].strip() for item in spec.split(",") if item.strip()}
+
+    @staticmethod
     def from_env(spec: str | None = None) -> "ChaseParams":
         """The defaults with `MICRODUCK_CHASE` applied — how a battery says
         which variant it is measuring:
@@ -1100,8 +1129,9 @@ class Chase:
         """Where to stand to kick a ball seen at (bearing, range): behind it
         on the line the kick should go — toward the goal (`goal`, in the
         odometry frame; without one, the heading the duck was placed with)
-        when that costs under `aim_max` of detour, else along the line of
-        sight (a walk-round crossed walls and the other duck — measured) —
+        when that costs under `aim_max` of detour, else whatever `aim_mode`
+        says (the shipped "los" kicks along the line of sight, because a full
+        walk-round crossed walls and the other duck — measured) —
         offset sideways so the nearer foot meets it. The left foot kicks a
         ball to its LEFT. A far goal (`push_beyond`) makes it a push spot
         squarely behind the ball. Returns (x, y, foot, heading, mode)."""
@@ -1116,8 +1146,14 @@ class Chase:
                 far = True                          # too fine a target from here: dribble it closer
         else:
             u, far = (self.attack if self.attack is not None else los), False
-        if abs(_wrap(u - los)) > p.aim_max:
-            u, far = los, False
+        # The detour: how far round the ball this duck must get to send it
+        # along `u`. Past `aim_max`, `aim_mode` says what to do instead.
+        detour = _wrap(u - los)
+        if abs(detour) > p.aim_max:
+            if p.aim_mode == "clamp":
+                u = _wrap(los + math.copysign(p.aim_max, detour))
+            elif p.aim_mode != "goal":
+                u, far = los, False
         if far:
             return bx - p.push_behind * math.cos(u), by - p.push_behind * math.sin(u), None, u, "push"
         rel = _wrap(math.atan2(by - y, bx - x) - u)

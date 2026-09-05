@@ -1505,11 +1505,37 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       how every role brain below is measured: against today's roster, same
       seeds, one side changed. Keep `eval_striker`'s byte-for-byte pin
       against `eval_pitch` when both sides are `chase`.
-- [ ] **1.5 Power, before the first A/B.** Run the baseline roster on 24
-      seeds × 300 s of 2v2 (~5 min) and record the CV of `ownGoals`,
-      `kicksBack`, `crowd` and `ballOwnHalf` the way `eval_pitch`'s
-      docstring records the first six — the seeds a 25% shift costs. A
-      metric that needs 100+ seeds is reported, not judged.
+- [x] **1.5 Power — DONE (2026-09-05), and it changes which metric judges
+      what.** 24 seeds × 300 s of 2v2, shipped roster, `runs/t4-base24-2v2.jsonl`.
+      CV of the per-run total and the seeds an arm needs to resolve a 25%
+      shift at p<0.05 / 80% power:
+
+      | metric | CV | seeds | events over the 24 |
+      |---|---:|---:|---:|
+      | `depth` | 0.07 | **1** | — |
+      | `possession` | 0.18 | **8** | — |
+      | `spread` | 0.21 | **11** | — |
+      | `ballAdvance` | 0.36 | 32 | — |
+      | `crowd` | 0.39 | 38 | — |
+      | `kickCount` | 0.53 | 72 | 183 kicks |
+      | falls | 0.65 | 106 | 64 falls |
+      | goals | 0.74 | 136 | 36 goals |
+      | `kicksBack` (per run) | 0.78 | 151 | 90 back |
+      | `ownGoals` | 1.18 | **347** | 19 own |
+
+      Three things follow, and they set how every item below is judged.
+      **`ownGoals` cannot be a judge** — 19 events over 24 seeds and a CV
+      worse than goals', so it is reported and never decided on. **The shape
+      metrics are the cheap instruments for a POSITIONAL change**: `depth` at
+      one seed, `spread` at eleven, `crowd` at 38, against goals' 136 — which
+      is exactly what a defender or a striker moves. And **`kicksBack` must
+      be read as a PROPORTION, not a per-run count**: 90 of 183 kicks is a
+      binomial with 183 events, and halving 49% needs ~9 seeds of it, where
+      the per-run mean needs 151. That is the playbook's rule 1 with teeth —
+      the same measurement is cheap or hopeless depending on whether you
+      count runs or events.
+      `ballOwnHalf` is 60 s/min over the pair by construction (CV 0.00 as the
+      mean over teams): a per-TEAM reading only, for an asymmetric matchup.
 
 ### 2. Team = colorway — in the contract, the world, the stream, the editor
 
