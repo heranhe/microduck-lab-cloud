@@ -44,6 +44,7 @@ import {
   CAM_FOV_DEG,
   TOF_PRESETS,
   teamColor,
+  teamSwatch,
   type FrameEvent,
   type SimFrame,
   type ScenarioListing,
@@ -1591,7 +1592,7 @@ export default function SimViewer() {
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   {selDuck.team && (
                     <span
-                      style={{ width: 10, height: 10, borderRadius: 2, background: teamColor(selDuck.team) ?? "#555", border: "1px solid rgba(0,0,0,.4)" }}
+                      style={{ width: 10, height: 10, borderRadius: 2, background: teamSwatch(selDuck.team), border: "1px solid rgba(0,0,0,.4)" }}
                       title={`team ${selDuck.team}${selDuck.role ? ` · ${selDuck.role}` : ""}`}
                     />
                   )}
@@ -1684,7 +1685,9 @@ export default function SimViewer() {
                       <>
                         <span>chase</span>
                         <span title="where the brain predicts the ball will stop (it looks and hunts there) · the ball memory its search walks to">
-                          {selDuck.brain.inputs.chase.role} · {selDuck.brain.inputs.chase.kicks} kicks
+                          {selDuck.brain.inputs.chase.job
+                            ? `${selDuck.brain.inputs.chase.job} · ${selDuck.brain.inputs.chase.role}`
+                            : selDuck.brain.inputs.chase.role} · {selDuck.brain.inputs.chase.kicks} kicks
                           {selDuck.brain.inputs.chase.predicted ? ` · ball → ${selDuck.brain.inputs.chase.predicted[0].toFixed(2)}, ${selDuck.brain.inputs.chase.predicted[1].toFixed(2)}` : ""}
                           {selDuck.brain.inputs.chase.memory ? ` · memory ${selDuck.brain.inputs.chase.memory[0].toFixed(2)}, ${selDuck.brain.inputs.chase.memory[1].toFixed(2)}` : ""}
                         </span>
@@ -1851,7 +1854,7 @@ export default function SimViewer() {
             {teams.map((t, i) => (
               <span key={t} style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {i > 0 && <span style={{ color: "#5f6b78", marginRight: 4 }}>·</span>}
-                <span style={{ width: 12, height: 12, borderRadius: 3, background: teamColor(t) ?? "#9aa5b1", border: "1px solid rgba(0,0,0,.35)" }} />
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: teamSwatch(t, "#9aa5b1"), border: "1px solid rgba(0,0,0,.35)" }} />
                 {soc.goalsFor ? num(soc.goalsFor, t) : "—"}
                 <span style={{ fontSize: 12, color: "#9aa5b1" }}>{t}</span>
               </span>

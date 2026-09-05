@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildBodyGeometries } from "@/components/Duck";
-import { SHELL_MATERIALS, TEAM_COLORWAYS, TRIM_MATERIALS } from "./sim";
+import { LEG_MATERIALS, PITCH_TEAMS, SHELL_MATERIALS, TEAM_COLORWAYS, TRIM_MATERIALS } from "./sim";
 import type { Scene } from "./lab";
 
 /** One body, one triangle a material: the smallest scene that carries a
@@ -32,14 +32,16 @@ function colors(mats: string[], team?: string | null): [number, number, number][
 describe("buildBodyGeometries: a team's colorway", () => {
   const shell = SHELL_MATERIALS[0];
   const trim = TRIM_MATERIALS[0];
+  const leg = LEG_MATERIALS[0];
   const other = "xl330_material";
 
-  it("paints the shells and trim of the named team and nothing else", () => {
-    const [a, b, c] = colors([shell, trim, other], "sky");
-    const [pa, pb, pc] = colors([shell, trim, other]);
+  it("paints the shells, trim and legs of the named team and nothing else", () => {
+    const [a, b, c, d] = colors([shell, trim, leg, other], "sky");
+    const [pa, pb, pc, pd] = colors([shell, trim, leg, other]);
     expect(a).not.toEqual(pa);
     expect(b).not.toEqual(pb);
-    expect(c).toEqual(pc);                       // a servo is a servo on every duck
+    expect(c).not.toEqual(pc);
+    expect(d).toEqual(pd);                       // a servo is a servo on every duck
   });
 
   it("gives two teams different shells", () => {
@@ -47,13 +49,25 @@ describe("buildBodyGeometries: a team's colorway", () => {
     expect(colors([shell], "cream")[0]).toEqual(colors([shell], "cream")[0]);
   });
 
-  it("leaves the duck alone for no team and for a colorway that does not exist", () => {
-    const plain = colors([shell, trim, other]);
-    expect(colors([shell, trim, other], null)).toEqual(plain);
-    expect(colors([shell, trim, other], "puce")).toEqual(plain);
+  // The pair a pitch is dealt is the one that has to survive a wide shot, and
+  // cream v lavender are both pale: the legs are what separates them, so the
+  // shell test above is not enough on its own.
+  it("gives the two PITCH teams legs that differ from each other and from the shell", () => {
+    const [home, away] = PITCH_TEAMS;
+    expect(colors([leg], home)[0]).not.toEqual(colors([leg], away)[0]);
+    for (const t of PITCH_TEAMS) expect(colors([leg], t)[0]).not.toEqual(colors([shell], t)[0]);
   });
 
-  it("knows the same four colorways the server does", () => {
+  it("leaves the duck alone for no team and for a colorway that does not exist", () => {
+    const plain = colors([shell, trim, leg, other]);
+    expect(colors([shell, trim, leg, other], null)).toEqual(plain);
+    expect(colors([shell, trim, leg, other], "puce")).toEqual(plain);
+  });
+
+  it("knows the same four colorways the server does, each with three colours", () => {
     expect(Object.keys(TEAM_COLORWAYS).sort()).toEqual(["cream", "graphite", "lavender", "sky"]);
+    for (const look of Object.values(TEAM_COLORWAYS)) {
+      expect(new Set([look.shell, look.trim, look.leg]).size).toBe(3);
+    }
   });
 });

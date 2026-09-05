@@ -16,7 +16,7 @@ away side (a 1v0 pitch), which is what the striker is trained on and the
 cleanest reading of "can it take the ball to the goal".
 
 `--left` and `--right` are the two SIDES of the pitch: `--left` is the side
-that spawns at −x. The TEAMS are colorways (cream at −x, sky at +x), and
+that spawns at −x. The TEAMS are colorways (cream at −x, lavender at +x), and
 every per-team number in a row is keyed by those.
 
 READ THE THREE BALL NUMBERS TOGETHER (`eval_pitch`'s docstring is the long

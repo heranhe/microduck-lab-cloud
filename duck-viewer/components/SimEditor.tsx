@@ -10,10 +10,12 @@ import { useState } from "react";
 import { LAB_HTTP } from "@/lib/lab";
 import {
   loadWorld,
+  PITCH_TEAMS,
   ROLE_NAMES,
   TEAM_COLORWAYS,
   TEAM_NAMES,
   teamColor,
+  teamSwatch,
   type RoleName,
   type Scenario,
   type ScenarioDuck,
@@ -102,8 +104,9 @@ export function applyFloorClick(st: EditorState, x: number, y: number): EditorSt
       // immediate scenario error, and the one a person means by clicking
       // their own half.
       const pitch = (d.goal_width ?? 0) > 0;
-      const home = (d.ducks.find((k) => k.spawn[0] < 0)?.team ?? "cream") as TeamName;
-      const away = (d.ducks.find((k) => k.spawn[0] > 0)?.team ?? (home === "sky" ? "cream" : "sky")) as TeamName;
+      const [defHome, defAway] = PITCH_TEAMS;
+      const home = (d.ducks.find((k) => k.spawn[0] < 0)?.team ?? defHome) as TeamName;
+      const away = (d.ducks.find((k) => k.spawn[0] > 0)?.team ?? (home === defAway ? defHome : defAway)) as TeamName;
       const mine = x < 0 ? home : away;
       const duck: ScenarioDuck = {
         id: `d${n}`,
@@ -187,7 +190,7 @@ export function SimEditor({
     const ducks = d.ducks.map((q) => ({
       ...q,
       brain: q.brain ?? "chase",
-      team: (q.spawn[0] < 0 ? "cream" : "sky") as TeamName,
+      team: (q.spawn[0] < 0 ? PITCH_TEAMS[0] : PITCH_TEAMS[1]) as TeamName,
       spawn: [q.spawn[0], q.spawn[1], q.spawn[0] < 0 ? 0 : Math.PI] as [number, number, number],
     }));
     setDraft({ ...d, goal_width: 0.7, ducks, balls: d.balls.length ? d.balls : [{ pos: [0, 0], radius: 0.035, mass: 0.015 }] });
@@ -266,7 +269,7 @@ export function SimEditor({
         <button
           style={{ ...BTN, borderColor: pitch ? "#43c2b8" : "#2b313b", marginLeft: "auto" }}
           onClick={togglePitch}
-          title="goals on both short walls, a ball on the spot, and every duck on the team of its own half — cream at −x, sky at +x"
+          title={`goals on both short walls, a ball on the spot, and every duck on the team of its own half — ${TEAM_COLORWAYS[PITCH_TEAMS[0]].label.toLowerCase()} at −x, ${TEAM_COLORWAYS[PITCH_TEAMS[1]].label.toLowerCase()} at +x`}
         >
           {pitch ? "⚽ pitch" : "make a pitch"}
         </button>
@@ -283,7 +286,7 @@ export function SimEditor({
           <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "center" }}>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", gap: 5, alignItems: "center" }}>
               {k.team && (
-                <span style={{ width: 9, height: 9, borderRadius: 2, background: teamColor(k.team) ?? "#555", border: "1px solid rgba(0,0,0,.4)" }} />
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: teamSwatch(k.team), border: "1px solid rgba(0,0,0,.4)" }} />
               )}
               {k.id}: {k.spawn[0]},{k.spawn[1]} · {k.policy?.split(":").pop() ?? "stand"}
             </span>

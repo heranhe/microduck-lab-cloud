@@ -61,7 +61,7 @@ CARRY_S = 2.0
 METRIC_FIELDS = ("ballProgress", "ballAdvance", "possession", "possessionWide")
 
 # --- the goal ledger (roadmap Track 4.1.1) ------------------------------------
-# `World.goals` is keyed by MOUTH, so a ball the sky team puts into its own net
+# `World.goals` is keyed by MOUTH, so a ball the lavender team puts into its own net
 # and one the cream team scores are the same row - which is why the first
 # measured fact about this pitch (8 of 8 goals in a 4-seed 2v2 battery were own
 # goals) needed a scratchpad probe to see at all. These fields are per TEAM.

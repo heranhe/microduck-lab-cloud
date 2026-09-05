@@ -32,7 +32,12 @@ from microduck_local.eval_pitch import (
 )
 from microduck_local.world import World, make_pitch
 from microduck_local.world.metrics import CROWD_R
+from microduck_local.world.scenario import PITCH_TEAMS
 
+# The two teams `make_pitch` puts on a pitch, read from the source: the
+# PAIR has already changed once (cream v sky read alike at 60 px), and a
+# test that hard-codes it fails for a reason that is not about the test.
+HOME, AWAY = PITCH_TEAMS
 FAR = (1.4, 1.1)          # a corner: no duck is anywhere near the ball
 
 
@@ -102,13 +107,13 @@ def _kick(w, m, by: str, ball, **duck_xy) -> None:
 
 def test_the_two_sides_attack_opposite_goals(world):
     m = _fresh(world, (0.0, 0.0), d0=FAR, d1=FAR)
-    assert m.sign == {"cream": 1.0, "sky": -1.0}      # make_pitch: left attacks +x
+    assert m.sign == {HOME: 1.0, "lavender": -1.0}      # make_pitch: left attacks +x
 
 
 def test_the_same_ball_motion_is_progress_for_one_side_and_a_loss_for_the_other(world):
     """The one bug this metric could carry into a published result: a sign
     read off the pitch instead of off the team. The ball going +x is the cream
-    team's progress and the sky team's giveaway, and vice versa."""
+    team's progress and the lavender team's giveaway, and vice versa."""
     got = {}
     for holder, xy in (("d0", (0.0, 0.0)), ("d1", (0.0, 0.0))):
         m = _fresh(world, (0.0, 0.0), **{holder: xy, ("d1" if holder == "d0" else "d0"): FAR})
@@ -116,26 +121,26 @@ def test_the_same_ball_motion_is_progress_for_one_side_and_a_loss_for_the_other(
         _tick(world, m, ball=(0.30, 0.0), **{holder: xy})      # ball moves +30 cm in x
         got[holder] = (m.progress, m.advance)
     (cp, ca), (sp, sa) = got["d0"], got["d1"]
-    assert cp["cream"] == pytest.approx(0.30) and cp["sky"] == 0.0
-    assert ca["cream"] == pytest.approx(0.30)                  # forward for cream: it advanced
-    assert sp["sky"] == pytest.approx(-0.30) and sp["cream"] == 0.0
-    assert sa["sky"] == 0.0                                    # backwards for sky: no advance
+    assert cp[HOME] == pytest.approx(0.30) and cp["lavender"] == 0.0
+    assert ca[HOME] == pytest.approx(0.30)                  # forward for cream: it advanced
+    assert sp["lavender"] == pytest.approx(-0.30) and sp[HOME] == 0.0
+    assert sa["lavender"] == 0.0                                    # backwards for lavender: no advance
 
 
 def test_advance_keeps_only_the_forward_part_where_progress_nets_out(world):
     m = _fresh(world, (0.0, 0.0), d0=(0.0, 0.0), d1=FAR)
     for x in (0.0, 0.40, 0.10, 0.25):                          # +0.40, −0.30, +0.15
         _tick(world, m, ball=(x, 0.0), d0=(x, 0.0))
-    assert m.progress["cream"] == pytest.approx(0.25)           # net: telescopes inside the possession
-    assert m.advance["cream"] == pytest.approx(0.55)            # 0.40 + 0.15
+    assert m.progress[HOME] == pytest.approx(0.25)           # net: telescopes inside the possession
+    assert m.advance[HOME] == pytest.approx(0.55)            # 0.40 + 0.15
 
 
 def test_motion_across_y_and_the_ball_sitting_still_move_nothing(world):
     m = _fresh(world, (0.0, 0.0), d0=(0.0, 0.0), d1=FAR)
     for y in (0.0, 0.3, -0.3, 0.0):
         _tick(world, m, ball=(0.0, y), d0=(0.0, y))
-    assert m.progress["cream"] == pytest.approx(0.0) and m.advance["cream"] == pytest.approx(0.0)
-    assert m.possession["cream"] > 0                            # it was on the ball the whole time
+    assert m.progress[HOME] == pytest.approx(0.0) and m.advance[HOME] == pytest.approx(0.0)
+    assert m.possession[HOME] > 0                            # it was on the ball the whole time
 
 
 # -- possession ------------------------------------------------------------------
@@ -145,22 +150,22 @@ def test_possession_is_the_nearest_ducks_team_inside_the_radius_and_nobody_outsi
     _tick(world, m, ball=(0.0, 0.0), d0=(POSSESSION_R * 0.5, 0.0), d1=FAR)      # d0 on the ball
     _tick(world, m, ball=(0.0, 0.0), d0=FAR, d1=(0.0, POSSESSION_R * 0.5))      # d1 on the ball
     _tick(world, m, ball=(0.0, 0.0), d0=FAR, d1=FAR)                            # free ball
-    assert m.possession["cream"] == pytest.approx(C.CTRL_DT)
-    assert m.possession["sky"] == pytest.approx(C.CTRL_DT)
-    assert m.possession_wide["cream"] == pytest.approx(C.CTRL_DT)                # the wider clock agrees here
+    assert m.possession[HOME] == pytest.approx(C.CTRL_DT)
+    assert m.possession["lavender"] == pytest.approx(C.CTRL_DT)
+    assert m.possession_wide[HOME] == pytest.approx(C.CTRL_DT)                # the wider clock agrees here
 
 
 def test_only_the_nearer_duck_holds_the_ball_when_both_are_inside_the_radius(world):
     m = _fresh(world, (0.0, 0.0), d0=FAR, d1=FAR)
     _tick(world, m, ball=(0.0, 0.0), d0=(0.20, 0.0), d1=(0.05, 0.0))
-    assert m.possession["sky"] == pytest.approx(C.CTRL_DT) and m.possession["cream"] == 0.0
+    assert m.possession["lavender"] == pytest.approx(C.CTRL_DT) and m.possession[HOME] == 0.0
     assert m.nearest()[0] == "d1"
 
 
 def test_the_wide_clock_sees_a_duck_the_primary_radius_does_not(world):
     m = _fresh(world, (0.0, 0.0), d0=FAR, d1=FAR)
     _tick(world, m, ball=(0.0, 0.0), d0=(0.33, 0.0), d1=FAR)   # between 0.25 and 0.40
-    assert m.possession["cream"] == 0.0 and m.possession_wide["cream"] == pytest.approx(C.CTRL_DT)
+    assert m.possession[HOME] == 0.0 and m.possession_wide[HOME] == pytest.approx(C.CTRL_DT)
 
 
 # -- credit for the ball nobody is touching --------------------------------------
@@ -173,8 +178,8 @@ def test_a_kicked_ball_running_free_is_credited_to_whoever_last_had_it(world):
     _tick(world, m, ball=(0.0, 0.0), d0=(0.0, 0.0))            # d0 takes possession
     _tick(world, m, ball=(0.5, 0.0), d0=FAR)                   # ball away, nobody near
     _tick(world, m, ball=(0.9, 0.0), d0=FAR)
-    assert m.progress["cream"] == pytest.approx(0.9)
-    assert m.possession["cream"] == pytest.approx(C.CTRL_DT)     # the clock, though, stops at contact
+    assert m.progress[HOME] == pytest.approx(0.9)
+    assert m.possession[HOME] == pytest.approx(C.CTRL_DT)     # the clock, though, stops at contact
 
 
 def test_credit_lapses_after_carry_s_so_a_ball_rattling_round_the_boards_is_nobodys(world):
@@ -182,7 +187,7 @@ def test_credit_lapses_after_carry_s_so_a_ball_rattling_round_the_boards_is_nobo
     _tick(world, m, ball=(0.0, 0.0), d0=(0.0, 0.0))
     world.t += CARRY_S + C.CTRL_DT                              # long after the last touch
     _tick(world, m, ball=(0.9, 0.0), d0=FAR)
-    assert m.progress["cream"] == 0.0 and m.advance["cream"] == 0.0
+    assert m.progress[HOME] == 0.0 and m.advance[HOME] == 0.0
 
 
 def test_the_other_team_taking_the_ball_takes_the_credit_with_it(world):
@@ -190,8 +195,8 @@ def test_the_other_team_taking_the_ball_takes_the_credit_with_it(world):
     _tick(world, m, ball=(0.0, 0.0), d0=(0.0, 0.0))
     _tick(world, m, ball=(0.1, 0.0), d0=FAR, d1=(0.1, 0.0))     # d1 wins it: +0.1 still d0's
     _tick(world, m, ball=(0.4, 0.0), d0=FAR, d1=FAR)            # now d1's, and it is going the wrong way
-    assert m.progress["cream"] == pytest.approx(0.1)
-    assert m.progress["sky"] == pytest.approx(-0.3)
+    assert m.progress[HOME] == pytest.approx(0.1)
+    assert m.progress["lavender"] == pytest.approx(-0.3)
 
 
 # -- the goal restart --------------------------------------------------------------
@@ -217,11 +222,11 @@ def test_a_goal_is_for_one_team_and_against_the_other_by_the_mouth_alone(world):
     is exactly one `for` and one `against` however murky the credit is."""
     m = _fresh(world, (1.6, 0.0), d0=FAR, d1=FAR)
     _goal(world, m, "right", None, d0=FAR, d1=FAR)               # cream attacks the +x mouth
-    assert m.goals_for == {"cream": 1, "sky": 0}
-    assert m.goals_against == {"cream": 0, "sky": 1}
+    assert m.goals_for == {HOME: 1, "lavender": 0}
+    assert m.goals_against == {HOME: 0, "lavender": 1}
     _goal(world, m, "left", None, d0=FAR, d1=FAR)
-    assert m.goals_for == {"cream": 1, "sky": 1}
-    assert m.goals_against == {"cream": 1, "sky": 1}
+    assert m.goals_for == {HOME: 1, "lavender": 1}
+    assert m.goals_against == {HOME: 1, "lavender": 1}
 
 
 def test_an_own_goal_is_the_kicker_scoring_on_the_mouth_it_defends(world):
@@ -230,11 +235,11 @@ def test_an_own_goal_is_the_kicker_scoring_on_the_mouth_it_defends(world):
     team, and the +x mouth is the one the right team defends."""
     m = _fresh(world, (1.6, 0.0), d0=FAR, d1=(1.5, 0.0))
     _goal(world, m, "right", "d1", d0=FAR, d1=(1.5, 0.0))
-    assert m.own_goals == {"cream": 0, "sky": 1} and m.goals_unattributed == 0
-    assert m.goals_for["cream"] == 1                              # …and the left team is still credited a goal for
+    assert m.own_goals == {HOME: 0, "lavender": 1} and m.goals_unattributed == 0
+    assert m.goals_for[HOME] == 1                              # …and the left team is still credited a goal for
     # The same kicker at the other end is a goal, not an own goal.
     _goal(world, m, "left", "d1", d0=FAR, d1=FAR)
-    assert m.own_goals == {"cream": 0, "sky": 1}
+    assert m.own_goals == {HOME: 0, "lavender": 1}
 
 
 def test_a_walked_in_goal_is_charged_to_the_last_team_on_the_ball(world):
@@ -242,9 +247,9 @@ def test_a_walked_in_goal_is_charged_to_the_last_team_on_the_ball(world):
     possession fallback is not a corner case — it is the common one."""
     m = _fresh(world, (1.4, 0.0), d0=FAR, d1=(1.45, 0.0))
     _tick(world, m, ball=(1.5, 0.0), d0=FAR, d1=(1.55, 0.0))     # d1 is on it, inside POSSESSION_R
-    assert m._holder == "sky"
+    assert m._holder == "lavender"
     _goal(world, m, "right", None, d0=FAR, d1=FAR)               # no kick: the World says nobody kicked
-    assert m.own_goals == {"cream": 0, "sky": 1} and m.goals_unattributed == 0
+    assert m.own_goals == {HOME: 0, "lavender": 1} and m.goals_unattributed == 0
 
 
 def test_a_goal_nobody_has_touched_for_seconds_is_nobodys(world):
@@ -255,8 +260,8 @@ def test_a_goal_nobody_has_touched_for_seconds_is_nobodys(world):
     _tick(world, m, ball=(1.5, 0.0), d0=FAR, d1=(1.55, 0.0))     # d1 had it…
     world.t += GOAL_CREDIT_S + 0.1                               # …a long time ago
     _goal(world, m, "right", None, d0=FAR, d1=FAR)
-    assert m.own_goals == {"cream": 0, "sky": 0} and m.goals_unattributed == 1
-    assert m.goals_against["sky"] == 1                         # the against column is unaffected
+    assert m.own_goals == {HOME: 0, "lavender": 0} and m.goals_unattributed == 1
+    assert m.goals_against["lavender"] == 1                         # the against column is unaffected
 
 
 # -- kicks, judged on where the ball went (roadmap Track 4.1.2) ---------------------
@@ -268,14 +273,14 @@ def test_a_kick_is_scored_on_where_the_ball_ENDS_UP_not_where_it_was_aimed(world
     lost ground" can never disagree."""
     m = _fresh(world, (0.0, 0.0), d0=(-0.1, 0.0), d1=FAR)
     _kick(world, m, "d0", (0.0, 0.0), d0=(-0.1, 0.0), d1=FAR)
-    assert m.kick_count == {"cream": 0, "sky": 0}                # still in the air
+    assert m.kick_count == {HOME: 0, "lavender": 0}                # still in the air
     _tick(world, m, ball=(0.6, 0.0), d0=FAR, d1=FAR)
-    assert m.kick_count["cream"] == 0
+    assert m.kick_count[HOME] == 0
     world.t += CARRY_S
     _tick(world, m, ball=(0.6, 0.0), d0=FAR, d1=FAR)
-    assert m.kick_count == {"cream": 1, "sky": 0}
-    assert m.kicks_back == {"cream": 0, "sky": 0}
-    assert m.kick_carry["cream"] == pytest.approx(0.6)             # left attacks +x
+    assert m.kick_count == {HOME: 1, "lavender": 0}
+    assert m.kicks_back == {HOME: 0, "lavender": 0}
+    assert m.kick_carry[HOME] == pytest.approx(0.6)             # left attacks +x
 
 
 def test_a_kick_that_sends_the_ball_toward_its_own_goal_is_a_back_kick(world):
@@ -283,15 +288,15 @@ def test_a_kick_that_sends_the_ball_toward_its_own_goal_is_a_back_kick(world):
     _kick(world, m, "d0", (0.0, 0.0), d0=(0.1, 0.0), d1=FAR)
     world.t += CARRY_S
     _tick(world, m, ball=(-0.5, 0.0), d0=FAR, d1=FAR)
-    assert m.kicks_back == {"cream": 1, "sky": 0}
-    assert m.kick_carry["cream"] == pytest.approx(-0.5)
+    assert m.kicks_back == {HOME: 1, "lavender": 0}
+    assert m.kick_carry[HOME] == pytest.approx(-0.5)
     # The identical ball motion is a FORWARD kick for the other side.
     m2 = _fresh(world, (0.0, 0.0), d0=FAR, d1=(0.1, 0.0))
     _kick(world, m2, "d1", (0.0, 0.0), d0=FAR, d1=(0.1, 0.0))
     world.t += CARRY_S
     _tick(world, m2, ball=(-0.5, 0.0), d0=FAR, d1=FAR)
-    assert m2.kicks_back == {"cream": 0, "sky": 0}
-    assert m2.kick_carry["sky"] == pytest.approx(0.5)
+    assert m2.kicks_back == {HOME: 0, "lavender": 0}
+    assert m2.kick_carry["lavender"] == pytest.approx(0.5)
 
 
 def test_a_kick_still_in_the_air_when_a_goal_lands_is_settled_at_the_goal_line(world):
@@ -301,9 +306,9 @@ def test_a_kick_still_in_the_air_when_a_goal_lands_is_settled_at_the_goal_line(w
     _kick(world, m, "d0", (0.9, 0.0), d0=(0.8, 0.0), d1=FAR)
     _tick(world, m, ball=(1.65, 0.0), d0=FAR, d1=FAR)             # rolling toward the mouth
     _goal(world, m, "right", "d0", d0=FAR, d1=FAR)
-    assert m.kick_count == {"cream": 1, "sky": 0}
-    assert m.kicks_back == {"cream": 0, "sky": 0}
-    assert m.kick_carry["cream"] == pytest.approx(0.75)            # 0.9 → 1.65, not 0.9 → 0.0
+    assert m.kick_count == {HOME: 1, "lavender": 0}
+    assert m.kicks_back == {HOME: 0, "lavender": 0}
+    assert m.kick_carry[HOME] == pytest.approx(0.75)            # 0.9 → 1.65, not 0.9 → 0.0
 
 
 # -- shape: the pile-up and the deepest duck (roadmap Track 4.1.3) ------------------
@@ -320,15 +325,15 @@ def test_shape_measures_the_pile_up_the_spread_and_how_far_back_anyone_stays(wor
     # Both left ducks on the ball at the centre: a pile-up, and nobody back.
     _tick(world2, m, ball=(0.0, 0.0), d0=(0.1, 0.0), d1=(0.0, 0.2), **far)
     assert max(math.dist((0.1, 0.0), (0.0, 0.0)), math.dist((0.0, 0.2), (0.0, 0.0))) < CROWD_R
-    assert m._crowd["cream"] == 1 and m._crowd["sky"] == 0
-    assert m._spread["cream"] == pytest.approx(math.dist((0.1, 0.0), (0.0, 0.2)))
-    assert m._depth["cream"] == pytest.approx(hx)                  # both at x=0, the line is at -hx
+    assert m._crowd[HOME] == 1 and m._crowd["lavender"] == 0
+    assert m._spread[HOME] == pytest.approx(math.dist((0.1, 0.0), (0.0, 0.2)))
+    assert m._depth[HOME] == pytest.approx(hx)                  # both at x=0, the line is at -hx
     # Spread out, one of them deep: no pile-up, and depth is the DEEPEST one.
     _tick(world2, m, ball=(0.0, 0.0), d0=(0.1, 0.0), d1=(-1.2, 0.0), **far)
-    assert m._crowd["cream"] == 1
-    assert m._depth["cream"] == pytest.approx(hx + (hx - 1.2))     # tick 1 at x=0, tick 2 at x=-1.2
-    assert m.row()["crowd"]["cream"] == pytest.approx(0.5)         # one tick of two
-    assert m.row()["spread"]["sky"] == pytest.approx(0.0)       # both parked in the same corner
+    assert m._crowd[HOME] == 1
+    assert m._depth[HOME] == pytest.approx(hx + (hx - 1.2))     # tick 1 at x=0, tick 2 at x=-1.2
+    assert m.row()["crowd"][HOME] == pytest.approx(0.5)         # one tick of two
+    assert m.row()["spread"]["lavender"] == pytest.approx(0.0)       # both parked in the same corner
 
 
 def test_a_one_duck_team_has_no_spread_or_crowd_and_says_so(world):
@@ -337,9 +342,9 @@ def test_a_one_duck_team_has_no_spread_or_crowd_and_says_so(world):
     m = _fresh(world, (0.0, 0.0), d0=(0.0, 0.0), d1=FAR)
     _tick(world, m, ball=(0.0, 0.0), d0=(0.0, 0.0))
     row = m.row()
-    assert row["spread"] == {"cream": None, "sky": None}
-    assert row["crowd"] == {"cream": None, "sky": None}
-    assert row["depth"]["cream"] is not None                       # …but depth is one duck's own
+    assert row["spread"] == {HOME: None, "lavender": None}
+    assert row["crowd"] == {HOME: None, "lavender": None}
+    assert row["depth"][HOME] is not None                       # …but depth is one duck's own
 
 
 def test_the_ball_sits_in_exactly_one_teams_own_half(world):
@@ -348,8 +353,8 @@ def test_the_ball_sits_in_exactly_one_teams_own_half(world):
     m = _fresh(world, (0.0, 0.0), d0=FAR, d1=FAR)
     _tick(world, m, ball=(-0.5, 0.0), d0=FAR, d1=FAR)             # the left team's half
     _tick(world, m, ball=(0.5, 0.0), d0=FAR, d1=FAR)
-    assert m.own_half["cream"] == pytest.approx(C.CTRL_DT)
-    assert m.own_half["sky"] == pytest.approx(C.CTRL_DT)
+    assert m.own_half[HOME] == pytest.approx(C.CTRL_DT)
+    assert m.own_half["lavender"] == pytest.approx(C.CTRL_DT)
 
 
 # -- what goes in the row ------------------------------------------------------------
@@ -361,8 +366,8 @@ def test_the_row_is_per_minute_of_play_and_carries_every_metric(world):
     world.t = 30.0                                               # half a minute of play
     row = m.row()
     assert set(row) == set(ROW_FIELDS) | {"goalsUnattributed"}
-    assert row["ballProgress"]["cream"] == pytest.approx(1.0, abs=1e-3)      # 0.5 m in 30 s
-    assert row["possession"]["cream"] == pytest.approx(2 * C.CTRL_DT * 2, abs=1e-3)
+    assert row["ballProgress"][HOME] == pytest.approx(1.0, abs=1e-3)      # 0.5 m in 30 s
+    assert row["possession"][HOME] == pytest.approx(2 * C.CTRL_DT * 2, abs=1e-3)
     assert _total(row, "ballProgress") == pytest.approx(1.0, abs=1e-3)
 
 
@@ -372,7 +377,7 @@ def test_run_one_still_returns_every_field_other_tooling_reads():
               "kicks", "pushes", "falls", "simSeconds", "seconds", *METRIC_FIELDS):
         assert k in r, k
     for f in METRIC_FIELDS:
-        assert set(r[f]) == {"cream", "sky"}
+        assert set(r[f]) == {HOME, "lavender"}
 
 
 # -- resuming a file written before these metrics existed ------------------------------

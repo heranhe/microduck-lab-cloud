@@ -18,7 +18,7 @@ inverted if this is missed, and reading it the natural way flipped the sign
 of a whole correlation table here before it was caught.
 
 Two things now stand between that trap and a reader. The teams are
-COLORWAYS (`cream` at −x, `sky` at +x — Track 4.2), so a team name and a
+COLORWAYS (`cream` at −x, `lavender` at +x — Track 4.2), so a team name and a
 mouth name can no longer be the same word; and `goalsFor` / `goalsAgainst`
 per team are in the row (below), which is the translation done once in the
 one place that cannot get it wrong.
@@ -166,6 +166,12 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float) -> dict
     nothing else. Rows written under different settings are REFUSED rather
     than silently mixed: the brain's own parameters do not appear in a row,
     so `--tag` is how a caller says which variant a file belongs to.
+
+    Resumable, not concurrency-safe: two batteries appending to the same
+    file interleave, and a seed can land twice (identically — the loop is
+    deterministic in the seed, so the duplicates agree and `done` keys by
+    seed, but the line count then lies about how many seeds a file holds).
+    One `--out` file per arm.
 
     A row written BEFORE the ball-progress/possession metrics existed is not
     refused — the goals, kicks and falls in it are as good as they ever were,

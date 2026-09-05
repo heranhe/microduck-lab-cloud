@@ -207,6 +207,34 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    mean. Several knobs in `ChaseParams` ship off on differences that never
    cleared the noise; re-screening them with `possession` is cheap and at
    least one of those verdicts is probably wrong.
+9. **Count the events, not the runs — the SAME measurement can be cheap or
+   hopeless depending on which you pick.** Measured on the soccer benchmark
+   (24 seeds × 300 s of 2v2, `docs/roadmap.md` Track 4.1.5): `kicksBack` as
+   a per-run mean has a CV of 0.78 and needs ~151 seeds to resolve a 25%
+   shift. The identical quantity as a PROPORTION of the arm's kick events —
+   90 of 183 — is a binomial with 183 events behind it, and the aim-rule
+   change resolved at p = 0.011 on 24 seeds. Two orders of magnitude of
+   cost, from nothing but how the number was pooled. Before concluding a
+   metric is too noisy to judge with, ask whether it is really a rate over
+   runs or a fraction over events; if events, test the proportion.
+
+   The same table says which instrument to reach for at all: `depth` (CV
+   0.07, one seed), `possession` (0.18, 8) and `spread` (0.21, 11) resolve
+   a POSITIONAL change for the price of a coffee, while goals need 136 and
+   `ownGoals` — 19 events over 24 seeds — needs 347 and can never be the
+   judge of anything here. Report it; decide on something else.
+10. **A knob a battery sets must be shown to REACH the thing being
+    measured, on the roster being measured.** `brain_kwargs` handed any
+    roster with two ducks a side the bare `ChaseParams()` defaults, so every
+    knob set through `MICRODUCK_CHASE` was silently discarded in 2v2 and
+    3v3: both arms of such an A/B would have run the same brain and the seed
+    noise between them would have been reported as the effect. The comment
+    beside the line claimed the opposite. This is rule 0 of the next section
+    wearing team colours, and the check is the same one: reach into the
+    constructed object and read the value back off the thing that is
+    running — `assert brain.p.aim_mode == "clamp"` — not off a fresh
+    `ChaseParams()`, which will happily agree with you while the live brain
+    does something else.
 8. **A battery must survive the machine.** Use `--out FILE --tag TAG`:
    every seed is appended as it lands and a re-run of the same command
    skips what is already there. A cloud container reclaimed mid-run cost

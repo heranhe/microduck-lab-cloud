@@ -64,6 +64,18 @@ class Claim:
     cost: float = math.inf                   # my predicted TIME to reach it (s), filled in by `Team.claim`
 
 
+# The thirds a static role owns, in ATTACK coordinates: a = +1 at the goal
+# this team attacks, -1 at the one it defends (so both teams read the same
+# numbers). A duck may take the ball wherever its own third allows; a duck
+# with no role may take it anywhere, which is what every roster did before
+# roles existed.
+ROLE_ZONES: dict[str, tuple[float, float]] = {
+    "defender": (-1.0, -1.0 / 3.0),
+    "midfielder": (-1.0 / 3.0, 1.0 / 3.0),
+    "striker": (1.0 / 3.0, 1.0),
+}
+
+
 @dataclass
 class Team:
     name: str
@@ -119,6 +131,14 @@ class Team:
     vel_max_dt: float = 1.0
     vel_use: float = 0.7
     vel_max: float = 4.0           # a fix that says the ball moved faster than this is a bad fix
+    # --- static roles (roadmap Track 4.3) ------------------------------------
+    # Who plays what, and the pitch to read a zone against: the half-length in
+    # metres and which way this team attacks (+1 = +x). Empty `jobs` is the
+    # roster this repo has always had — the quickest duck attacks, wherever
+    # the ball is.
+    jobs: dict[str, str] = field(default_factory=dict)
+    half_x: float = 0.0
+    attack_sign: float = 1.0
     claims: dict[str, Claim] = field(default_factory=dict)
     _attacker: str | None = None
 
@@ -234,8 +254,29 @@ class Team:
     def members(self, t: float) -> list[str]:
         return sorted(k for k, c in self.claims.items() if t - c.t <= self.stale_s)
 
-    def attacker(self, t: float) -> str | None:
+    def zone_ok(self, duck_id: str, ball: tuple[float, float] | None) -> bool:
+        """May this duck go for a ball THERE? A duck with no role always may.
+        A duck with one may inside its own third, measured along the pitch in
+        attack coordinates — so a defender does not chase into the far corner
+        and a striker does not come back to fetch."""
+        z = ROLE_ZONES.get(self.jobs.get(duck_id, ""))
+        if z is None or ball is None or self.half_x <= 0:
+            return True
+        a = self.attack_sign * ball[0] / self.half_x
+        return z[0] <= a <= z[1]
+
+    def candidates(self, t: float) -> list[str]:
+        """Who may attack the ball where it is. If nobody's zone covers it —
+        it is on a third whose owner has gone missing, or the board has never
+        seen it — everybody may, because a ball nobody is allowed to fetch is
+        worse than a defender out of position."""
         live = self.members(t)
+        ball = self.ball(t)
+        allowed = [k for k in live if self.zone_ok(k, ball)]
+        return allowed or live
+
+    def attacker(self, t: float) -> str | None:
+        live = self.candidates(t)
         if not live:
             self._attacker = self._pending = None
             return None
@@ -269,6 +310,9 @@ class Team:
         sup = [k for k in self.members(t) if k != att]
         return sup.index(duck_id) if duck_id in sup else 0
 
+    def job(self, duck_id: str) -> str | None:
+        return self.jobs.get(duck_id)
+
     def ball(self, t: float) -> tuple[float, float] | None:
         """The freshest teammate sighting of the ball."""
         seen = [c for c in self.claims.values() if c.ball is not None and t - c.t <= 3 * self.stale_s]
@@ -281,6 +325,7 @@ class Team:
             return None if math.isinf(v) else round(v, 2)
 
         return {"name": self.name, "attacker": self.attacker(t),
+                **({"jobs": dict(self.jobs)} if self.jobs else {}),
                 "claims": {k: {"dist": num(c.dist), "cost": num(self.cost(k, t)), "age": round(t - c.t, 2),
                                **({"pos": [round(v, 2) for v in c.pos]} if c.pos is not None else {})}
                            for k, c in self.claims.items()}}
@@ -294,12 +339,23 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     if kind != "chase" or world is None or world.goal_width <= 0:
         return {}
     d = world.ducks[duck_spec.id]
+    hx, hy = world.scenario.floor[0] / 2 - 0.25, world.scenario.floor[1] / 2 - 0.25   # the boards sit 0.25 m in
+    goal = world.goal_for(d)
     team = None
     if duck_spec.team:
         team = teams.setdefault(duck_spec.team, Team(duck_spec.team))
-    hx, hy = world.scenario.floor[0] / 2 - 0.25, world.scenario.floor[1] / 2 - 0.25   # the boards sit 0.25 m in
-    out = {"goal": world.goal_for(d), "team": team, "duck_id": duck_spec.id, "bounds": (hx, hy),
-           "goal_w": world.goal_width}
+        # The board needs the pitch to read a zone against, and the roster's
+        # jobs so that ONE duck is chosen to attack: a zone gate applied per
+        # duck instead would let every duck decide it is not allowed and
+        # leave the ball to nobody. Filled from the scenario, which is where
+        # a role lives (`world/scenario.py`), and idempotent — every teammate
+        # writes the same values.
+        team.half_x, team.attack_sign = hx, (1.0 if goal is None or goal[0] >= 0 else -1.0)
+        for x in world.scenario.ducks:
+            if x.team == duck_spec.team and x.role:
+                team.jobs[x.id] = x.role
+    out = {"goal": goal, "team": team, "duck_id": duck_spec.id, "bounds": (hx, hy),
+           "goal_w": world.goal_width, "role": duck_spec.role}
     # A roster with teammates plays in a crowd, so it gets the bump sense
     # (`ChaseParams.team_bump_stand_s`) where a lone attacker does not - in
     # 1v1 the rule measured worse on both goals and falls.

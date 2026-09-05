@@ -1543,8 +1543,8 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       `TEAM_COLORWAYS` (cream, graphite, lavender, sky, each with its trim
       colour), `Duck.team` restricted to them with `left`/`right` mapping
       forward so saved scenes still load, `Duck.role` from `ROLES`, and
-      `Scenario.attacks` declaring the mouth a team attacks. `make_pitch` is
-      cream (−x, attacks +x) v sky. The trap: the teams used to be called
+      `Scenario.attacks` declaring the mouth a team attacks. `make_pitch` was
+      cream (−x, attacks +x) v sky — it is cream v LAVENDER since 2.5. The trap: the teams used to be called
       after the two SIDES, which are the same two words the World writes its
       goal MOUTHS under — the ambiguity `eval_pitch` carries a standing
       warning paragraph about. A cream duck and the +x mouth cannot be
@@ -1587,7 +1587,8 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       `pitch-2v2`: cream v sky on the pitch, the sky duck visibly blue in
       d0's head camera, `d2 · alpha_walking · sky` in the inspector. The tint
       itself is locked by `lib/duckskin.test.ts` — under that lighting a
-      screenshot cannot tell a cream shell from a white one. The original: `buildBodyGeometries(scene, colorway)`
+      screenshot cannot tell a cream shell from a white one. (Cream v sky is
+      cream v lavender since 2.5, and the legs carry the colorway too.) The original: `buildBodyGeometries(scene, colorway)`
       recolours geoms by material name at build time and is cached per
       colorway (four at most, so still one geometry set per colorway, not
       per duck); `<Duck>` takes the colorway from `SimDuck.team`; the
@@ -1614,6 +1615,26 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       duck placed on a pitch defaults to the team whose half it stands in.
       `npm test` covers `applyFloorClick` for the default; the server test
       covers the refusal in 2.1.
+- [x] **2.5 Cream v LAVENDER, and the legs wear the colour — DONE
+      (2026-09-05).** Two changes, one reason: cream v sky is two PALE COOL
+      shells, and at 60 px in a wide 3v3 shot — or in a 640-px head-camera
+      frame — a person cannot say which duck is which. (a) The default pair
+      is now `PITCH_TEAMS = ("cream", "lavender")`, one constant that
+      `make_pitch`, `LEGACY_TEAMS` and the editor's "make a pitch" all read,
+      so the pair is changed in one place and never drifts between the two
+      repos' halves of the UX. Purple is the furthest of the four ships from
+      cream in hue while still being a colorway you could actually print.
+      (b) A colorway gained a third colour, `leg`, a deeper cast of its
+      shell, painted into `leg_material`, `upper_leg_{left,right}_material`
+      and `hip_l_material` by `compose.paint_team` and by the viewer's
+      `teamPaint`. The shells are the head and trunk — the parts that hold
+      STILL; the legs are what swings, so a darker limb is the cue that
+      survives motion and distance. The scoreboard and inspector chips are
+      split diagonally (`teamSwatch`) for the same reason: a chip showing
+      the shell alone made cream and lavender two pale blocks. Locked by
+      `test_world.py` (the two pitch teams' legs differ from each other and
+      from their own shells) and `lib/duckskin.test.ts` (same, in the vertex
+      colours the browser actually draws).
 
 ### 3. Scripted positional play — the brains that make it look like soccer
 
@@ -1624,49 +1645,131 @@ tier has survived a fresh-seed confirmation; a role is a change to where a
 duck STANDS, which is the one thing the shape metrics in 1.3 can see
 directly.
 
-- [ ] **3.1 Never kick toward your own goal (the "clear").** In
-      `Chase._plan`, when the goal line is more than `aim_max` off the line
-      of sight, clamp the kick line to the edge of the aim cone on the
-      goal's side instead of giving up and kicking along the line of sight
-      — the ball goes sideways-and-forward, never backward. Two lines.
-      Then the real clear: with the ball inside `clear_zone` of the own
-      goal line (start at 0.6 m), the plan mode is `clear` — a kick spot
-      behind the ball on the line to the far touchline on the attacked
-      side, and the two-stage line-up's precision is not needed for it.
-      → **decide on:** `MICRODUCK_CHASE=aim_clamp=1 uv run eval-pitch
-      --per-side 2 --seeds 24 --out runs/t4-clamp.jsonl --tag clamp` against
-      the baseline, paired: `kicksBack` per team (events; the baseline is
-      28 of 53), `ownGoals` (events), signed `ballProgress` per team — and
-      falls (events) not up, because a clamped line-up walks round the
-      ball more. If back-kicks do not fall by half on 24 seeds the clamp is
-      not doing what the geometry says; trace it before touching pay.
-- [ ] **3.2 Defender.** A role the board assigns to the deepest rank: it
-      holds a spot on the line ball → own goal, `defend_depth` (0.5 m) out
-      from the goal line, facing the ball, and steps sideways to stay
-      between (the `_support` code with a different anchor). It attacks
-      only when the ball is inside its own third AND the board says it is
-      the quickest — the existing hysteresis, gated by zone — and it never
-      leaves its own half. Ball position from its own track when it sees
-      it, else the board's freshest fix (as `_support` does today).
-      → **decide on:** 2v2 and 3v3, 24 seeds each, defender + today's
-      roster v today's roster: `ownGoals` and `goalsAgainst` (events),
-      `depth` (the deepest duck is now ~0.5 m from its line, not 0.7 m
-      behind a ball at midfield), `crowd` down, `possession` not down by
-      more than the defender's share, falls (events) flat. A defender that
-      stands still near the boards is the fall mode to watch
-      (`support_margin`, `_beside`); render one seed before reading the
-      table.
-- [ ] **3.3 Striker.** The attacker role as today, plus a *position* when
-      a teammate has the ball: ahead of the ball toward the attacked goal
-      at `strike_ahead` (0.8 m) and OFF the kick line by `strike_side`
-      (0.4 m), facing the ball. Note what this is not: the poacher
-      (`support_mode="ahead"`) stood *on* the line ahead of the ball and
-      reversed on fresh seeds (34 v 31 goals over 24). The lateral offset
-      and the numbers it is judged on are the difference, and if it lands
-      inside the noise it ships off like the poacher did.
-      → **decide on:** signed `ballProgress` for the striker's team,
-      `goalsFor` (events, reported), `crowd` (a striker off the line is
-      not a second duck on the ball), falls.
+- [x] **3.1 Never kick toward your own goal — the clamp is MEASURED and it
+      works (2026-09-05).** `ChaseParams.aim_mode`: when the goal is more
+      than `aim_max` round the ball, `"los"` (shipped) gives up and kicks
+      along the line of sight, `"clamp"` kicks at the edge of the cone on
+      the goal's side, `"goal"` aims at the goal whatever the walk-round
+      costs. Inside the cone all three agree, so this touches only the case
+      the shipped rule gives up on.
+
+      24 paired seeds × 300 s of 2v2, `scripts/compare_pitch.py`
+      (`runs/t4-base24-2v2.jsonl` v `runs/t4-clamp24-2v2.jsonl`):
+
+      | | los | clamp | |
+      |---|---:|---:|---|
+      | **kicks sent back** | **90 of 183 (49%)** | **64 of 178 (36%)** | **−13 pts, p = 0.011 on the events** |
+      | goals | 1.50 | 1.75 | +0.25 ± 0.53, p = 0.33 |
+      | falls | 2.67 | 2.50 | −0.17 ± 1.08, p = 0.75 |
+      | own goals | 19 | 17 | (19 events: cannot resolve — item 1.5) |
+      | possession | 23.99 | 23.54 | −0.45 ± 2.32, p = 0.69 |
+      | ballAdvance | 0.775 | 0.786 | +0.011 ± 0.147, p = 0.87 |
+      | ballProgress | −0.043 | −0.065 | −0.022 ± 0.185, p = 0.81 |
+
+      **The mechanism is confirmed and the play is unchanged** — the same
+      shape as the attacker-handover result, and stated the same way. Falls
+      did not rise, which was the risk. `spread` came out −0.071 m at
+      p = 0.047; nine metrics were read, so that is the p one expects by
+      chance and it is not claimed.
+
+      Back-kicks fell by a quarter, not the half the item asked for, and the
+      geometry says why: the clamp helps only when the line of sight is
+      within `aim_max` of somewhere useful. A duck standing squarely between
+      the ball and the goal it attacks has its own goal straight down that
+      line, and ±60° of it is still 120° from the target.
+
+      **So the third arm was run — always at the goal, whatever the
+      walk-round costs — and it re-earns the 2026 verdict with an instrument
+      that can see why.** Same 24 seeds:
+
+      | | los | goal | |
+      |---|---:|---:|---|
+      | kicks sent back | 90 of 183 (49%) | **26 of 97 (27%)** | −22 pts, p = 0.0003 |
+      | **kicks taken** | **183** | **97** | the walk-round costs half of them |
+      | **ballProgress** | **−0.043** | **−0.301** | **−0.258 ± 0.213, p = 0.012, worse on 17 of 24** |
+      | goals | 1.50 | 1.67 | +0.17 ± 0.70, p = 0.62 |
+      | falls | 2.67 | 2.38 | −0.29 ± 1.07, p = 0.57 |
+
+      It aims best and plays worst: signed progress is the metric churn
+      cannot inflate, and it says the ball ends up nearer the ducks' OWN
+      goals. The mechanism is visible in the kick count — a duck walking a
+      long arc round the ball is in possession the whole way and shoves the
+      ball backwards as it goes, which is the "a walk-around crossed walls
+      and the other duck" objection from the first form, now measured on
+      something better than four seeds of goals.
+
+      **`clamp` ships, `goal` ships off with its numbers.** The clear half
+      of this item (a `clear_zone` mode near our own line) is NOT built and
+      is now less attractive: the remaining back-kicks are the walk-round
+      case, and the walk-round is what just measured worse.
+
+      **CONFIRMED on 24 seeds nobody had run (100–123), which no brain-tier
+      soccer change in this repo had managed before.** Fresh block: back-kicks
+      **121 of 236 (51%) → 45 of 146 (31%), p = 0.0001**, against the
+      discovery block's 49% → 36%, p = 0.011. Pooled over all **48 paired
+      seeds**: **211 of 419 (50%) → 109 of 324 (34%), −16.7 points,
+      p < 0.0001** — and every other metric flat over the 48 (goals +0.02
+      p = 0.93, possession +0.03 p = 0.97, advance −0.026 p = 0.57, signed
+      progress +0.008 p = 0.89, crowd −0.006 p = 0.49).
+
+      Two honest caveats, both from reading the blocks separately.
+      **The kick count did not replicate as flat**: 183 → 178 on the
+      discovery seeds, 236 → 146 on the fresh ones, pooling to a real
+      **−23% in touches** (419 → 324). Aiming better costs kicks, and the
+      fresh block says more than the first one did. **And falls looked bad
+      on the fresh block alone** (+0.75 a run, p = 0.052, against −0.17
+      p = 0.75 on the discovery seeds) and **do not resolve pooled**
+      (+0.29 ± 0.66, p = 0.37, 236 fall events) — which is exactly why a
+      single block is not a result, in either direction.
+      `aim_mode` now defaults to `"clamp"`.
+- [x] **3.2 / 3.3 Defender and striker — BUILT AND MEASURED (2026-09-05).
+      The pile-up is gone, and that is the whole of what resolves.** A role
+      is a POST, not a new state machine: the same `_support` servo walks to
+      `Chase._hold_target` and faces the ball. The defender holds the line
+      from its own goal to the ball, `defend_depth` = 0.5 m out, never over
+      the halfway line; the striker holds `strike_ahead` = 0.8 m up-pitch of
+      the ball and `strike_side` = 0.4 m OFF the kick line, on the side the
+      ball is not on — the offset being the whole difference from the
+      poacher, which stood on the line and reversed on fresh seeds. A role
+      also owns a THIRD (`brain/team.ROLE_ZONES`) and may only take the ball
+      inside it; the gate is on the shared board, not per duck, because a
+      duck that gates itself leaves the ball to nobody.
+
+      `eval-striker --left "chase+defender,chase+striker" --right chase`,
+      24 paired seeds × 300 s of 2v2, reading the ROLES side
+      (`runs/t4-noroles24.jsonl` v `runs/t4-roles24.jsonl`):
+
+      | | plain | roles | |
+      |---|---:|---:|---|
+      | **crowd** (two of ours within 0.5 m of the ball) | **13.8%** | **1.7%** | **−12.1 pts, p < 0.001, on 23 of 24 seeds** |
+      | **spread** (mean distance between the pair) | **0.71 m** | **1.60 m** | **+0.89 ± 0.13, p < 0.001, on 24 of 24** |
+      | **depth** (the deepest duck, from its own line) | **1.29 m** | **0.79 m** | **−0.50 ± 0.16, p < 0.001** |
+      | possession | 12.7 s/min | 7.6 s/min | −5.09 ± 2.01, p < 0.001 |
+      | falls | 31 | 20 | −0.46 ± 0.47 a run, p = 0.042 |
+      | goals scored | 21 | 13 | −0.33 ± 0.46, p = 0.13 |
+      | own goals | 9 | 4 | 13 events — cannot resolve (1.5) |
+      | ballAdvance | 0.429 | 0.367 | −0.061 ± 0.102, p = 0.21 |
+      | ballProgress (signed) | −0.021 | +0.059 | +0.080 ± 0.154, p = 0.29 |
+      | kicks sent back | 40 of 89 (45%) | 24 of 64 (38%) | p = 0.36 |
+
+      **What is claimed: the shape.** Three positional metrics move by five
+      to seven times their 95% interval, one of them on every seed. The
+      ducks stop grouping up, somebody stays back, and this is the answer to
+      "they all pile onto the ball" — the thing the whole item is for.
+      **What is not claimed: the play.** Signed progress flips sign and does
+      not resolve; goals trend down and do not resolve; own goals halve on
+      13 events, which item 1.5 says is worth nothing. The one real cost IS
+      resolved — **the roles side holds the ball 40% less**, which is what
+      two ducks standing at posts instead of chasing must cost, and whether
+      it is worth paying is a question about goals that this benchmark
+      cannot answer at any sane number of seeds.
+      Falls fell (p = 0.042, 51 events) — plausible on the mechanism, since
+      most falls here are duck-on-duck and there is far less crowding — and
+      it awaits the fresh-seed confirmation below like everything else.
+- [x] **3.3 Striker** — measured with the defender, above (the roster arm is
+      defender + striker against two plain chase brains, so the pair is what
+      was tested). Whether a striker alone pays is a separate arm and has
+      not been run.
 - [ ] **3.4 Midfielder (3v3).** The link: holds the middle third between
       the ball and the centre spot, laterally on the ball's side; attacks
       when quickest with the ball in the middle third; a ball in the final

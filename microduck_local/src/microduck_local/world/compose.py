@@ -46,13 +46,22 @@ def duck_prefix(duck_id: str) -> str:
 
 # Which of the robot's ~38 materials carry a team's colours (roadmap Track
 # 4.2.2). The shells are the big readable area — the two body halves and the
-# two head halves — and the trim is what the press kit calls trim and beak.
-# Everything else (servos, PCBs, the lens, the soles) is the same on every
+# two head halves — the trim is what the press kit calls trim and beak, and
+# the legs are the printed thigh/shin/hip parts. Everything else (servos,
+# PCBs, the lens, the soles, the internal rigidity plate) is the same on every
 # duck, as it is on the real robot: a colorway is a set of printed shells.
+#
+# The legs join the colorway (Track 4.2.3) because the shells alone stop
+# working as soon as two PALE colorways meet: cream v lavender at 60 px is
+# two light ducks, and the head and trunk are the parts that hold still. The
+# legs swing, so a darker limb is the cue that reads through motion, in a wide
+# shot and in a 640-px head-camera frame alike.
 SHELL_MATERIALS = ("left_shell_material", "right_shell_material",
                    "top_head_shell_material", "bottom_head_shell_material")
 TRIM_MATERIALS = ("jaw_material", "foot_left_material", "foot_right_material",
                   "ankle_left_material", "ankle_right_material")
+LEG_MATERIALS = ("leg_material", "upper_leg_left_material",
+                 "upper_leg_right_material", "hip_l_material")
 
 
 def paint_team(model: mujoco.MjModel, duck_id: str, colorway: str) -> int:
@@ -72,7 +81,8 @@ def paint_team(model: mujoco.MjModel, duck_id: str, colorway: str) -> int:
     if look is None:
         return 0
     n = 0
-    for names, rgb in ((SHELL_MATERIALS, look["shell"]), (TRIM_MATERIALS, look["trim"])):
+    for names, rgb in ((SHELL_MATERIALS, look["shell"]), (TRIM_MATERIALS, look["trim"]),
+                       (LEG_MATERIALS, look["leg"])):
         for name in names:
             mid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, duck_prefix(duck_id) + name)
             if mid >= 0:

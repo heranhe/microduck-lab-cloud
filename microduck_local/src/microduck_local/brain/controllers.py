@@ -641,11 +641,25 @@ class ChaseParams:
     #   "clamp"  kick at the edge of the cone on the goal's side: the same
     #            walk-round `aim_max` already allows, and never worse than
     #            `aim_max` off the best available line.
-    #   "goal"   always at the goal, whatever the walk-round costs. Measured
-    #            OFF in the first form (4 kicks and 2 falls a run for 1.0
-    #            goals against 1.75 for the cone rule) — on four seeds, on
-    #            goals, with an instrument that could not see an own goal.
-    aim_mode: str = "los"
+    #   "goal"   always at the goal, whatever the walk-round costs.
+    #
+    # MEASURED, 24 paired seeds x 300 s of 2v2 and then 24 FRESH ones
+    # (docs/roadmap.md Track 4.3.1). `clamp` ships: back-kicks 211 of 419
+    # (50%) -> 109 of 324 (34%) pooled over the 48, p < 0.0001, and it
+    # replicates on its own in each block (p = 0.011 then p = 0.0001) —
+    # while goals, possession, advance, signed progress and crowd are all
+    # flat over the 48. It costs 23% of the touches (419 -> 324): aiming
+    # better means walking further round. Falls do not resolve pooled
+    # (+0.29, p = 0.37) though the fresh block alone looked bad (p = 0.052),
+    # which is what a block on its own is worth.
+    # `goal` ships OFF with its numbers: it aims best (27% back, p = 0.0003)
+    # and plays worst — half the kicks and signed progress -0.26 (p = 0.012,
+    # worse on 17 of 24), the ball ending up nearer the ducks' own goals,
+    # because a duck arcing round the ball is in possession the whole way
+    # and shoves it backwards as it goes. That re-earns the first form's
+    # verdict (4 kicks and 2 falls a run for 1.0 goals against 1.75 for the
+    # cone rule) with an instrument that can see the mechanism.
+    aim_mode: str = "clamp"
     # The head. Level, the camera loses a floor ball ~0.3 m out. Pitched
     # by `_gaze` (a law that puts the ball on the camera's axis: measured
     # 0.6 of command = 0.647 rad of camera, 0.20 m up) while WALKING at a
@@ -806,6 +820,26 @@ class ChaseParams:
     # bearing turns with the body, so a duck seen a second ago still says
     # where it is) stands instead of turning in place.
     support_margin: float = 0.35
+    # Where a duck with a static ROLE stands when it is not the one on the
+    # ball (roadmap Track 4.3). All three are a spot to hold, not a new state
+    # machine: the same `_support` servo walks to them and faces the ball.
+    #   defender  — on the line from the ball to its own goal, this far out
+    #               from the goal line, and never over the halfway line. Its
+    #               job is to be BETWEEN, which is the one thing the shipped
+    #               roster never does: the deepest duck of a 2v2 averages
+    #               1.35 m up a 1.7 m half.
+    #   striker   — ahead of the ball toward the goal it attacks, offset to
+    #               the side the ball is NOT on. The offset is the whole
+    #               difference from the poacher that was measured off (that
+    #               one stood ON the line and reversed on fresh seeds), and
+    #               it is what keeps a striker from being a second duck on
+    #               the ball.
+    #   mid       — between the ball and the centre spot, on the ball's side,
+    #               kept inside the middle third.
+    defend_depth: float = 0.5
+    strike_ahead: float = 0.8
+    strike_side: float = 0.4
+    mid_side: float = 0.5
     beside_m: float = 0.3
     beside_s: float = 1.5
     # The ToF sees the ball at the feet (tof_floor_ball): inside `tof_ball_m`
@@ -1031,7 +1065,7 @@ class Chase:
 
     def __init__(self, p: ChaseParams | None = None, goal: tuple[float, float] | None = None,
                  team=None, duck_id: str = "", bounds: tuple[float, float] | None = None,
-                 goal_w: float = 0.0):
+                 goal_w: float = 0.0, role: str | None = None):
         # No params given (the lab, the benchmark, the /sim page): the
         # shipped defaults, with `MICRODUCK_CHASE` applied so a battery can
         # name its variant on the command line. A caller that passes `p`
@@ -1042,6 +1076,12 @@ class Chase:
         self.bounds = None if bounds is None else (float(bounds[0]), float(bounds[1]))   # the pitch's half-extents inside the boards
         self.team = team
         self.duck_id = duck_id
+        # The STATIC role off the scenario ("defender" / "midfielder" /
+        # "striker" / None), which is a different thing from `self.role` — the
+        # dynamic attack/support the board hands out every tick. This one says
+        # which third of the pitch this duck may take the ball on and where it
+        # stands when it does not have it; that one says whether it has it now.
+        self.job = role
         self.tracker = Tracker()
         self.gait = GaitWatch()
         self.reset()
@@ -1102,6 +1142,7 @@ class Chase:
             "since": round(self._senses.t - self.last_seen_t, 2)}
         out["tracks"] = self.tracker.payload(self._senses.t)
         out["chase"] = {"kicks": self.kicks, "pushes": self.pushes, "role": self.role,
+                        **({"job": self.job} if self.job else {}),
                         "bumped": round(max(0.0, self._senses.t - self._bump_t), 2) if self._bump_t > -1e8 else None,
                         "tofBall": None if getattr(self, "tof_ball", None) is None else
                         [round(self.tof_ball[0], 2), round(self.tof_ball[1], 2)],
@@ -1555,9 +1596,64 @@ class Chase:
         self.last = (vx, 0.0, wz)
         return Intent(twist=self.last, head=head, note=self.role if self.role != "attack" else self.state, skill=skill)
 
+    def _attack_x(self, x: float) -> float:
+        """A point's position along the pitch in ATTACK coordinates: −1 at the
+        goal we defend, +1 at the one we attack. Both teams read the same
+        numbers, so a third is a third whichever way a duck is pointing."""
+        if self.bounds is None or self.bounds[0] <= 0:
+            return 0.0
+        sign = 1.0 if (self.goal is None or self.goal[0] >= 0) else -1.0
+        return sign * x / self.bounds[0]
+
+    def _from_attack_x(self, a: float) -> float:
+        sign = 1.0 if (self.goal is None or self.goal[0] >= 0) else -1.0
+        return sign * a * (self.bounds[0] if self.bounds else 0.0)
+
+    def _hold_target(self, bxy, odom) -> tuple[float, float]:
+        """Where this duck stands while a teammate has the ball.
+
+        With no static role it is the shipped supporter's spot — back from the
+        ball toward our own goal, spread sideways by rank. With one it is that
+        role's post (`ChaseParams.defend_depth` / `strike_ahead` / `mid_side`),
+        kept inside the third the role owns so that holding a post and being
+        allowed to take the ball are the same geometry (`Team.zone_ok`)."""
+        p = self.p
+        t = self._senses.t
+        og = self._own_goal(odom)
+        if self.job == "defender":
+            dx, dy = bxy[0] - og[0], bxy[1] - og[1]
+            n = math.hypot(dx, dy)
+            if n < 1e-6:
+                return og
+            # On the line from our goal to the ball: between, which is the job.
+            target = (og[0] + p.defend_depth * dx / n, og[1] + p.defend_depth * dy / n)
+            return (self._from_attack_x(min(self._attack_x(target[0]), 0.0)), target[1])
+        if self.job == "striker":
+            g = self.goal if self.goal is not None else (og[0] + 2.0, og[1])
+            gx, gy = g[0] - bxy[0], g[1] - bxy[1]
+            n = math.hypot(gx, gy)
+            ux, uy = (gx / n, gy / n) if n > 1e-6 else (1.0, 0.0)
+            # Off the kick line, on the side the ball is NOT on: a striker
+            # standing ON the line is the poacher that reversed on fresh
+            # seeds, and it is a second duck on the ball.
+            side = -p.strike_side if bxy[1] >= 0 else p.strike_side
+            target = (bxy[0] + p.strike_ahead * ux - side * uy, bxy[1] + p.strike_ahead * uy + side * ux)
+            return (self._from_attack_x(max(self._attack_x(target[0]), 1.0 / 3.0)), target[1])
+        if self.job == "midfielder":
+            a = float(np.clip(self._attack_x(bxy[0]) * 0.5, -1.0 / 3.0, 1.0 / 3.0))
+            return (self._from_attack_x(a), p.mid_side * (1.0 if bxy[1] >= 0 else -1.0))
+        anchor = og if p.support_mode == "back" else (self.goal if self.goal is not None else og)
+        gx, gy = anchor[0] - bxy[0], anchor[1] - bxy[1]
+        gn = math.hypot(gx, gy)
+        ux, uy = (gx / gn, gy / gn) if gn > 1e-6 else (-math.cos(odom[2]), -math.sin(odom[2]))
+        rank = self.team.rank(self.duck_id, t) if self.team is not None else 0
+        side = p.support_side * ((rank + 1) // 2) * (1 if rank % 2 == 0 else -1)
+        return (bxy[0] + p.support_back * ux - side * uy, bxy[1] + p.support_back * uy + side * ux)
+
     def _support(self, odom, ball, seen: bool, cold: bool) -> tuple[float, float]:
-        """A supporter: stand back from the ball toward our own goal, offset
-        sideways by rank, facing the ball. The ball's position comes from
+        """A supporter: hold the post its role gives it (`_hold_target`) —
+        without a role, back from the ball toward our own goal, offset
+        sideways by rank — facing the ball. The ball's position comes from
         my own track when I see it, else from a teammate's claim."""
         p = self.p
         t = self._senses.t
@@ -1567,14 +1663,7 @@ class Chase:
             self.state = "support"
             vx, _, wz = turn(1.0, cold)                    # nobody has it: look for it
             return vx, wz
-        og = self._own_goal(odom) if p.support_mode == "back" else (
-            self.goal if self.goal is not None else self._own_goal(odom))
-        gx, gy = og[0] - bxy[0], og[1] - bxy[1]
-        gn = math.hypot(gx, gy)
-        ux, uy = (gx / gn, gy / gn) if gn > 1e-6 else (-math.cos(odom[2]), -math.sin(odom[2]))
-        rank = self.team.rank(self.duck_id, t) if self.team is not None else 0
-        side = p.support_side * ((rank + 1) // 2) * (1 if rank % 2 == 0 else -1)
-        target = (bxy[0] + p.support_back * ux - side * uy, bxy[1] + p.support_back * uy + side * ux)
+        target = self._hold_target(bxy, odom)
         if self.bounds is not None:                         # never a spot in the boards
             m = p.support_margin
             target = (float(np.clip(target[0], -self.bounds[0] + m, self.bounds[0] - m)),

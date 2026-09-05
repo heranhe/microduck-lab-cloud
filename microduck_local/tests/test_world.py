@@ -153,13 +153,19 @@ def test_a_team_is_a_colorway_and_a_legacy_scene_still_loads():
     colorway cannot be confused with a mouth, and it is also the only thing a
     person watching six ducks can read at a glance."""
     from microduck_local.world import make_pitch
-    from microduck_local.world.scenario import TEAM_COLORWAYS, ScenarioError, validate_scenario
+    from microduck_local.world.scenario import (
+        PITCH_TEAMS,
+        TEAM_COLORWAYS,
+        ScenarioError,
+        validate_scenario,
+    )
+    home, away = PITCH_TEAMS
     sc = make_pitch(per_side=2)
-    assert [d.team for d in sc.ducks] == ["cream", "cream", "sky", "sky"]
-    assert all(t in TEAM_COLORWAYS for t in ("cream", "sky"))
+    assert [d.team for d in sc.ducks] == [home, home, away, away]
+    assert all(t in TEAM_COLORWAYS for t in PITCH_TEAMS) and home != away
     raw = sc.to_dict()
     raw["ducks"][0]["team"] = "left"                       # a scene saved before the rename
-    assert validate_scenario(raw).ducks[0].team == "cream"
+    assert validate_scenario(raw).ducks[0].team == home
     for field, bad in (("team", "red"), ("role", "goalie")):
         raw = sc.to_dict()
         raw["ducks"][0][field] = bad
@@ -180,8 +186,14 @@ def test_a_team_wears_its_colorway_in_the_compiled_model():
     import mujoco
 
     from microduck_local.world import make_pitch
-    from microduck_local.world.compose import SHELL_MATERIALS, TRIM_MATERIALS, compose, paint_team
-    from microduck_local.world.scenario import TEAM_COLORWAYS
+    from microduck_local.world.compose import (
+        LEG_MATERIALS,
+        SHELL_MATERIALS,
+        TRIM_MATERIALS,
+        compose,
+        paint_team,
+    )
+    from microduck_local.world.scenario import PITCH_TEAMS, TEAM_COLORWAYS
     if not C.SCENE_WALK_XML.exists():
         pytest.skip("microduck_rl checkout not found")
     m = compose(make_pitch())
@@ -191,17 +203,23 @@ def test_a_team_wears_its_colorway_in_the_compiled_model():
         assert mid >= 0, f"{duck}/{mat} is not in the model"
         return tuple(round(float(v), 3) for v in m.mat_rgba[mid][:3])
 
-    for duck, team in (("d0", "cream"), ("d1", "sky")):
-        for mat in SHELL_MATERIALS:
-            assert rgb(duck, mat) == tuple(round(v, 3) for v in TEAM_COLORWAYS[team]["shell"])
-        for mat in TRIM_MATERIALS:
-            assert rgb(duck, mat) == tuple(round(v, 3) for v in TEAM_COLORWAYS[team]["trim"])
+    for duck, team in (("d0", PITCH_TEAMS[0]), ("d1", PITCH_TEAMS[1])):
+        for part, mats in (("shell", SHELL_MATERIALS), ("trim", TRIM_MATERIALS), ("leg", LEG_MATERIALS)):
+            for mat in mats:
+                assert rgb(duck, mat) == tuple(round(v, 3) for v in TEAM_COLORWAYS[team][part])
     assert rgb("d0", "left_shell_material") != rgb("d1", "left_shell_material")
+    # The two PITCH colorways are both pale, so the shells alone are a weak
+    # cue in a wide shot — the legs are what a person actually reads, and they
+    # have to differ from each other AND from the body they hang off.
+    assert rgb("d0", LEG_MATERIALS[0]) != rgb("d1", LEG_MATERIALS[0])
+    for duck in ("d0", "d1"):
+        assert rgb(duck, LEG_MATERIALS[0]) != rgb(duck, "left_shell_material")
     # Every named material is really in the model: 0 would mean an upstream CAD
     # re-export moved the names and the paint silently did nothing.
-    assert paint_team(m, "d0", "lavender") == len(SHELL_MATERIALS) + len(TRIM_MATERIALS)
+    assert paint_team(m, "d0", "lavender") == len(SHELL_MATERIALS) + len(TRIM_MATERIALS) + len(LEG_MATERIALS)
     assert paint_team(m, "d0", "puce") == 0
-    assert rgb("d1", "left_shell_material") == tuple(round(v, 3) for v in TEAM_COLORWAYS["sky"]["shell"])
+    assert rgb("d1", "left_shell_material") == tuple(
+        round(v, 3) for v in TEAM_COLORWAYS[PITCH_TEAMS[1]]["shell"])
 
 
 def test_a_team_facing_both_goals_is_refused_at_validation_not_at_load():
@@ -209,15 +227,15 @@ def test_a_team_facing_both_goals_is_refused_at_validation_not_at_load():
     in, so /sim answered 500 and went on streaming the previous world's score.
     The editor's save is the right place to say no."""
     from microduck_local.world import World, make_pitch
-    from microduck_local.world.scenario import ScenarioError, validate_scenario
+    from microduck_local.world.scenario import PITCH_TEAMS, ScenarioError, validate_scenario
     sc = make_pitch(per_side=2)
     raw = sc.to_dict()
-    raw["ducks"][1]["spawn"] = [-0.9, 0.5, math.pi]        # a cream duck facing its own goal
+    raw["ducks"][1]["spawn"] = [-0.9, 0.5, math.pi]        # a home duck facing its own goal
     with pytest.raises(ScenarioError, match="faces both goals"):
         validate_scenario(raw)
     # Declaring the mouth is how a roster like that is legal — and then the
-    # World hands BOTH cream ducks the same goal, whatever way they face.
-    raw["attacks"] = {"cream": "right"}
+    # World hands BOTH home ducks the same goal, whatever way they face.
+    raw["attacks"] = {PITCH_TEAMS[0]: "right"}
     sc2 = validate_scenario(raw)
     w = World(sc2)
     hx = sc2.floor[0] / 2 - 0.25

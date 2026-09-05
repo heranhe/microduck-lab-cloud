@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyFloorClick } from "@/components/SimEditor";
-import { groupLearned, LEARNED_GROUPS, type LearnedInfo, type Scenario } from "./sim";
+import { groupLearned, LEARNED_GROUPS, PITCH_TEAMS, type LearnedInfo, type Scenario } from "./sim";
 
 const b = (name: string, group: string | null, title: string | null = null): LearnedInfo => ({
   name, group, title, description: null,
@@ -78,17 +78,18 @@ describe("applyFloorClick: placing a duck on a pitch", () => {
     applyFloorClick({ draft, tool: "duck", wallStart: null }, x, 0).draft.ducks.at(-1)!;
 
   it("puts a duck in its own half's team, facing the other goal", () => {
+    const [home, away] = PITCH_TEAMS;
     const a = place(pitch(), -1);
-    expect([a.team, a.brain, a.spawn[2]]).toEqual(["cream", "chase", 0]);
+    expect([a.team, a.brain, a.spawn[2]]).toEqual([home, "chase", 0]);
     const b = place({ ...pitch(), ducks: [a] }, 1);
-    expect([b.team, b.brain, b.spawn[2]]).toEqual(["sky", "chase", Math.PI]);
+    expect([b.team, b.brain, b.spawn[2]]).toEqual([away, "chase", Math.PI]);
   });
 
-  it("follows the teams already on the pitch rather than assuming cream", () => {
+  it("follows the teams already on the pitch rather than assuming the default pair", () => {
     const sky = { ...place(pitch(), -1), team: "sky" as const };
     const mate = place({ ...pitch(), ducks: [sky] }, -1.2);
     expect(mate.team).toBe("sky");
-    expect(place({ ...pitch(), ducks: [sky] }, 1.2).team).toBe("cream");
+    expect(place({ ...pitch(), ducks: [sky] }, 1.2).team).toBe(PITCH_TEAMS[1]);
   });
 
   it("leaves a duck teamless off a pitch", () => {

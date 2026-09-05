@@ -1427,6 +1427,25 @@ discipline** (event counts, paired reads, power, `--out`/`--tag` resume,
 and the rule that catches all of the above: confirm on seeds the effect
 was not found on).
 
+**And now a fourth kind, which is the only brain change on this list to
+survive its own decide-on: an aim rule, found by building an instrument
+that could see the defect.** The benchmark could not tell a goal from an
+own goal — `World.goals` is keyed by MOUTH — so nothing had ever counted
+where the ducks were actually kicking the ball. Counted (Track 4.1),
+**90 of 183 kicks over 24 seeds of 2v2 sent the ball back toward the
+kicker's own goal**, because `Chase._plan` gives up on the goal when it is
+more than `aim_max` round the ball and kicks along the line of sight —
+which points at our own goal whenever the duck arrives from the goal side,
+and the support geometry puts it there. Clamping that fallback to the edge
+of the aim cone takes it to **64 of 178 (49% → 36%, p = 0.011 on the
+events)** with goals, falls, possession, advance and signed progress all
+flat. Aiming at the goal regardless does better still on aim (27%,
+p = 0.0003) and **worse on play** — half as many kicks and signed progress
+−0.26 (p = 0.012, worse on 17 of 24) — which re-earns the first form's
+walk-round verdict with an instrument that can see the mechanism. The full
+ledger, the power table and the two arms are in `docs/roadmap.md`,
+"Track 4 — positional soccer".
+
 The measured reason is in "Where the run actually goes" below: **the duck
 spends 47% of a 1v1 run rotating on the spot**, at the walker's ceiling of
 0.655 rad/s, with the command range already asking for everything it has.

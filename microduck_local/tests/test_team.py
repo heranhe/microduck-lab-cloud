@@ -199,7 +199,7 @@ def _ball(bearing, rng):
     return Track(1, "ball", bearing, 0.0, 0.1, rng, 0.9, 0.0, 0.0, hits=2)
 
 
-def test_chase_plans_behind_the_ball_toward_the_goal_and_falls_back_to_the_line_of_sight():
+def test_chase_plans_behind_the_ball_toward_the_goal_and_clamps_when_it_cannot_reach_it():
     p = ChaseParams()
     b = Chase(p, goal=(1.5, 0.0))
     # Ball 0.4 m ahead, duck at the origin facing +x, goal at +1.5: behind it already, kick spot.
@@ -212,10 +212,19 @@ def test_chase_plans_behind_the_ball_toward_the_goal_and_falls_back_to_the_line_
     assert abs(spot[0] - (0.4 - p.kick_ahead * math.cos(h) - side * math.sin(h))) < 1e-9
     assert abs(spot[1] - (0.0 - p.kick_ahead * math.sin(h) + side * math.cos(h))) < 1e-9
     assert abs(math.hypot(spot[0] - 0.4, spot[1]) - math.hypot(p.kick_ahead, p.kick_side)) < 1e-9
-    # The goal is more than `aim_max` off the line of sight: kick along the line of sight instead.
+    # The goal is more than `aim_max` off the line of sight. The shipped
+    # `aim_mode` clamps to the cone's edge ON THE GOAL'S SIDE; "los" (the old
+    # default) gives that up and kicks straight down the line of sight, which
+    # is what sent half of every battery's kicks toward the kicker's own goal.
+    assert p.aim_mode == "clamp"
     side_b = Chase(p, goal=(0.0, 1.5))
     spot = side_b._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
-    assert abs(spot[3] + {"kick_left": p.kick_deflect_left, "kick_right": p.kick_deflect_right}[spot[2]]) < 1e-9
+    defl_b = {"kick_left": p.kick_deflect_left, "kick_right": p.kick_deflect_right}[spot[2]]
+    assert abs(spot[3] + defl_b - p.aim_max) < 1e-9          # +aim_max: the goal is to the LEFT
+    old = Chase(ChaseParams(aim_mode="los"), goal=(0.0, 1.5))
+    spot_los = old._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
+    assert abs(spot_los[3] + {"kick_left": p.kick_deflect_left,
+                              "kick_right": p.kick_deflect_right}[spot_los[2]]) < 1e-9
     # Pushing is off by default (measured); switched on, a far goal gives a push spot squarely behind the ball.
     assert ChaseParams().push_beyond == math.inf
     far = Chase(ChaseParams(push_beyond=1.4), goal=(3.0, 0.0))
@@ -272,8 +281,9 @@ def test_chase_wall_rule_turns_away_from_a_wall_beside_it():
 def test_pitch_with_teams_and_brain_kwargs():
     from microduck_local import contract as C
     from microduck_local.world import World, make_pitch, validate_scenario
+    from microduck_local.world.scenario import PITCH_TEAMS
     sc = make_pitch(per_side=2)
-    assert len(sc.ducks) == 4 and {d.team for d in sc.ducks} == {"cream", "sky"}   # teams are colorways
+    assert len(sc.ducks) == 4 and {d.team for d in sc.ducks} == set(PITCH_TEAMS)   # teams are colorways
     assert validate_scenario(sc.to_dict()) == sc
     assert make_pitch(per_side=3).name == "pitch-3v3" and len(make_pitch(per_side=3).ducks) == 6
     if not C.SCENE_WALK_XML.exists():
@@ -283,7 +293,7 @@ def test_pitch_with_teams_and_brain_kwargs():
     kw = {d.id: brain_kwargs(d, w, teams) for d in sc.ducks}
     assert kw["d0"]["goal"][0] > 0 and kw["d2"]["goal"][0] < 0 and kw["d0"]["goal"] == kw["d1"]["goal"]
     assert kw["d0"]["team"] is kw["d1"]["team"] and kw["d0"]["team"] is not kw["d2"]["team"]
-    assert set(teams) == {"cream", "sky"}
+    assert set(teams) == set(PITCH_TEAMS)
     assert kw["d0"]["p"].bump_stand_s == ChaseParams().team_bump_stand_s   # a roster with teammates: the bump sense on
     solo = make_pitch(per_side=1)
     assert "p" not in brain_kwargs(solo.ducks[0], World(solo), {})   # a lone attacker keeps the default

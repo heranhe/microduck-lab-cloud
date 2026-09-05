@@ -53,19 +53,37 @@ MAX_PERSONS = 4
 # so a team that is a colour is a team the hardware could actually play.
 #
 # The four Pollen ships (press kit): shell, then the trim-and-beak colour that
-# goes with it. sRGB, as the MJCF materials are.
+# goes with it, then the legs. sRGB, as the MJCF materials are.
+#
+# The LEG colour is a deeper cast of the shell rather than the shell itself.
+# The shells are the head and the trunk — the parts that hold still — so two
+# pale colorways (cream v lavender) read alike in a wide shot of a pitch where
+# every duck is 60 px tall. The legs are the parts that MOVE, and a limb a
+# shade or two darker than the body is the cue that survives motion blur and a
+# 640-px head-camera frame. It is also honest about the robot: the leg shells
+# are printed parts like the body shells, so a colorway can own them.
 TEAM_COLORWAYS: dict[str, dict[str, tuple[float, float, float]]] = {
-    "cream":    {"shell": (0.969, 0.902, 0.796), "trim": (0.95, 0.55, 0.13)},   # #f7e6cb, orange trim
-    "graphite": {"shell": (0.424, 0.416, 0.408), "trim": (0.98, 0.78, 0.10)},   # #6c6a68, yellow trim
-    "lavender": {"shell": (0.749, 0.663, 0.812), "trim": (0.98, 0.78, 0.10)},   # #bfa9cf, yellow trim
-    "sky":      {"shell": (0.663, 0.859, 0.910), "trim": (0.95, 0.55, 0.13)},   # #a9dbe8, orange trim
+    "cream":    {"shell": (0.969, 0.902, 0.796), "trim": (0.95, 0.55, 0.13),
+                 "leg": (0.788, 0.678, 0.518)},   # #f7e6cb, orange trim, #c9ad84 legs
+    "graphite": {"shell": (0.424, 0.416, 0.408), "trim": (0.98, 0.78, 0.10),
+                 "leg": (0.247, 0.239, 0.231)},   # #6c6a68, yellow trim, #3f3d3b legs
+    "lavender": {"shell": (0.749, 0.663, 0.812), "trim": (0.98, 0.78, 0.10),
+                 "leg": (0.490, 0.400, 0.569)},   # #bfa9cf, yellow trim, #7d6691 legs
+    "sky":      {"shell": (0.663, 0.859, 0.910), "trim": (0.95, 0.55, 0.13),
+                 "leg": (0.373, 0.624, 0.698)},   # #a9dbe8, orange trim, #5f9fb2 legs
 }
+# The pair `make_pitch` puts on a pitch, and what a legacy "left"/"right"
+# scene loads as. Cream v LAVENDER: cream against sky was two pale-cool
+# shells that a person watching a 3v3 had to squint at, and purple is the
+# furthest of the four ships from cream in hue while still being one of the
+# four (a team has to be a colorway you can actually print).
+PITCH_TEAMS: tuple[str, str] = ("cream", "lavender")
 # What the first pitches called their teams. They were the two SIDES of the
 # pitch, which collided head-on with the goal MOUTH keys the World writes
 # (`goals["right"]` is the mouth at +x, which the "left" team attacks) — a
 # collision the README needed a standing warning paragraph for. A saved scene
 # still loads: the names map to the two colorways `make_pitch` now uses.
-LEGACY_TEAMS = {"left": "cream", "right": "sky"}
+LEGACY_TEAMS = dict(zip(("left", "right"), PITCH_TEAMS))
 # What a duck is for on a pitch (roadmap Track 4.3). None keeps today's
 # behaviour: the team blackboard picks one attacker by predicted time to the
 # ball and the rest support it.
@@ -475,12 +493,12 @@ def make_playroom(seed: int = 0, n: int = 6, size: tuple[float, float] = (3.0, 2
 
 def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
                goal_width: float = 0.7, per_side: int = 1,
-               teams: tuple[str, str] = ("cream", "sky")) -> Scenario:
+               teams: tuple[str, str] = PITCH_TEAMS) -> Scenario:
     """`per_side` ducks a side, one ball, walls all round (the soccer track).
     A goal is the ball crossing either short wall's line inside
     `goal_width`; the World counts them and re-centres the ball. The CREAM
-    team (d0…) spawns at −x and attacks the +x mouth; the SKY team attacks
-    −x; the pitch grows a little with the roster. Teammates share a
+    team (d0…) spawns at −x and attacks the +x mouth; the LAVENDER team
+    attacks −x; the pitch grows a little with the roster. Teammates share a
     blackboard (brain/team.py) — a message a second over Wi-Fi on the
     robot — that says who attacks and where the ball was seen.
 
