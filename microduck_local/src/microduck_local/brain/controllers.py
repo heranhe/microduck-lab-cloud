@@ -526,6 +526,37 @@ class ChaseParams:
     # to the side.
     kick_deflect_left: float = 0.0
     kick_deflect_right: float = 0.0
+    # Plan the kick spot for where the ball WILL be when the duck gets there,
+    # not where it was last seen: at most this many seconds of lead, from the
+    # track's own velocity and `ball_decel`. 0 = off.
+    #
+    # MEASURED WHY THIS EXISTS. Over 191 kicks the duck reaches its spot to
+    # 1.4 cm — the walk-in is not the problem — and the SPOT is a median
+    # 0.349 m from the ball when it should be `kick_ahead` = 0.08 m, because
+    # the ball drifts 0.22-0.27 m during a line-up that is 3.3 s old by the
+    # time the swing fires. Not one of those 191 kicks had the ball on the
+    # sweet spot. So the plan is right when it is made and stale when it is
+    # used, and a lead is the only one of the three ways out that addresses
+    # the drift rather than avoiding it (`scripts/probe_kick_line.py`).
+    #
+    # SHIPS OFF: MEASURED AND IT DOES NOT WORK. Swept 0 / 0.5 / 1.0 / 2.0 s
+    # over 24 seeds x 300 s of 2v2 each, judged on the on-spot fraction:
+    #
+    #     lead   kicks   on the sweet spot   whiffed   spot-to-ball   plan age
+    #     0.0     191          0%              18%        0.285 m      3.26 s
+    #     0.5     175          0%              22%        0.264 m      2.92 s
+    #     1.0     125          0%              21%        0.261 m      2.98 s
+    #     2.0     130          0%              24%        0.287 m      3.22 s
+    #
+    # Zero of every arm, and the whiff rate rises. The reason is the same
+    # blindness that causes the staleness: the track's velocity is
+    # differenced from SIGHTINGS, and the sightings stop at `refresh_min`
+    # (0.35 m) — so the prediction is extrapolated from data that is exactly
+    # as old as the plan it is meant to rescue. You cannot predict your way
+    # out of not looking. Three aim-side fixes have now died on this
+    # (`kick_deflect_*`, `two_stage`/`lineup_lat`, and this), which is what
+    # points at the head and the blind radius instead.
+    spot_lead: float = 0.0
     lineup_range: float = 0.6      # a ball seen inside this is worth lining up on
     refresh_min: float = 0.35      # …and the spot is re-planned from sightings down to this range, then walked blind
     # The line-up is two stages (traced: with the spot 8 cm behind the
@@ -1251,6 +1282,13 @@ class Chase:
         x, y, yaw = odom
         bx, by = self._ball_xy(odom, ball)
         los = yaw + ball.bearing
+        if p.spot_lead > 0 and self._senses is not None and ball.vel_hits >= 2:
+            # Where it will be when we arrive: the walk at `speed`, capped so
+            # a bad velocity cannot throw the spot across the pitch.
+            eta = min(p.spot_lead, math.hypot(bx - x, by - y) / max(p.speed, 1e-3))
+            pred = ball.predict(self._senses.t + eta, p.ball_decel)
+            if pred is not None:
+                bx, by = pred
         if self.goal is not None:
             u = math.atan2(self.goal[1] - by, self.goal[0] - bx)
             far = math.hypot(self.goal[0] - bx, self.goal[1] - by) > p.push_beyond

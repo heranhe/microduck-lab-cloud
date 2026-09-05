@@ -2097,7 +2097,23 @@ The cause is in the last two rows, and it is not precision — it is
 whole of the 0.16 m shortfall. It is also why every arm that made the line-up
 LONGER lost: **a longer line-up is a staler plan.**
 
-- [~] **The three ways out, in the order they cost.** (1) Arrive sooner —
+- [x] **Two of the three ways out are now measured, and both fail.**
+      *Arrive sooner*: `lineup_range` 0.6 → 0.35 does nothing (plan age
+      3.26 → 3.44 s, whiff 18% → 23%); `lineup_s` 4.0 → 1.5 does exactly
+      what it says — plan age 3.26 → 2.05 s, drift 0.220 → 0.151 m, the
+      SIDE offset 0.141 → 0.093 m — and still leaves the ball 0.228 m ahead
+      and **0% on the sweet spot**, at the cost of 61% of the kicks
+      (191 → 74). *Aim where it will be*: `spot_lead` swept 0 / 0.5 / 1.0 /
+      2.0 s, **0% on the sweet spot in every arm** and the whiff rate rising
+      18% → 24%. The reason is the same blindness: the track's velocity is
+      differenced from SIGHTINGS, which stop at `refresh_min`, so the
+      prediction is extrapolated from data exactly as old as the plan it is
+      meant to rescue. **You cannot predict your way out of not looking.**
+
+      Three aim-side fixes have now died on this (`kick_deflect_*`, the
+      line-up arms, and the lead), which is what turns the question into a
+      question about the HEAD — below.
+- [ ] **The remaining way out: stop going blind.** (1) Arrive sooner —
       `lineup_range` 0.6 → 0.35 or `lineup_s` 4.0 → 1.5, measuring now and
       judged on the on-spot fraction and the whiff rate, never on goals.
       (2) Aim where the ball WILL be — the tracker's `predict` with the decel
@@ -2108,6 +2124,30 @@ LONGER lost: **a longer line-up is a staler plan.**
       → **decide on:** the on-spot fraction (0 of 191 today) and the whiff
       rate (18%). Both are per-kick events with ~150–190 of them a battery,
       so they resolve where goals cannot. Only then the ledger.
+
+#### 4c. The head — the blind radius is a choice, not a limit (open, 2026-09-05)
+
+Watching the ducks, the repo owner said they hunt for a ball that is under
+their feet, that the neck looks straight when it could clearly bend further,
+and that the head comes back UP as they walk in to kick. The code agrees with
+all three, which is why this is the live lead rather than a fourth aim fix:
+
+- `Chase._gaze` clamps the head-pitch command to `ChaseParams.head_down`
+  = 0.6 rad. The MJCF joints are `neck_pitch` −1.571…+1.047 and `head_pitch`
+  ±1.571 — the mechanism allows far more than the brain asks for.
+- The gaze is applied only while `vx > 0` or the state is `look`/`search`.
+  **A duck standing on its spot in `settle` — the second before it kicks —
+  drops the gaze and lets the head return to neutral**, which is exactly the
+  moment it most needs to see the ball.
+- Nobody has ever measured the head-PITCH command against what the walker
+  delivers. The equivalent for head YAW is measured (1.42 rad while walking,
+  12% forward-speed cost, `walker-facts`), and it showed the shipped range
+  was a curriculum stage rather than a limit. There is every reason to think
+  pitch is the same story, and no measurement either way.
+
+If the blind radius comes down from 0.35 m to something near contact, the
+staleness that causes every kick failure above goes away at its source rather
+than being compensated for. Being measured now.
 
 ### 5. Learned role brains — after 3 lands, and only if a learned striker can reach the ball
 

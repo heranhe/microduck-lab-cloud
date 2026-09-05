@@ -82,9 +82,17 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
                 dx, dy = bx - ox, by - oy
                 ahead = dx * math.cos(oyaw) + dy * math.sin(oyaw)
                 side = -dx * math.sin(oyaw) + dy * math.cos(oyaw)
+                # Did it REACH its spot, and was the spot in the right place?
+                # Two different failures with the same symptom: `spot_dist` is
+                # trunk-to-spot (should be inside `lineup_tol` = 3 cm if the
+                # walk-in finished) and `spot_ball` is spot-to-BALL (should be
+                # `kick_ahead` = 8 cm if the plan was right when it was made).
+                sp = prev_spot.get(d.id)
                 pending.append({"t": w.t, "duck": d.id, "foot": intent.skill,
                                 "u": b._hunt_u, "heading": oyaw, "ball0": (bx, by),
                                 "ahead": round(ahead, 3), "side": round(side, 3),
+                                "spot_dist": None if sp is None else round(math.dist((ox, oy), sp[:2]), 3),
+                                "spot_ball": None if sp is None else round(math.dist((bx, by), sp[:2]), 3),
                                 # How far the ball has drifted since the spot
                                 # this swing is standing on was planned.
                                 "moved": None if plan.get(d.id) is None else
@@ -115,7 +123,8 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             dist = math.hypot(dx, dy)
             rec = {"t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
                    "dist": round(dist, 3), "ahead": k["ahead"], "side": k["side"],
-                   "moved": k["moved"], "plan_age": k["plan_age"]}
+                   "moved": k["moved"], "plan_age": k["plan_age"],
+                   "spot_dist": k["spot_dist"], "spot_ball": k["spot_ball"]}
             if dist < 0.10:                    # the swing missed: no line to speak of
                 out.append({**rec, "err": None, "off_heading": None})
                 continue
@@ -187,6 +196,13 @@ def main() -> None:
         if len(mv):
             print(f"  ball drift since the spot was planned  median {np.median(mv):.3f} m "
                   f"(90th {np.percentile(mv, 90):.3f});  plan age median {np.median(ag):.2f} s")
+        sdst = np.array([r["spot_dist"] for r in sweet if r.get("spot_dist") is not None])
+        sbal = np.array([r["spot_ball"] for r in sweet if r.get("spot_ball") is not None])
+        if len(sdst):
+            print(f"  did it REACH the spot?  trunk-to-spot median {np.median(sdst):.3f} m "
+                  f"(lineup_tol is 0.030)")
+            print(f"  was the SPOT right?     spot-to-ball median {np.median(sbal):.3f} m "
+                  f"(kick_ahead is 0.080)")
     print("READ IT AS: 'mean err' is the SYSTEMATIC part — it lands on every kick of that foot "
           "the same way and can be designed out.\n'sd' is the scatter, which cannot. "
           "'mean off heading' is the same error measured against the BODY, which is what the "
