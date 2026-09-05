@@ -187,7 +187,6 @@ def test_a_team_wears_its_colorway_in_the_compiled_model():
 
     from microduck_local.world import make_pitch
     from microduck_local.world.compose import (
-        LEG_MATERIALS,
         SHELL_MATERIALS,
         TRIM_MATERIALS,
         compose,
@@ -204,19 +203,23 @@ def test_a_team_wears_its_colorway_in_the_compiled_model():
         return tuple(round(float(v), 3) for v in m.mat_rgba[mid][:3])
 
     for duck, team in (("d0", PITCH_TEAMS[0]), ("d1", PITCH_TEAMS[1])):
-        for part, mats in (("shell", SHELL_MATERIALS), ("trim", TRIM_MATERIALS), ("leg", LEG_MATERIALS)):
+        for part, mats in (("shell", SHELL_MATERIALS), ("trim", TRIM_MATERIALS)):
             for mat in mats:
                 assert rgb(duck, mat) == tuple(round(v, 3) for v in TEAM_COLORWAYS[team][part])
     assert rgb("d0", "left_shell_material") != rgb("d1", "left_shell_material")
-    # The two PITCH colorways are both pale, so the shells alone are a weak
-    # cue in a wide shot — the legs are what a person actually reads, and they
-    # have to differ from each other AND from the body they hang off.
-    assert rgb("d0", LEG_MATERIALS[0]) != rgb("d1", LEG_MATERIALS[0])
+    # The complaint that produced this assert: a duck rendered as a patchwork
+    # of five colours, because the printed thigh plate, shoe rim, hip and soft
+    # mouth carry CAD-export colours no colorway claimed. Every printed part
+    # lands on ONE of the colorway's two colours — a leg is the body colour,
+    # not a second shade of it, and a sole is the shoe colour.
     for duck in ("d0", "d1"):
-        assert rgb(duck, LEG_MATERIALS[0]) != rgb(duck, "left_shell_material")
+        assert len({rgb(duck, mat) for mat in SHELL_MATERIALS}) == 1
+        assert len({rgb(duck, mat) for mat in TRIM_MATERIALS}) == 1
+        assert rgb(duck, "leg_material") == rgb(duck, "left_shell_material")
+        assert rgb(duck, "sole_left_material") == rgb(duck, "foot_left_material")
     # Every named material is really in the model: 0 would mean an upstream CAD
     # re-export moved the names and the paint silently did nothing.
-    assert paint_team(m, "d0", "lavender") == len(SHELL_MATERIALS) + len(TRIM_MATERIALS) + len(LEG_MATERIALS)
+    assert paint_team(m, "d0", "lavender") == len(SHELL_MATERIALS) + len(TRIM_MATERIALS)
     assert paint_team(m, "d0", "puce") == 0
     assert rgb("d1", "left_shell_material") == tuple(
         round(v, 3) for v in TEAM_COLORWAYS[PITCH_TEAMS[1]]["shell"])

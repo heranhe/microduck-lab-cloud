@@ -225,6 +225,12 @@ def test_chase_plans_behind_the_ball_toward_the_goal_and_clamps_when_it_cannot_r
     spot_los = old._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
     assert abs(spot_los[3] + {"kick_left": p.kick_deflect_left,
                               "kick_right": p.kick_deflect_right}[spot_los[2]]) < 1e-9
+    # …and mirrored, so a sign error cannot hide: a goal to the RIGHT clamps
+    # the other way. (The two together are the whole content of the rule.)
+    mir = Chase(p, goal=(0.0, -1.5))
+    spot_m = mir._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
+    defl_m = {"kick_left": p.kick_deflect_left, "kick_right": p.kick_deflect_right}[spot_m[2]]
+    assert abs(spot_m[3] + defl_m + p.aim_max) < 1e-9
     # Pushing is off by default (measured); switched on, a far goal gives a push spot squarely behind the ball.
     assert ChaseParams().push_beyond == math.inf
     far = Chase(ChaseParams(push_beyond=1.4), goal=(3.0, 0.0))

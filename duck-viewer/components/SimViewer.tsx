@@ -73,6 +73,33 @@ const PANEL: React.CSSProperties = {
   zIndex: 20,
   backdropFilter: "blur(6px)",
 };
+/** The —/+ in a panel's title bar. Four panels had the same twelve style
+ *  properties inline; the head camera's is NOT this one (its button floats
+ *  over the video with its own backing, not in a title row).
+ *
+ *  `onPointerDown` stops propagation because two of these sit on a drag
+ *  handle: without it, clicking the button starts a drag of the panel. */
+function PanelToggle({ open, onToggle, what, hint }: {
+  open: boolean;
+  onToggle: () => void;
+  what: string;                 // "the inspector" — reads out as "minimize the inspector"
+  hint?: string;                // the keyboard shortcut, shown in the tooltip
+}) {
+  const verb = open ? "minimize" : "expand";
+  return (
+    <button
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={onToggle}
+      title={hint ? `${verb} (${hint})` : verb}
+      aria-label={`${verb} ${what}`}
+      aria-expanded={open}
+      style={{ background: "none", border: "none", color: "#9aa5b1", cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: "0 4px", marginLeft: 10, lineHeight: 1 }}
+    >
+      {open ? "—" : "+"}
+    </button>
+  );
+}
+
 // Panel geometry: everything overlaid on the room is inset PAD from the edge,
 // and the inspector hangs GAP below the measured bottom of the top bar.
 const PAD = 10;
@@ -1130,6 +1157,10 @@ export default function SimViewer() {
   const [lessonOpen, setLessonOpen] = useState(() => loadJSON("simControlsOpen", false));
   const [inspectorOpen, setInspectorOpen] = useState(() => loadJSON("simInspectorOpen", true));
   const [camOpen, setCamOpen] = useState(() => loadJSON("simCamOpen", true));
+  // The score panel (pitch or tidy — a world has at most one) collapses to its
+  // headline: minimizing a scoreboard should not cost you the score, only the
+  // per-minute table under it, which is what covers the near half of the room.
+  const [scoreOpen, setScoreOpen] = useState(() => loadJSON("simScoreOpen", true));
   // The brain menu starts on the five brains that ship. The 44 experiment
   // runs are one click away, not in the face of someone opening /sim for
   // the first time — that list was the most daunting thing on the page.
@@ -1169,6 +1200,7 @@ export default function SimViewer() {
 
   useEffect(() => saveJSON("simControlsOpen", lessonOpen), [lessonOpen]);
   useEffect(() => saveJSON("simInspectorOpen", inspectorOpen), [inspectorOpen]);
+  useEffect(() => saveJSON("simScoreOpen", scoreOpen), [scoreOpen]);
   useEffect(() => saveJSON("simCamOpen", camOpen), [camOpen]);
   useEffect(() => saveJSON("simBrainMenuAll", allBrains), [allBrains]);
 
@@ -1286,6 +1318,10 @@ export default function SimViewer() {
       }
       if (k === "i") {
         if (!e.repeat) setInspectorOpen((v) => !v);
+        return;
+      }
+      if (k === "b") {
+        if (!e.repeat) setScoreOpen((v) => !v);
         return;
       }
       // Shift+E, not E: plain E is the camera's vertical truck (lib/camera).
@@ -1573,15 +1609,7 @@ export default function SimViewer() {
           <div style={{ flex: 1, color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>
             Inspector · sensors
           </div>
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => setInspectorOpen((v) => !v)}
-            title={inspectorOpen ? "minimize (I)" : "expand (I)"}
-            aria-label={inspectorOpen ? "minimize the inspector" : "expand the inspector"}
-            style={{ background: "none", border: "none", color: "#9aa5b1", cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: "0 4px", marginLeft: 10, lineHeight: 1 }}
-          >
-            {inspectorOpen ? "—" : "+"}
-          </button>
+          <PanelToggle open={inspectorOpen} onToggle={() => setInspectorOpen((v) => !v)} what="the inspector" hint="I" />
         </div>
         {/* Minimized (I, or the — above): the title bar stays, so the head-camera
             inset below still docks to a full-width panel edge. */}
@@ -1791,18 +1819,12 @@ export default function SimViewer() {
             <div style={{ flex: 1, color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10, marginBottom: 4 }}>
               Controls
             </div>
-            <button
-              onClick={() => setLessonOpen(false)}
-              title="collapse"
-              style={{ background: "none", border: "none", color: "#9aa5b1", cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: "0 4px", marginLeft: 10, lineHeight: 1 }}
-            >
-              —
-            </button>
+            <PanelToggle open onToggle={() => setLessonOpen(false)} what="the controls" />
           </div>
           WASD/QE fly the camera (A/D slide, W/S zoom, Q/E rise) · arrows orbit · Shift+R view home
           <div style={{ marginTop: 6 }}>
             R restart · P drive (the same WASD/arrows, Q/E steer the ducks instead) · T ToF · V cam ·
-            I inspector · Shift+E edit · 1–9 select · Esc · space scrub
+            I inspector · B scoreboard · Shift+E edit · 1–9 select · Esc · space scrub
           </div>
         </div>
       ) : (
@@ -1848,7 +1870,10 @@ export default function SimViewer() {
         );
         return (
         <div ref={pitchRef} style={{ position: "absolute", top: inspectorTop, left: PAD, maxWidth: `calc(100vw - ${INSPECTOR_W + PAD * 3}px)`, boxSizing: "border-box", background: "rgba(16,18,22,0.9)", border: "1px solid #2b313b", borderRadius: 6, color: "#e9edf1", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, padding: "8px 10px", zIndex: 20 }}>
-          <div style={{ color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>Pitch</div>
+          <div style={{ display: "flex", alignItems: "flex-start" }}>
+            <div style={{ flex: 1, color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>Pitch</div>
+            <PanelToggle open={scoreOpen} onToggle={() => setScoreOpen((v) => !v)} what="the scoreboard" hint="B" />
+          </div>
           <div style={{ fontSize: 22, fontWeight: 600, display: "flex", gap: 10, alignItems: "center" }}
                title={`goal mouths: left ${soc.left} · right ${soc.right}`}>
             {teams.map((t, i) => (
@@ -1860,12 +1885,17 @@ export default function SimViewer() {
               </span>
             ))}
           </div>
+          {/* Minimized (B, or the — above): the score line stays and everything
+              under it goes. The per-minute table is the tall part, and it is
+              what lies over the near half of the pitch. */}
+          {scoreOpen && (
           <div style={{ color: "#9aa5b1", fontSize: 11 }} title="a goal within 4 s of a kick is the kick's; the rest were walked into">
             {soc.kicked ?? 0} kicked · {soc.bumped ?? 0} walked in
             {soc.ownGoals ? ` · own ${teams.reduce((a, t) => a + num(soc.ownGoals, t), 0)}` : ""}
             {soc.goalsUnattributed ? ` · ${soc.goalsUnattributed} unplaced` : ""}
           </div>
-          {soc.possession && (
+          )}
+          {scoreOpen && soc.possession && (
             <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid #2b313b", display: "grid", gridTemplateColumns: `auto repeat(${teams.length}, 1fr)`, gap: "2px 8px", fontSize: 11 }}>
               <span style={{ color: "#5f6b78" }} title="goals are ~2.5 a run and resolve almost nothing; these are what the benchmark judges by">
                 per min
@@ -1888,22 +1918,27 @@ export default function SimViewer() {
                    (t) => <span style={{ color: num(soc.crowd, t) > 0.25 ? "#d9534f" : "#e9edf1" }}>{(num(soc.crowd, t) * 100).toFixed(0)}%</span>)}
             </div>
           )}
+          {/* The kickoff banner survives a minimize: it is live state you need
+              at the moment it appears, and it is one line. */}
           {soc.kickoff > 0 ? (
             <div style={{ color: "#ffd166" }}>GOAL in the {soc.lastGoal} mouth · kickoff in {soc.kickoff.toFixed(1)} s</div>
-          ) : (
+          ) : scoreOpen ? (
             <div style={{ color: "#9aa5b1" }}>one ball · a goal restarts from the spawns</div>
-          )}
+          ) : null}
         </div>
         );
       })()}
       {status.tidy && (
         <div style={{ ...PANEL, top: inspectorTop, left: editor ? 270 : PAD, maxWidth: `calc(100vw - ${INSPECTOR_W + PAD * 3}px)`, boxSizing: "border-box", color: "#c9d0d8" }}>
-          <div style={{ color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>Tidy score</div>
+          <div style={{ display: "flex", alignItems: "flex-start" }}>
+            <div style={{ flex: 1, color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>Tidy score</div>
+            <PanelToggle open={scoreOpen} onToggle={() => setScoreOpen((v) => !v)} what="the tidy score" hint="B" />
+          </div>
           <div style={{ fontSize: 20, fontVariantNumeric: "tabular-nums" }}>
             {status.tidy.inBasket} / {status.tidy.total} <span style={{ fontSize: 12, color: "#9aa5b1" }}>in the basket</span>
           </div>
-          {status.tidy.held.length > 0 && <div style={{ color: "#9aa5b1" }}>carrying {status.tidy.held.join(", ")}</div>}
-          {selDuck?.brain.inputs.tidy && (
+          {scoreOpen && status.tidy.held.length > 0 && <div style={{ color: "#9aa5b1" }}>carrying {status.tidy.held.join(", ")}</div>}
+          {scoreOpen && selDuck?.brain.inputs.tidy && (
             <div style={{ color: "#9aa5b1" }}>
               picked {selDuck.brain.inputs.tidy.picked} · delivered {selDuck.brain.inputs.tidy.delivered}
               {selDuck.brain.inputs.tidy.givenUp.length ? ` · gave up on ${selDuck.brain.inputs.tidy.givenUp.join(", ")}` : ""}

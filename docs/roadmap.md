@@ -1562,7 +1562,8 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       name; `_fmt` sorts them).
 - [x] **2.2 The world paints it — DONE (2026-09-05).** `compose.paint_team`
       writes the colorway into that duck's own `*_shell_material` (both body
-      halves, both head halves) and its trim into the beak, feet and ankles —
+      halves, both head halves) and its trim into the beak, feet and ankles
+      (2.5 widened both lists to every printed part) —
       `MjSpec.attach` prefixes materials per duck, so it is a write to one
       duck and no other. It returns how many it painted so a caller can assert
       9 rather than discover an upstream CAD rename by seeing nothing; the
@@ -1588,7 +1589,8 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       d0's head camera, `d2 · alpha_walking · sky` in the inspector. The tint
       itself is locked by `lib/duckskin.test.ts` — under that lighting a
       screenshot cannot tell a cream shell from a white one. (Cream v sky is
-      cream v lavender since 2.5, and the legs carry the colorway too.) The original: `buildBodyGeometries(scene, colorway)`
+      cream v lavender since 2.5, where the colorway also grew to cover every
+      printed part rather than the four body shells alone.) The original: `buildBodyGeometries(scene, colorway)`
       recolours geoms by material name at build time and is cached per
       colorway (four at most, so still one geometry set per colorway, not
       per duck); `<Duck>` takes the colorway from `SimDuck.team`; the
@@ -1615,26 +1617,44 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       duck placed on a pitch defaults to the team whose half it stands in.
       `npm test` covers `applyFloorClick` for the default; the server test
       covers the refusal in 2.1.
-- [x] **2.5 Cream v LAVENDER, and the legs wear the colour — DONE
-      (2026-09-05).** Two changes, one reason: cream v sky is two PALE COOL
-      shells, and at 60 px in a wide 3v3 shot — or in a 640-px head-camera
-      frame — a person cannot say which duck is which. (a) The default pair
-      is now `PITCH_TEAMS = ("cream", "lavender")`, one constant that
-      `make_pitch`, `LEGACY_TEAMS` and the editor's "make a pitch" all read,
-      so the pair is changed in one place and never drifts between the two
-      repos' halves of the UX. Purple is the furthest of the four ships from
-      cream in hue while still being a colorway you could actually print.
-      (b) A colorway gained a third colour, `leg`, a deeper cast of its
-      shell, painted into `leg_material`, `upper_leg_{left,right}_material`
-      and `hip_l_material` by `compose.paint_team` and by the viewer's
-      `teamPaint`. The shells are the head and trunk — the parts that hold
-      STILL; the legs are what swings, so a darker limb is the cue that
-      survives motion and distance. The scoreboard and inspector chips are
-      split diagonally (`teamSwatch`) for the same reason: a chip showing
-      the shell alone made cream and lavender two pale blocks. Locked by
-      `test_world.py` (the two pitch teams' legs differ from each other and
-      from their own shells) and `lib/duckskin.test.ts` (same, in the vertex
-      colours the browser actually draws).
+- [x] **2.5 Cream v LAVENDER, and one colour per duck — DONE (2026-09-05).**
+      (a) The default pair is now `PITCH_TEAMS = ("cream", "lavender")`, one
+      constant that `make_pitch`, `LEGACY_TEAMS` and the editor's "make a
+      pitch" all read, so it changes in one place and cannot drift between the
+      two repos' halves of the UX. Cream against sky was two pale COOL shells
+      that a person watching a 3v3 had to squint at; purple is the furthest of
+      the four ships from cream in hue while still being a colorway you could
+      actually print.
+
+      (b) A colorway now owns EVERY printed part, in two colours: shells are
+      the head, trunk, legs and hips, trim is the beak, feet, ankles and
+      soles. Servos, PCBs, bearings and the lens are left alone — they are the
+      same on every duck, as on the robot.
+
+      The finding, and it is the only reason the material lists are long: the
+      MJCF materials are OnShape export appearances, and four PRINTED parts
+      carried colours no colorway ever claimed — a teal thigh plate and shoe
+      rim (`upper_leg_rigidity_plate`, `sole_*` at #89dad3), a pale-blue hip
+      (`yaw_roll_motion`), and a pink soft mouth (`jaw_soft`,
+      `soft_mouth_top`, the SAME pink on all four colorways). Painting only
+      the four body shells hid it. The first attempt at this item made it
+      worse: it gave the legs a deeper cast of the shell on the theory that
+      the shells are the parts that hold still and a darker swinging limb
+      reads through motion. That is true in the abstract and wrong on the
+      duck — it made five colours instead of four, and a screenshot of a
+      lavender duck read as a patchwork rather than a printed shell. **The
+      table looked fine; only the render showed it** (the README's rule, one
+      more time). Now every shell material lands on one colour and every trim
+      material on one, asserted per pitch team in `test_world.py` and in
+      `lib/duckskin.test.ts` against the vertex colours the browser draws.
+
+      (c) Team CHIPS stay the shell colour. A two-tone shell-over-trim chip
+      was tried and reverted the same way: the trim is shared between
+      colorway PAIRS (cream and sky are both orange, graphite and lavender
+      both yellow), so at 12 px the trim half swamped the chip and cream and
+      lavender became the same amber block — the chip lost the one
+      distinction it exists for. Caught by looking at the /sim scoreboard,
+      not by a test.
 
 ### 3. Scripted positional play — the brains that make it look like soccer
 
@@ -1736,36 +1756,49 @@ directly.
       duck that gates itself leaves the ball to nobody.
 
       `eval-striker --left "chase+defender,chase+striker" --right chase`,
-      24 paired seeds × 300 s of 2v2, reading the ROLES side
-      (`runs/t4-noroles24.jsonl` v `runs/t4-roles24.jsonl`):
+      reading the ROLES side, on the shipped brain (aim_mode `clamp`), **24
+      paired seeds and then 24 fresh ones** — 48 in all, `runs/t5-*.jsonl`:
 
-      | | plain | roles | |
-      |---|---:|---:|---|
-      | **crowd** (two of ours within 0.5 m of the ball) | **13.8%** | **1.7%** | **−12.1 pts, p < 0.001, on 23 of 24 seeds** |
-      | **spread** (mean distance between the pair) | **0.71 m** | **1.60 m** | **+0.89 ± 0.13, p < 0.001, on 24 of 24** |
-      | **depth** (the deepest duck, from its own line) | **1.29 m** | **0.79 m** | **−0.50 ± 0.16, p < 0.001** |
-      | possession | 12.7 s/min | 7.6 s/min | −5.09 ± 2.01, p < 0.001 |
-      | falls | 31 | 20 | −0.46 ± 0.47 a run, p = 0.042 |
-      | goals scored | 21 | 13 | −0.33 ± 0.46, p = 0.13 |
-      | own goals | 9 | 4 | 13 events — cannot resolve (1.5) |
-      | ballAdvance | 0.429 | 0.367 | −0.061 ± 0.102, p = 0.21 |
-      | ballProgress (signed) | −0.021 | +0.059 | +0.080 ± 0.154, p = 0.29 |
-      | kicks sent back | 40 of 89 (45%) | 24 of 64 (38%) | p = 0.36 |
+      | | plain | roles | pooled Δ (48) | p | blocks |
+      |---|---:|---:|---:|---:|---|
+      | **spread** (distance between the pair) | 0.68 m | **1.63 m** | **+0.945 ± 0.076** | **< 0.001** | up on **48 of 48 seeds** |
+      | **crowd** (two of ours within 0.5 m of the ball) | 13.0% | **1.8%** | **−0.112 ± 0.020** | **< 0.001** | both, p < 0.001 each |
+      | **depth** (deepest duck, from its own line) | 1.43 m | **0.80 m** | **−0.628 ± 0.124** | **< 0.001** | both, p < 0.001 each |
+      | **falls** | 1.46 a run | **0.75** | **−0.708 ± 0.417** | **0.001** | both (p = 0.027, p = 0.009); **70 → 36 events** |
+      | possession | 10.8 s/min | 8.3 | −2.50 ± 1.07 | < 0.001 | both |
+      | ball in our own half | 28.0 s/min | 33.0 | +5.05 ± 4.08 | 0.013 | fresh only |
+      | ballAdvance | 0.373 | 0.309 | −0.064 ± 0.066 | 0.051 | discovery only |
+      | ballProgress (signed) | −0.069 | −0.004 | +0.066 ± 0.095 | 0.17 | neither |
+      | goals scored | 0.73 a run | 0.94 | +0.21 ± 0.38 | 0.27 | **−0.21 then +0.63: it did not replicate** |
+      | own goals | 15 | 17 | — | — | 32 events; cannot resolve |
+      | kicks sent back | 61 of 179 (34%) | 36 of 124 (29%) | — | 0.35 | neither |
 
-      **What is claimed: the shape.** Three positional metrics move by five
-      to seven times their 95% interval, one of them on every seed. The
-      ducks stop grouping up, somebody stays back, and this is the answer to
-      "they all pile onto the ball" — the thing the whole item is for.
-      **What is not claimed: the play.** Signed progress flips sign and does
-      not resolve; goals trend down and do not resolve; own goals halve on
-      13 events, which item 1.5 says is worth nothing. The one real cost IS
-      resolved — **the roles side holds the ball 40% less**, which is what
-      two ducks standing at posts instead of chasing must cost, and whether
-      it is worth paying is a question about goals that this benchmark
-      cannot answer at any sane number of seeds.
-      Falls fell (p = 0.042, 51 events) — plausible on the mechanism, since
-      most falls here are duck-on-duck and there is far less crowding — and
-      it awaits the fresh-seed confirmation below like everything else.
+      **Claimed, and confirmed on seeds it was not found on: the ducks stop
+      piling onto the ball, somebody stays back, and they fall half as
+      often.** Spread moves by twelve times its interval and is up on every
+      one of 48 seeds; crowd falls from 13% of the run to under 2%; the
+      deepest duck sits 0.80 m from its own line instead of 1.43 m up the
+      pitch. Falls go 70 → 36 events, p = 0.001 pooled and under 0.03 in
+      each block separately — **a larger and better-replicated fall
+      reduction than the bump-stand rule this repo had to withdraw**, and
+      the mechanism is visible in the same table: most falls here are
+      duck-on-duck, and there is far less crowd to fall into.
+
+      **Not claimed: anything about the score.** Goals went −0.21 on the
+      discovery block and +0.63 (p = 0.045) on the fresh one and pool to
+      +0.21, p = 0.27 — a textbook non-replication, and had only the second
+      block been run it would have shipped as "roles score more". Advance
+      points down (p = 0.051) on the same pattern in reverse. Own goals and
+      back-kicks move nothing.
+
+      **The cost is real and replicated: the roles side holds the ball 23%
+      less** (possession −2.50 s/min) **and keeps the ball in its own half
+      5 s/min longer.** Two ducks standing at posts are two ducks not
+      chasing. Whether that trade is worth making is a question about goals,
+      and item 1.5 says goals need 136 seeds to answer it — so the honest
+      position is that positional play here buys shape and safety, at a
+      price in possession, with the score unresolved.
+
 - [x] **3.3 Striker** — measured with the defender, above (the roster arm is
       defender + striker against two plain chase brains, so the pair is what
       was tested). Whether a striker alone pays is a separate arm and has
@@ -1777,7 +1810,27 @@ directly.
       zones, one attacker per zone, the board's hysteresis inside each.
       Zones by odometry x, which the kickoff re-anchors to the pitch after
       every goal (`test_a_goal_restarts_play_from_a_kickoff` pins that).
-- [ ] **3.5 Roles in the contract, on the board, in the inspector.**
+- [x] **3.5 Roles in the contract, on the board, in the inspector — DONE
+      (2026-09-05).** `Duck.role` validated against `ROLES` (and refused
+      without a team); `Team.jobs` + `Team.half_x` + `Team.attack_sign`
+      filled by `brain_kwargs` from the scenario, so every teammate computes
+      the same candidate set; `Team.payload` carries the jobs and
+      `inputs.chase.job` reaches the /sim inspector beside the dynamic
+      attack/support (`d0 · alpha_walking · cream defender`). Static roles
+      only, as planned — the dynamic swap is the churn the board's
+      hysteresis exists to stop, and it is its own item.
+
+      **One thing about the zones, worth the next person's time.**
+      `ROLE_ZONES` splits the pitch in THIRDS, so on a 2v2 of defender +
+      striker the middle third belongs to nobody and `candidates` falls back
+      to "everybody may" there. Reading the code that looked like it might
+      gut the gate, so it was measured rather than assumed (120 s of the
+      roster, ball position by third): **own 14%, middle 25%, final 61%** —
+      the gate is live for three quarters of the run and idle for the other
+      quarter, which is a real hole but not the whole rule. A roster with no
+      midfielder should split at the halfway line instead. Easy, unmeasured,
+      not in.
+      The original:
       `Duck.role` ∈ {`defender`, `midfielder`, `striker`} or null (null =
       today's dynamic attacker / support). `Team.roles` reads the roster;
       `payload()` carries each duck's role; the chase brain's `inputs.chase.role`

@@ -18,7 +18,7 @@ import { assignDrag } from "@/lib/assign";
 import { captureWantsCleanFrame } from "@/lib/record";
 import { getSelectedDuck } from "@/lib/select";
 import { getDuckLabels } from "@/lib/ui";
-import { LEG_MATERIALS, SHELL_MATERIALS, TEAM_COLORWAYS, TRIM_MATERIALS, teamColor, type TeamName } from "@/lib/sim";
+import { SHELL_MATERIALS, TEAM_COLORWAYS, TRIM_MATERIALS, teamColor, type TeamName } from "@/lib/sim";
 
 // FALLBACK body-name → color, used only against servers that predate rgba
 // streaming (whole body painted one guessed color).
@@ -43,17 +43,17 @@ function bodyColor(name: string): string {
 const MATERIAL_FIX: Record<string, string> = {};
 
 /** A team's repaint of the printed parts, by MJCF material name: the four
- *  shells take the colorway, the beak/feet/ankles take its trim, the
- *  thigh/shin/hip parts take its leg colour. The server paints the same names
- *  in the composed world (world/compose.py); the viewer has to do its own
- *  because it draws every duck from ONE single-robot scene. */
+ *  shell parts (head, trunk, legs, hips) take the colorway and the trim parts
+ *  (beak, feet, ankles, soles) take its trim — every printed part gets one of
+ *  the two, so a duck is one colour from the beak down. The server paints the
+ *  same names in the composed world (world/compose.py); the viewer has to do
+ *  its own because it draws every duck from ONE single-robot scene. */
 function teamPaint(team: string | null | undefined): Record<string, string> {
   const look = teamColor(team) && team && team in TEAM_COLORWAYS ? TEAM_COLORWAYS[team as TeamName] : null;
   if (!look) return {};
   const out: Record<string, string> = {};
   for (const m of SHELL_MATERIALS) out[m] = look.shell;
   for (const m of TRIM_MATERIALS) out[m] = look.trim;
-  for (const m of LEG_MATERIALS) out[m] = look.leg;
   return out;
 }
 

@@ -52,25 +52,28 @@ MAX_PERSONS = 4
 # cannot be told apart by any sensor either, which is exactly what a team is —
 # so a team that is a colour is a team the hardware could actually play.
 #
-# The four Pollen ships (press kit): shell, then the trim-and-beak colour that
-# goes with it, then the legs. sRGB, as the MJCF materials are.
+# The four Pollen ships (press kit): the shell colour and the trim-and-beak
+# colour that goes with it. sRGB, as the MJCF materials are.
 #
-# The LEG colour is a deeper cast of the shell rather than the shell itself.
-# The shells are the head and the trunk — the parts that hold still — so two
-# pale colorways (cream v lavender) read alike in a wide shot of a pitch where
-# every duck is 60 px tall. The legs are the parts that MOVE, and a limb a
-# shade or two darker than the body is the cue that survives motion blur and a
-# 640-px head-camera frame. It is also honest about the robot: the leg shells
-# are printed parts like the body shells, so a colorway can own them.
+# TWO colours, and every printed part on the duck takes one of them — head,
+# trunk, legs and hips are all the SHELL colour, beak, feet, ankles and soles
+# are all the TRIM. A colorway is a set of printed parts, so a duck wearing one
+# is that colour from the beak down, exactly as the press kit shows it.
+#
+# This replaced a version that gave the legs a deeper cast of the shell. It
+# looked reasonable in the table and wrong on the duck: the MJCF materials are
+# OnShape export appearances, and several PRINTED parts carry colours no
+# colorway ever claimed — a teal thigh plate and shoe rim
+# (`upper_leg_rigidity_plate`, `sole_*` at #89dad3), a pale-blue hip
+# (`yaw_roll_motion`), a pink mouth (`jaw_soft`, `soft_mouth_top`) that is the
+# same pink on all four colorways. A second body colour on top of those made
+# five, and the duck read as a patchwork rather than a printed shell. The
+# material groups in `world/compose.py` are the list of what a colorway owns.
 TEAM_COLORWAYS: dict[str, dict[str, tuple[float, float, float]]] = {
-    "cream":    {"shell": (0.969, 0.902, 0.796), "trim": (0.95, 0.55, 0.13),
-                 "leg": (0.788, 0.678, 0.518)},   # #f7e6cb, orange trim, #c9ad84 legs
-    "graphite": {"shell": (0.424, 0.416, 0.408), "trim": (0.98, 0.78, 0.10),
-                 "leg": (0.247, 0.239, 0.231)},   # #6c6a68, yellow trim, #3f3d3b legs
-    "lavender": {"shell": (0.749, 0.663, 0.812), "trim": (0.98, 0.78, 0.10),
-                 "leg": (0.490, 0.400, 0.569)},   # #bfa9cf, yellow trim, #7d6691 legs
-    "sky":      {"shell": (0.663, 0.859, 0.910), "trim": (0.95, 0.55, 0.13),
-                 "leg": (0.373, 0.624, 0.698)},   # #a9dbe8, orange trim, #5f9fb2 legs
+    "cream":    {"shell": (0.969, 0.902, 0.796), "trim": (0.95, 0.55, 0.13)},   # #f7e6cb, orange trim
+    "graphite": {"shell": (0.424, 0.416, 0.408), "trim": (0.98, 0.78, 0.10)},   # #6c6a68, yellow trim
+    "lavender": {"shell": (0.749, 0.663, 0.812), "trim": (0.98, 0.78, 0.10)},   # #bfa9cf, yellow trim
+    "sky":      {"shell": (0.663, 0.859, 0.910), "trim": (0.95, 0.55, 0.13)},   # #a9dbe8, orange trim
 }
 # The pair `make_pitch` puts on a pitch, and what a legacy "left"/"right"
 # scene loads as. Cream v LAVENDER: cream against sky was two pale-cool

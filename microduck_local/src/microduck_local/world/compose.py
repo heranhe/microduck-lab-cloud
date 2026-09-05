@@ -44,24 +44,31 @@ def duck_prefix(duck_id: str) -> str:
     return f"{duck_id}/"
 
 
-# Which of the robot's ~38 materials carry a team's colours (roadmap Track
-# 4.2.2). The shells are the big readable area — the two body halves and the
-# two head halves — the trim is what the press kit calls trim and beak, and
-# the legs are the printed thigh/shin/hip parts. Everything else (servos,
-# PCBs, the lens, the soles, the internal rigidity plate) is the same on every
-# duck, as it is on the real robot: a colorway is a set of printed shells.
+# Which of the robot's ~38 materials a colorway owns (roadmap Track 4.2.2,
+# corrected in 4.2.3). EVERY printed part takes one of the colorway's two
+# colours: the shells are the head, trunk, legs and hips, the trim is the beak,
+# feet, ankles and soles. What is left out is what is not printed and is the
+# same on every duck as it is on the real robot — servos, PCBs, bearings, the
+# lens, the camera mount, the neck and yaw brackets.
 #
-# The legs join the colorway (Track 4.2.3) because the shells alone stop
-# working as soon as two PALE colorways meet: cream v lavender at 60 px is
-# two light ducks, and the head and trunk are the parts that hold still. The
-# legs swing, so a darker limb is the cue that reads through motion, in a wide
-# shot and in a 640-px head-camera frame alike.
+# The lists are long because the CAD export is not tidy. Four printed parts
+# carried colours no colorway ever claimed — a teal thigh plate and shoe rim
+# (`upper_leg_rigidity_plate`, `sole_*`), a pale-blue hip (`yaw_roll_motion`)
+# and a pink soft mouth (`jaw_soft`, `soft_mouth_top`, the same pink on all
+# four colorways) — so a duck that was meant to be one colour rendered as five.
+# Painting only the four body shells hid it; painting the legs a second shade
+# made it worse. If an upstream re-export adds a printed part, it belongs in
+# one of these two lists, and `paint_team`'s return count is what catches a
+# name that moved.
 SHELL_MATERIALS = ("left_shell_material", "right_shell_material",
-                   "top_head_shell_material", "bottom_head_shell_material")
+                   "top_head_shell_material", "bottom_head_shell_material",
+                   "leg_material", "upper_leg_left_material", "upper_leg_right_material",
+                   "hip_l_material", "upper_leg_rigidity_plate_material",
+                   "yaw_roll_motion_material", "jaw_soft_material",
+                   "soft_mouth_top_material")
 TRIM_MATERIALS = ("jaw_material", "foot_left_material", "foot_right_material",
-                  "ankle_left_material", "ankle_right_material")
-LEG_MATERIALS = ("leg_material", "upper_leg_left_material",
-                 "upper_leg_right_material", "hip_l_material")
+                  "ankle_left_material", "ankle_right_material",
+                  "sole_left_material", "sole_right_material")
 
 
 def paint_team(model: mujoco.MjModel, duck_id: str, colorway: str) -> int:
@@ -81,8 +88,7 @@ def paint_team(model: mujoco.MjModel, duck_id: str, colorway: str) -> int:
     if look is None:
         return 0
     n = 0
-    for names, rgb in ((SHELL_MATERIALS, look["shell"]), (TRIM_MATERIALS, look["trim"]),
-                       (LEG_MATERIALS, look["leg"])):
+    for names, rgb in ((SHELL_MATERIALS, look["shell"]), (TRIM_MATERIALS, look["trim"])):
         for name in names:
             mid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, duck_prefix(duck_id) + name)
             if mid >= 0:

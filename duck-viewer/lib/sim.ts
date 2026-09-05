@@ -27,16 +27,16 @@ export interface ScenarioDuck {
 }
 
 /** A team IS a colorway (microduck_local/world/scenario.py TEAM_COLORWAYS):
- *  the four Pollen ships, each with the trim-and-beak colour that goes with
- *  it and the deeper cast its legs are printed in. Two ducks of one colorway
- *  cannot be told apart on the robot either, which is what a team is. Keep in
- *  step with the Python table — a test cannot see across the two repos, so the
- *  values are duplicated on purpose and the comment is the link. */
+ *  the four Pollen ships, each a shell colour and the trim-and-beak colour
+ *  that goes with it. Two ducks of one colorway cannot be told apart on the
+ *  robot either, which is what a team is. Keep in step with the Python table —
+ *  a test cannot see across the two repos, so the values are duplicated on
+ *  purpose and the comment is the link. */
 export const TEAM_COLORWAYS = {
-  cream: { shell: "#f7e6cb", trim: "#f28c21", leg: "#c9ad84", label: "Cream" },
-  graphite: { shell: "#6c6a68", trim: "#fac71a", leg: "#3f3d3b", label: "Graphite" },
-  lavender: { shell: "#bfa9cf", trim: "#fac71a", leg: "#7d6691", label: "Lavender" },
-  sky: { shell: "#a9dbe8", trim: "#f28c21", leg: "#5f9fb2", label: "Sky" },
+  cream: { shell: "#f7e6cb", trim: "#f28c21", label: "Cream" },
+  graphite: { shell: "#6c6a68", trim: "#fac71a", label: "Graphite" },
+  lavender: { shell: "#bfa9cf", trim: "#fac71a", label: "Lavender" },
+  sky: { shell: "#a9dbe8", trim: "#f28c21", label: "Sky" },
 } as const;
 export type TeamName = keyof typeof TEAM_COLORWAYS;
 export const TEAM_NAMES = Object.keys(TEAM_COLORWAYS) as TeamName[];
@@ -47,32 +47,40 @@ export const PITCH_TEAMS: readonly [TeamName, TeamName] = ["cream", "lavender"];
 export const ROLE_NAMES = ["defender", "midfielder", "striker"] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 
-/** MJCF material names a colorway repaints (world/compose.py). The viewer
- *  builds its duck geometry from the single-robot scene, so it tints by these
- *  names client-side; the server paints the same ones in the composed model
- *  for MuJoCo's own renders. */
+/** MJCF material names a colorway repaints (world/compose.py — keep the two
+ *  lists in step). EVERY printed part takes one of the two colours: shells are
+ *  the head, trunk, legs and hips; trim is the beak, feet, ankles and soles.
+ *  Servos, PCBs, bearings and the lens are left alone — they are the same on
+ *  every duck, as on the real robot. The lists are long because the CAD export
+ *  is not tidy: a teal thigh plate and shoe rim, a pale-blue hip and a pink
+ *  mouth are printed parts that carried colours no colorway claimed, so a duck
+ *  meant to be one colour rendered as five.
+ *
+ *  The viewer builds its duck geometry from the single-robot scene, so it
+ *  tints by these names client-side; the server paints the same ones in the
+ *  composed model for MuJoCo's own renders. */
 export const SHELL_MATERIALS = ["left_shell_material", "right_shell_material",
-  "top_head_shell_material", "bottom_head_shell_material"];
+  "top_head_shell_material", "bottom_head_shell_material",
+  "leg_material", "upper_leg_left_material", "upper_leg_right_material",
+  "hip_l_material", "upper_leg_rigidity_plate_material",
+  "yaw_roll_motion_material", "jaw_soft_material", "soft_mouth_top_material"];
 export const TRIM_MATERIALS = ["jaw_material", "foot_left_material", "foot_right_material",
-  "ankle_left_material", "ankle_right_material"];
-/** The printed leg parts. They carry the colorway too, because the shells are
- *  the parts that hold still: two pale teams read alike in a wide shot, and a
- *  darker swinging limb is the cue that survives it. */
-export const LEG_MATERIALS = ["leg_material", "upper_leg_left_material",
-  "upper_leg_right_material", "hip_l_material"];
+  "ankle_left_material", "ankle_right_material",
+  "sole_left_material", "sole_right_material"];
 
 /** The shell colour of a team, for a swatch or a label. */
 export function teamColor(team: string | null | undefined): string | null {
   return team && team in TEAM_COLORWAYS ? TEAM_COLORWAYS[team as TeamName].shell : null;
 }
 
-/** A CSS background for a team chip: the shell over the leg colour, split on
- *  the diagonal. A chip that showed the shell alone said cream and lavender
- *  were two pale blocks — the same problem on the scoreboard that the leg
- *  colour fixes on the pitch, so the chip shows both halves of the paint. */
+/** A team chip's background: the SHELL colour alone. A two-tone chip that
+ *  showed the trim as well was tried and reverted — the trim is shared between
+ *  colorway pairs (cream and sky are both orange, graphite and lavender both
+ *  yellow), so at 12 px the trim half swamped the chip and made cream and
+ *  lavender the same amber block, destroying the one distinction a chip is
+ *  for. `fallback` is what a duck with no team gets. */
 export function teamSwatch(team: string | null | undefined, fallback = "#555"): string {
-  const look = team && team in TEAM_COLORWAYS ? TEAM_COLORWAYS[team as TeamName] : null;
-  return look ? `linear-gradient(135deg, ${look.shell} 0 50%, ${look.leg} 50% 100%)` : fallback;
+  return teamColor(team) ?? fallback;
 }
 export interface ScenarioPerson { id: string; pos: [number, number]; yaw: number; path: [number, number][]; speed: number; radius: number; height: number }
 export interface ScenarioPickable { id: string; kind: "brick" | "block" | "sock"; pos: [number, number]; yaw: number }
