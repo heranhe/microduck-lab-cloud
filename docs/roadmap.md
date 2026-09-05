@@ -1859,10 +1859,37 @@ directly.
       `crowd`. The keep-out measured off at 0.4 m without this sense; it is
       the sense that was missing, not the rule, so re-measure the rule
       with it.
-- [ ] **4.3 Goal sensing** stays known-pitch + odometry (sim-roadmap 4.7)
-      until a drift preset makes the far goal's odometry position wrong by
-      more than the goal's half-width; measure that first with
-      `odom: hostile` on a 300 s run before inventing a goal detector.
+- [x] **4.3 Goal sensing — MEASURED (2026-09-05), and the known-pitch
+      assumption does NOT hold at the datasheet preset.**
+      `scripts/probe_odom_goal.py`, 3 seeds × 300 s of 2v2 with the ducks
+      actually playing, sampling each duck's odometry error once a second
+      and turning the heading half of it into the miss it causes at the goal
+      line from where that duck really stands:
+
+      | odom | position error (med / 95%) | heading error (med / 95%) | miss at the goal (med / 95%) | over the 0.35 m half-width |
+      |---|---|---|---|---:|
+      | ideal | 0.000 / 0.000 m | 0.00° / 0.00° | 0.000 / 0.000 m | 0% |
+      | **datasheet** | 0.171 / 1.397 m | **12.2° / 58.5°** | **0.348 / 1.870 m** | **50%** |
+      | hostile | 0.634 / 3.636 m | 38.1° / 157.6° | 0.690 / 2.915 m | 68% |
+
+      At `datasheet` the median miss is 0.348 m against a half-width of
+      0.35 m: **half the time the duck's belief about where its goal is
+      would put the shot outside the posts.** The dominant term is heading,
+      not position — a gyro bias of 0.3°/s integrated over the ~200 s
+      between kickoffs, and the kickoff's `_odom_reset` is the only thing
+      re-anchoring it.
+
+      Three consequences worth writing down. **(1) Every soccer number in
+      this repo is measured at `ideal` odometry** (`make_pitch`'s default),
+      so none of them is affected — and none of them is evidence about a
+      robot either. **(2) A goal detector is no longer speculative**: it is
+      the only listed option that re-anchors heading without a goal to walk
+      to, and 4.1's colour-aware detector is the same machinery. **(3) The
+      cheaper fix is re-anchoring**, which the pitch already does at every
+      kickoff — a duck that could re-anchor on any landmark it sees would
+      not need a goal class at all. Measure a bias-estimating odometry
+      before building either: the presets are assumptions, and the docstring
+      of `OdomNoise` says so.
 
 ### 5. Learned role brains — after 3 lands, and only if a learned striker can reach the ball
 
