@@ -41,9 +41,12 @@ export const TEAM_COLORWAYS = {
 export type TeamName = keyof typeof TEAM_COLORWAYS;
 export const TEAM_NAMES = Object.keys(TEAM_COLORWAYS) as TeamName[];
 /** The pair a new pitch is dealt, home (−x) then away (+x) — the same pair
- *  `make_pitch` uses (world/scenario.py PITCH_TEAMS). Cream v lavender: cream
- *  against sky was two pale-cool shells to tell apart in a wide 3v3 shot. */
-export const PITCH_TEAMS: readonly [TeamName, TeamName] = ["cream", "lavender"];
+ *  `make_pitch` uses (world/scenario.py PITCH_TEAMS, which carries the whole
+ *  table). Cream v graphite is the furthest apart of the four ships in both
+ *  colour distance and LIGHTNESS, and lightness is what survives a duck being
+ *  60 px tall, moving, and lit from one side. Their trims differ too (orange
+ *  against yellow), so a duck that is a few pixels of leg still reads. */
+export const PITCH_TEAMS: readonly [TeamName, TeamName] = ["cream", "graphite"];
 export const ROLE_NAMES = ["defender", "midfielder", "striker"] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 

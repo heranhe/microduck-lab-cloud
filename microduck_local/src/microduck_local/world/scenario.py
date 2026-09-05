@@ -76,11 +76,28 @@ TEAM_COLORWAYS: dict[str, dict[str, tuple[float, float, float]]] = {
     "sky":      {"shell": (0.663, 0.859, 0.910), "trim": (0.95, 0.55, 0.13)},   # #a9dbe8, orange trim
 }
 # The pair `make_pitch` puts on a pitch, and what a legacy "left"/"right"
-# scene loads as. Cream v LAVENDER: cream against sky was two pale-cool
-# shells that a person watching a 3v3 had to squint at, and purple is the
-# furthest of the four ships from cream in hue while still being one of the
-# four (a team has to be a colorway you can actually print).
-PITCH_TEAMS: tuple[str, str] = ("cream", "lavender")
+# scene loads as.
+#
+# Cream v GRAPHITE, chosen by measuring rather than by eye. Every pair of the
+# four ships, CIE76 dE between the shell colours and the gap in lightness:
+#
+#     cream v graphite    49.0   47.0   different trim   <- this one
+#     graphite v sky      43.7   39.5   different trim
+#     cream v lavender    39.7   19.8   different trim
+#     graphite v lavender 35.7   27.2   SAME trim
+#     cream v sky         31.6    7.5   SAME trim
+#     lavender v sky      31.1   12.2   different trim
+#
+# Cream v graphite wins on both columns and by a wide margin. The lightness
+# gap is the one that matters at the size a duck actually appears — 60 px in
+# a wide 3v3 shot, less in a 640-px head-camera frame — because hue is the
+# first thing to go when a shape is small, blurred by motion, or lit from one
+# side, and light-against-dark survives all three. The trim column is the
+# second cue: cream's beak and feet are orange and graphite's are yellow, so
+# a duck that is only a few pixels of leg still says which side it is on.
+# (Cream v lavender shipped first and reads fine on a still; graphite v
+# lavender was considered and is worse on both counts, and shares a trim.)
+PITCH_TEAMS: tuple[str, str] = ("cream", "graphite")
 # What the first pitches called their teams. They were the two SIDES of the
 # pitch, which collided head-on with the goal MOUTH keys the World writes
 # (`goals["right"]` is the mouth at +x, which the "left" team attacks) — a
