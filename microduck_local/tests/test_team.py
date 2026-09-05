@@ -455,14 +455,15 @@ def test_after_a_kick_the_duck_looks_then_hunts_the_kick_line_then_searches():
     b.state, b.t_state, b.lined = "settle", 0.0, True
     b.spot = (0.0, 0.06, "kick_right", 0.3, "kick")
     it = b.step(Senses(t=p.settle_s + 0.01, odom=(0.0, 0.06, 0.3)))
-    assert it.skill == "kick_right" and b._hunt_u == 0.3
+    assert it.skill == "kick_right" and b._hunt_u == pytest.approx(0.3 + p.kick_exit_right)
     # The kick window runs (skill set), then ends: look for look_s...
     b.step(Senses(t=1.0, odom=(0.0, 0.06, 0.3), skill="kick_right"))
     it = b.step(Senses(t=1.1, odom=(0.0, 0.06, 0.3)))
     assert it.note == "look" and it.twist[0] == 0.0
     # ...then hunt: walk the kick line at speed, steering onto its heading.
     it = b.step(Senses(t=1.1 + p.look_s + 0.05, odom=(0.0, 0.06, 0.2)))
-    assert it.note == "hunt" and it.twist[0] == p.hunt_speed and it.twist[2] > 0
+    err = math.atan2(math.sin(b._hunt_u - 0.2), math.cos(b._hunt_u - 0.2))
+    assert it.note == "hunt" and it.twist[0] == p.hunt_speed and it.twist[2] * err > 0
     # ...and only then the search - which first walks to where the hunted line pointed (the memory).
     it = b.step(Senses(t=1.1 + p.look_s + p.hunt_s + 0.1, odom=(1.0, 0.3, 0.3)))
     assert it.note == "seek" and b.memory is not None
@@ -554,7 +555,7 @@ def test_a_teammate_on_the_board_counts_as_a_duck_beside_or_ahead():
 
 def test_the_look_after_a_kick_aims_by_the_kick_map_and_the_search_can_sweep_the_head():
     """`look_aim`: the look after a kick yaws the head to the foot's exit
-    angle off the kick map (+21.6 deg left, -11 right) near the horizon;
+    angle off the in-play kick map (`kick_exit_*`) near the horizon;
     `search_sweep`: a searching head sweeps side to side. Both inside the
     walker's trained +-1.4 rad."""
     p = ChaseParams(look_aim=True, search_sweep=1.4)
@@ -562,11 +563,11 @@ def test_the_look_after_a_kick_aims_by_the_kick_map_and_the_search_can_sweep_the
     b.step(_senses(0.0, None, speed=0.0))
     b._last_foot, b._look_t0 = "kick_left", 5.0
     out = b.step(_senses(5.1, None, speed=0.0))
-    assert out.note == "look" and abs(out.head[2] - 0.9 * math.radians(21.6)) < 1e-6
+    assert out.note == "look" and abs(out.head[2] - 0.9 * p.kick_exit_left) < 1e-6
     assert out.head[1] < b._gaze(0.3)                                  # near the horizon, not the 0.3 m dip
     b._last_foot = "kick_right"
     out = b.step(_senses(5.2, None, speed=0.0))
-    assert abs(out.head[2] - 0.9 * math.radians(-11.0)) < 1e-6
+    assert abs(out.head[2] - 0.9 * p.kick_exit_right) < 1e-6
     # Searching, no track: the head sweeps; a quarter period in it is at +1.4.
     b._look_t0 = -9.0
     yaws = []
@@ -764,3 +765,88 @@ def test_a_bumped_duck_can_back_out_of_the_contact_instead_of_standing():
     straight = {"odom": (0.35, 0.05, 0.0)}
     assert run(back, (0.0, 0.2), **straight)[1][0] > 0
     assert run(stand, (0.0, 0.2), **straight)[1][0] > 0
+
+
+def test_a_defender_striker_roster_owns_midfield_instead_of_falling_back_to_everybody():
+    """Track 4 leftover: ROLE_ZONES in thirds leave the middle unowned on a
+    2v2, and `candidates` then returns every live duck. A defender+striker
+    pair splits at halfway so a ball at midfield is inside the striker's
+    zone and only they may."""
+    from microduck_local.brain.team import ROLE_ZONES, Team, zones_for
+    assert zones_for({"d0": "defender", "d1": "midfielder", "d2": "striker"}) == ROLE_ZONES
+    z = zones_for({"d0": "defender", "d1": "striker"})
+    assert z["defender"] == (-1.0, 0.0) and z["striker"] == (0.0, 1.0)
+    tm = Team("cream")
+    tm.jobs, tm.half_x, tm.attack_sign = {"d0": "defender", "d1": "striker"}, 1.5, 1.0
+    tm.claim("d0", 1.0, 1.2, (0.0, 0.0), (-1.2, 0.0, 0.0))
+    tm.claim("d1", 1.0, 0.8, (0.0, 0.0), (0.4, 0.0, math.pi))
+    assert tm.zone_ok("d1", (0.0, 0.0)) and not tm.zone_ok("d0", (0.0, 0.0))
+    assert tm.candidates(1.0) == ["d1"]                                  # not everybody live
+    assert tm.zone_ok("d0", (-0.8, 0.0)) and not tm.zone_ok("d1", (-0.8, 0.0))
+    three = Team("cream")
+    three.jobs, three.half_x, three.attack_sign = (
+        {"d0": "defender", "d1": "midfielder", "d2": "striker"}, 1.5, 1.0)
+    three.claim("d0", 1.0, 1.0, (0.0, 0.0), (-1.0, 0.0, 0.0))
+    three.claim("d1", 1.0, 1.0, (0.0, 0.0), (0.0, 0.5, 0.0))
+    three.claim("d2", 1.0, 1.0, (0.0, 0.0), (1.0, 0.0, math.pi))
+    assert three.candidates(1.0) == ["d1"]                               # mid owns a=0 in thirds
+
+
+def test_cover_lets_a_quicker_teammate_attack_without_changing_jobs():
+    """If the zone owner is more than `give_up_s` slower, a teammate outside
+    the zone may take the ball. Both keep their static jobs."""
+    tm = Team("cream")
+    tm.jobs, tm.half_x, tm.attack_sign = {"d0": "defender", "d1": "striker"}, 1.5, 1.0
+    ball = (1.0, 0.0)                                                   # a = 1/1.5: striker's half
+    # Striker far and facing away; defender on the ball, facing it.
+    tm.claim("d1", 1.0, 2.5, ball, (-1.4, 0.0, 0.0))                    # ~4 s away, nose the wrong way
+    tm.claim("d0", 1.0, 0.12, ball, (1.05, 0.0, math.pi))                # on it
+    assert tm.job("d0") == "defender" and tm.job("d1") == "striker"
+    assert not tm.zone_ok("d0", ball) and tm.zone_ok("d1", ball)
+    assert tm.cost("d1", 1.0) - tm.cost("d0", 1.0) > tm.give_up_s
+    got = tm.candidates(1.0)
+    assert "d1" in got and "d0" in got                                  # owner + cover
+    assert tm.job("d0") == "defender" and tm.job("d1") == "striker"      # jobs did not swap
+    # A striker only a little slower is not cover — the gate holds.
+    tm.claim("d1", 1.0, 0.4, ball, (0.6, 0.0, 0.0))
+    tm.claim("d0", 1.0, 0.12, ball, (1.05, 0.0, math.pi))
+    assert tm.cost("d1", 1.0) - tm.cost("d0", 1.0) < tm.give_up_s
+    assert tm.candidates(1.0) == ["d1"]
+
+
+def test_a_kick_publishes_the_exit_line_only_at_kick_like_speed():
+    """After a kick the hunt heading is aim + the in-play foot exit, and that
+    line is the board's ball velocity when the implied speed is kick-like.
+    Below `vel_use` it is ignored, so a walking duck cannot inject a fake
+    intercept (`lead_max_s` stays 0)."""
+    p = ChaseParams(hunt_s=3.0)
+    tm = Team("cream")
+    assert tm.lead_max_s == 0.0 and p.hunt_exit is True
+    b = Chase(p, goal=(3.0, 0.0), team=tm, duck_id="d0")
+    b._senses = Senses(t=0.0)
+    b.state, b.t_state, b.lined = "settle", 0.0, True
+    b.spot = (0.0, 0.06, "kick_right", 0.3, "kick")
+    it = b.step(Senses(t=p.settle_s + 0.01, odom=(0.0, 0.06, 0.3)))
+    heading = 0.3 + p.kick_exit_right
+    assert it.skill == "kick_right" and b._hunt_u == pytest.approx(heading)
+    vx, vy = tm.ball_vel()
+    assert math.hypot(vx, vy) == pytest.approx(p.kick_speed)
+    assert math.atan2(vy, vx) == pytest.approx(heading)
+    # A coasting "kick" is ignored: velocity stays what the real kick wrote.
+    before = tm.ball_vel()
+    tm.publish_kick(2.0, (0.0, 0.0), 0.0, tm.vel_use - 0.1)
+    assert tm.ball_vel() == before
+    tm.publish_kick(2.0, (0.5, 0.0), 1.2, p.kick_speed)
+    vx, vy = tm.ball_vel()
+    assert math.hypot(vx, vy) == pytest.approx(p.kick_speed)
+    assert math.atan2(vy, vx) == pytest.approx(1.2)
+    # hunt_exit off: hunt the aim line, still publish the (unrotated) heading.
+    tm2 = Team("cream")
+    c = Chase(ChaseParams(hunt_s=3.0, hunt_exit=False), goal=(3.0, 0.0), team=tm2, duck_id="d0")
+    c._senses = Senses(t=0.0)
+    c.state, c.t_state, c.lined = "settle", 0.0, True
+    c.spot = (0.0, 0.06, "kick_right", 0.3, "kick")
+    c.step(Senses(t=c.p.settle_s + 0.01, odom=(0.0, 0.06, 0.3)))
+    assert c._hunt_u == pytest.approx(0.3)
+    vx, vy = tm2.ball_vel()
+    assert math.atan2(vy, vx) == pytest.approx(0.3)

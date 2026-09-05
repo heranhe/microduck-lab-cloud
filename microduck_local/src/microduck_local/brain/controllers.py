@@ -692,8 +692,41 @@ class ChaseParams:
     # bumper looking sideways, and the brain stops for what it then sees.
     look_aim: bool = False
     look_aim_range: float = 1.5
-    kick_exit_left: float = math.radians(21.6)
-    kick_exit_right: float = math.radians(-11.0)
+    # Where the ball ACTUALLY leaves, relative to the body heading — measured
+    # in play rather than on a bench: 237 kicks over 24 seeds x 300 s of 1v1
+    # and 2v2 (`scripts/probe_kick_line.py`), taking each kick's line from the
+    # ball's travel over the next CARRY_S.
+    #
+    #     left foot    +23.6 deg   95% CI [+13.1, +34.1]   (bench said +21.6)
+    #     right foot   -28.7 deg   95% CI [-33.8, -23.6]   (bench said -11.0)
+    #
+    # The bench was right about the left foot and 18 deg wrong about the
+    # right, which is worth knowing: the bench swept a ball across a STANDING
+    # duck's foot at the sweet spot, and in play the ball is 2-3 cm off it.
+    # These are the in-play numbers.
+    kick_exit_left: float = math.radians(23.6)
+    kick_exit_right: float = math.radians(-28.7)
+    # After a kick, hunt along where the ball REALLY went (`u` plus the exit
+    # angle above) instead of along the line the kick was aimed at. Pure
+    # knowledge: it changes where the duck looks, never how it stands.
+    #
+    # The other way of using the same measurement — rotating the STANCE so the
+    # kick flies along `u` (`kick_deflect_*`) — is refuted, and this time with
+    # the mechanism. Set to the measured values, over 24 paired seeds of 2v2:
+    # goals 2.08 -> 1.38 (p = 0.045), ballAdvance 0.839 -> 0.655 (p = 0.023),
+    # kicks 151 -> 78, and the aim error it was supposed to remove got WORSE,
+    # 45.4 -> 67.3 deg mean absolute. The reason is in the map's own shape:
+    # the deflection is a function of where the ball sits relative to the
+    # foot (15 deg/cm near 2 cm, 4.5 deg/cm at 4-8 cm), so rotating the stance
+    # moves the ball to a different part of that function and produces a
+    # DIFFERENT deflection — the right foot's went from -27.3 to -48.6 deg off
+    # the body. A fixed rotation cannot cancel an offset that its own rotation
+    # changes. The lever stays what the map said first: line-up precision.
+    hunt_exit: bool = True
+    # Measured: a kick leaves at ~1.4 m/s. Published to the team board as
+    # the ball's velocity; below `Team.vel_use` (0.7) a coasting track is
+    # ignored so this does not re-open intercept-on-claim.
+    kick_speed: float = 1.4
     # A searching head sweeps +-`search_sweep` rad (period `search_sweep_s`)
     # while the body circles, when it has no track to look at.
     search_sweep: float = 0.0
@@ -1505,7 +1538,16 @@ class Chase:
                         self.kicks += 1
                         self.spot = None
                         self.state = "kick"
-                        self._hunt_u = u                        # where the ball is going
+                        # Where the ball is going — which is NOT `u`, the line
+                        # it was aimed along: the kick leaves the foot at an
+                        # angle to the body (`kick_exit_*`, measured in play).
+                        heading = self._kick_heading(foot, u)
+                        self._hunt_u = heading
+                        if self.team is not None:
+                            origin = (self._ball_xy(odom, ball) if seen
+                                      else (sx + p.kick_ahead * math.cos(u),
+                                            sy + p.kick_ahead * math.sin(u)))
+                            self.team.publish_kick(t, origin, heading, p.kick_speed)
             elif self.state == "lineup" and t - self.t_state > p.lineup_s:
                 self.spot = None
                 self.state = "search"
@@ -1636,6 +1678,14 @@ class Chase:
         sign = 1.0 if (self.goal is None or self.goal[0] >= 0) else -1.0
         return sign * a * (self.bounds[0] if self.bounds else 0.0)
 
+    def _kick_heading(self, foot: str, u: float) -> float:
+        """The line the ball actually leaves on: aim heading plus the in-play
+        foot exit angle when `hunt_exit` is on (the shipped default)."""
+        p = self.p
+        if not p.hunt_exit:
+            return u
+        return u + (p.kick_exit_left if foot == "kick_left" else p.kick_exit_right)
+
     def _hold_target(self, bxy, odom) -> tuple[float, float]:
         """Where this duck stands while a teammate has the ball.
 
@@ -1651,11 +1701,11 @@ class Chase:
             dx, dy = bxy[0] - og[0], bxy[1] - og[1]
             n = math.hypot(dx, dy)
             if n < 1e-6:
-                return og
-            # On the line from our goal to the ball: between, which is the job.
-            target = (og[0] + p.defend_depth * dx / n, og[1] + p.defend_depth * dy / n)
-            return (self._from_attack_x(min(self._attack_x(target[0]), 0.0)), target[1])
-        if self.job == "striker":
+                target = og
+            else:
+                # On the line from our goal to the ball: between, which is the job.
+                target = (og[0] + p.defend_depth * dx / n, og[1] + p.defend_depth * dy / n)
+        elif self.job == "striker":
             g = self.goal if self.goal is not None else (og[0] + 2.0, og[1])
             gx, gy = g[0] - bxy[0], g[1] - bxy[1]
             n = math.hypot(gx, gy)
@@ -1665,17 +1715,25 @@ class Chase:
             # seeds, and it is a second duck on the ball.
             side = -p.strike_side if bxy[1] >= 0 else p.strike_side
             target = (bxy[0] + p.strike_ahead * ux - side * uy, bxy[1] + p.strike_ahead * uy + side * ux)
-            return (self._from_attack_x(max(self._attack_x(target[0]), 1.0 / 3.0)), target[1])
-        if self.job == "midfielder":
+        elif self.job == "midfielder":
             a = float(np.clip(self._attack_x(bxy[0]) * 0.5, -1.0 / 3.0, 1.0 / 3.0))
-            return (self._from_attack_x(a), p.mid_side * (1.0 if bxy[1] >= 0 else -1.0))
-        anchor = og if p.support_mode == "back" else (self.goal if self.goal is not None else og)
-        gx, gy = anchor[0] - bxy[0], anchor[1] - bxy[1]
-        gn = math.hypot(gx, gy)
-        ux, uy = (gx / gn, gy / gn) if gn > 1e-6 else (-math.cos(odom[2]), -math.sin(odom[2]))
-        rank = self.team.rank(self.duck_id, t) if self.team is not None else 0
-        side = p.support_side * ((rank + 1) // 2) * (1 if rank % 2 == 0 else -1)
-        return (bxy[0] + p.support_back * ux - side * uy, bxy[1] + p.support_back * uy + side * ux)
+            target = (self._from_attack_x(a), p.mid_side * (1.0 if bxy[1] >= 0 else -1.0))
+        else:
+            anchor = og if p.support_mode == "back" else (self.goal if self.goal is not None else og)
+            gx, gy = anchor[0] - bxy[0], anchor[1] - bxy[1]
+            gn = math.hypot(gx, gy)
+            ux, uy = (gx / gn, gy / gn) if gn > 1e-6 else (-math.cos(odom[2]), -math.sin(odom[2]))
+            rank = self.team.rank(self.duck_id, t) if self.team is not None else 0
+            side = p.support_side * ((rank + 1) // 2) * (1 if rank % 2 == 0 else -1)
+            return (bxy[0] + p.support_back * ux - side * uy, bxy[1] + p.support_back * uy + side * ux)
+        # Holding a post and being allowed to take the ball are the same
+        # geometry: clip to the zone the board uses (halfway without a mid,
+        # thirds with one).
+        z = self.team.zone_of(self.duck_id) if self.team is not None else None
+        if z is not None:
+            a = float(np.clip(self._attack_x(target[0]), z[0], z[1]))
+            target = (self._from_attack_x(a), target[1])
+        return target
 
     def _support(self, odom, ball, seen: bool, cold: bool) -> tuple[float, float]:
         """A supporter: hold the post its role gives it (`_hold_target`) —
@@ -1684,7 +1742,8 @@ class Chase:
         my own track when I see it, else from a teammate's claim."""
         p = self.p
         t = self._senses.t
-        bxy = self._ball_xy(odom, ball) if seen else (self.team.ball(t) if self.team is not None else None)
+        bxy = self._ball_xy(odom, ball) if seen else (
+            self.team.led_ball(t) if self.team is not None else None)
         self.spot = None
         if bxy is None:
             self.state = "support"

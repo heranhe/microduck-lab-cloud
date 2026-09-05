@@ -15,6 +15,14 @@ position and heading, per `OdomNoise` preset — and turns the heading half into
 the miss it causes at the goal line from where the ducks really kick from.
 Read the last column: if the 95th percentile miss is well inside the 0.35 m
 half-width, the known-pitch assumption holds and a goal detector buys nothing.
+
+The final column is the other thing drift costs, and it is about the TEAM: two
+teammates putting the same ball in different places. The blackboard
+(`brain/team.py`) passes a ball position and a pose in "my odometry frame",
+and every duck's frame is anchored at its own spawn — which is the SAME frame
+only for as long as nobody has drifted. This measures how far apart two
+teammates' frames have wandered, which is the error a shared ball fix carries
+on top of the detector's own.
 """
 
 from __future__ import annotations
@@ -40,7 +48,7 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
     w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed)
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
-    pos_err, yaw_err, miss = [], [], []
+    pos_err, yaw_err, miss, disagree = [], [], [], []
     goal_seq = 0
     while w.t < seconds:
         for d in w.ducks.values():
@@ -55,6 +63,7 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
         w.step()
         # Sample once a second: consecutive ticks are the same error.
         if w.tick % 50 == 0:
+            errs: list[tuple[float, float]] = []
             for d in w.ducks.values():
                 true = d.trunk_pos(w.data)
                 est = w.odom(d)
@@ -64,14 +73,23 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
                 rng = math.hypot(goal[0] - float(true[0]), goal[1] - float(true[1]))
                 pos_err.append(math.hypot(ex, ey))
                 yaw_err.append(abs(dyaw))
+                errs.append((ex, ey))
                 # What the heading error costs at the goal line: the whole
                 # aiming chain (the ball's placement, the kick line) is laid
                 # out in this frame, so a yaw error rotates the shot.
                 miss.append(abs(math.sin(dyaw)) * rng)
+            # What the blackboard costs: two teammates put the SAME ball in
+            # different places, because each one's fix is its own pose plus a
+            # bearing and a range. The message says "the ball is at (x, y)"
+            # in a frame the two only agree on while their odometry does.
+            for i in range(len(errs)):
+                for j in range(i + 1, len(errs)):
+                    disagree.append(math.dist(errs[i], errs[j]))
         if w.goal_seq != goal_seq:
             goal_seq = w.goal_seq
             kickoff_brains(brains, teams)
-    return {"pos": np.array(pos_err), "yaw": np.array(yaw_err), "miss": np.array(miss)}
+    return {"pos": np.array(pos_err), "yaw": np.array(yaw_err), "miss": np.array(miss),
+            "disagree": np.array(disagree)}
 
 
 def main() -> None:
@@ -84,15 +102,16 @@ def main() -> None:
     print(f"{args.per_side}v{args.per_side}, {args.seeds} seeds x {args.seconds:g} s; "
           f"the goal's half-width is {GOAL_HALF_W} m\n")
     print(f"{'odom':<11}{'pos err med':>12}{'95%':>8}{'yaw err med':>13}{'95%':>8}"
-          f"{'miss at goal med':>18}{'95%':>8}{'over half-width':>17}")
+          f"{'miss at goal med':>18}{'95%':>8}{'over half-width':>17}{'mates disagree':>16}")
     for preset in args.presets.split(","):
-        out = {k: np.concatenate([run(s, args.seconds, preset, args.per_side)[k]
-                                  for s in range(args.seeds)]) for k in ("pos", "yaw", "miss")}
+        got = [run(s, args.seconds, preset, args.per_side) for s in range(args.seeds)]
+        out = {k: np.concatenate([g[k] for g in got]) for k in ("pos", "yaw", "miss", "disagree")}
         over = float((out["miss"] > GOAL_HALF_W).mean())
         print(f"{preset:<11}{np.median(out['pos']):>11.3f}m{np.percentile(out['pos'], 95):>7.3f}"
               f"{math.degrees(np.median(out['yaw'])):>12.2f}°{math.degrees(np.percentile(out['yaw'], 95)):>7.2f}"
               f"{np.median(out['miss']):>17.3f}m{np.percentile(out['miss'], 95):>7.3f}"
-              f"{over:>16.0%}")
+              f"{over:>16.0%}"
+              f"{np.median(out['disagree']) if len(out['disagree']) else 0.0:>15.3f}m")
 
 
 if __name__ == "__main__":

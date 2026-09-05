@@ -108,6 +108,18 @@ LEGACY_TEAMS = dict(zip(("left", "right"), PITCH_TEAMS))
 # behaviour: the team blackboard picks one attacker by predicted time to the
 # ball and the rest support it.
 ROLES = ("defender", "midfielder", "striker")
+
+
+def formation_roles(n: int) -> list[str | None]:
+    """Static jobs for one side of `n` ducks. 1v1 has none (the chase-vs-chase
+    control); 2 is defender + striker; 3+ is defender, midfielder(s), striker.
+    `make_pitch(..., formation=True)` stamps these; `eval-pitch` does not."""
+    n = max(0, int(n))
+    if n <= 1:
+        return [None] * n
+    if n == 2:
+        return ["defender", "striker"]
+    return ["defender"] + ["midfielder"] * (n - 2) + ["striker"]
 MAX_OBJECTS = 200
 MAX_FLOOR_M = 20.0
 MAX_WALL_HEIGHT_M = 2.0
@@ -513,7 +525,7 @@ def make_playroom(seed: int = 0, n: int = 6, size: tuple[float, float] = (3.0, 2
 
 def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
                goal_width: float = 0.7, per_side: int = 1,
-               teams: tuple[str, str] = PITCH_TEAMS) -> Scenario:
+               teams: tuple[str, str] = PITCH_TEAMS, formation: bool = False) -> Scenario:
     """`per_side` ducks a side, one ball, walls all round (the soccer track).
     A goal is the ball crossing either short wall's line inside
     `goal_width`; the World counts them and re-centres the ball. The CREAM
@@ -521,6 +533,10 @@ def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
     attacks −x; the pitch grows a little with the roster. Teammates share a
     blackboard (brain/team.py) — a message a second over Wi-Fi on the
     robot — that says who attacks and where the ball was seen.
+
+    `formation=True` stamps static jobs from `formation_roles` (the lab
+    builtins `pitch-2v2` / `pitch-3v3`). Off, which is the default and what
+    `eval-pitch` uses, so the chase-vs-chase control stays role-free.
 
     The teams are colorways and not "left"/"right" on purpose: those were
     the two SIDES, and the World writes its goal counts under the two
@@ -537,12 +553,15 @@ def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
     ducks = []
     ys = [0.0] if per_side == 1 else [(-0.5 + i / (per_side - 1)) * (hy - 0.5) * 1.4 for i in range(per_side)]
     home, away = teams
+    jobs = formation_roles(per_side) if formation else [None] * per_side
     for i, y in enumerate(ys):
         x = 0.9 + 0.3 * (i % 2)                       # a little staggered, so nobody starts nose to nose
-        ducks.append(Duck(f"d{i}", (-x, y, 0.0), None, "datasheet", "datasheet", "chase", team=home))
+        ducks.append(Duck(f"d{i}", (-x, y, 0.0), None, "datasheet", "datasheet", "chase",
+                          team=home, role=jobs[i]))
     for i, y in enumerate(ys):
         x = 0.9 + 0.3 * (i % 2)
-        ducks.append(Duck(f"d{per_side + i}", (x, -y, math.pi), None, "datasheet", "datasheet", "chase", team=away))
+        ducks.append(Duck(f"d{per_side + i}", (x, -y, math.pi), None, "datasheet", "datasheet", "chase",
+                          team=away, role=jobs[i]))
     return Scenario(name=name or ("pitch" if per_side == 1 else f"pitch-{per_side}v{per_side}"),
                     floor=(size[0] + 0.5, size[1] + 0.5), walls=walls,
                     balls=[Ball((0.0, 0.0))], ducks=ducks, goal_width=goal_width)

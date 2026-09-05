@@ -68,12 +68,26 @@ class Claim:
 # this team attacks, -1 at the one it defends (so both teams read the same
 # numbers). A duck may take the ball wherever its own third allows; a duck
 # with no role may take it anywhere, which is what every roster did before
-# roles existed.
+# roles existed. `zones_for` replaces this with a halfway split when the
+# roster has a defender and a striker and no midfielder — otherwise the
+# middle third belongs to nobody and `candidates` falls back to everybody.
 ROLE_ZONES: dict[str, tuple[float, float]] = {
     "defender": (-1.0, -1.0 / 3.0),
     "midfielder": (-1.0 / 3.0, 1.0 / 3.0),
     "striker": (1.0 / 3.0, 1.0),
 }
+
+
+def zones_for(jobs: dict[str, str]) -> dict[str, tuple[float, float]]:
+    """Attack-axis intervals for the jobs that are actually on the roster.
+
+    Thirds when a midfielder is present. A defender+striker pair (no mid)
+    splits at halfway so a ball at midfield is inside someone's zone and
+    `candidates` does not fall back to "everybody may"."""
+    present = {j for j in jobs.values() if j in ROLE_ZONES}
+    if present == {"defender", "striker"}:
+        return {"defender": (-1.0, 0.0), "striker": (0.0, 1.0)}
+    return dict(ROLE_ZONES)
 
 
 @dataclass
@@ -254,26 +268,49 @@ class Team:
     def members(self, t: float) -> list[str]:
         return sorted(k for k, c in self.claims.items() if t - c.t <= self.stale_s)
 
+    def zone_of(self, duck_id: str) -> tuple[float, float] | None:
+        """The attack-axis interval this duck may take the ball on, derived
+        from the jobs that are actually present. None: no static job, so
+        anywhere."""
+        job = self.jobs.get(duck_id, "")
+        return None if not job else zones_for(self.jobs).get(job)
+
     def zone_ok(self, duck_id: str, ball: tuple[float, float] | None) -> bool:
         """May this duck go for a ball THERE? A duck with no role always may.
-        A duck with one may inside its own third, measured along the pitch in
+        A duck with one may inside its own zone, measured along the pitch in
         attack coordinates — so a defender does not chase into the far corner
-        and a striker does not come back to fetch."""
-        z = ROLE_ZONES.get(self.jobs.get(duck_id, ""))
+        and a striker does not come back to fetch.
+
+        Intervals are half-open on the high side except the attacking end
+        (hi == 1), so neighbouring zones cover [-1, 1] without overlap.
+        Midfield a = 0 is the striker's when the roster splits at halfway."""
+        z = self.zone_of(duck_id)
         if z is None or ball is None or self.half_x <= 0:
             return True
         a = self.attack_sign * ball[0] / self.half_x
-        return z[0] <= a <= z[1]
+        lo, hi = z
+        if hi >= 1.0 - 1e-12:
+            return lo <= a <= hi
+        return lo <= a < hi
 
     def candidates(self, t: float) -> list[str]:
         """Who may attack the ball where it is. If nobody's zone covers it —
         it is on a third whose owner has gone missing, or the board has never
         seen it — everybody may, because a ball nobody is allowed to fetch is
-        worse than a defender out of position."""
+        worse than a defender out of position.
+
+        Cover: a live teammate outside the zone may also attack when they are
+        `give_up_s` quicker than every zone owner (fallen, facing the wrong
+        way, or the ball just skipped past). Static jobs do not change."""
         live = self.members(t)
         ball = self.ball(t)
         allowed = [k for k in live if self.zone_ok(k, ball)]
-        return allowed or live
+        if not allowed:
+            return live
+        owners_best = min(self.cost(k, t) for k in allowed)
+        cover = [k for k in live if k not in allowed
+                 and self.cost(k, t) < owners_best - self.give_up_s]
+        return allowed + cover
 
     def attacker(self, t: float) -> str | None:
         live = self.candidates(t)
@@ -320,12 +357,50 @@ class Team:
             return None
         return max(seen, key=lambda c: c.t).ball
 
+    def publish_kick(self, t: float, origin: tuple[float, float], heading: float, speed: float) -> None:
+        """The kicker's known exit line: the ball leaves `origin` along
+        `heading` at `speed`. Below `vel_use` this is a coasting track and
+        is ignored (the intercept-on-claim measurement). Above it this is
+        the board's ball velocity until kickoff."""
+        if speed < self.vel_use:
+            return
+        self._vel = (speed * math.cos(heading), speed * math.sin(heading))
+        self._vel_hits = 2
+        self._fix, self._fix_t = (float(origin[0]), float(origin[1])), t
+
+    def ball_vel(self) -> tuple[float, float]:
+        """The board's ball velocity: a published kick line when one is live,
+        else the differenced-fixes estimate (usually near zero; `lead_max_s`
+        stays 0 so ordinary claims do not intercept on it)."""
+        return self._vel
+
+    def led_ball(self, t: float, lead_s: float = 0.4) -> tuple[float, float] | None:
+        """Where the ball will be shortly: the kick origin plus the published
+        velocity when that speed is kick-like, else the freshest sighting."""
+        vx, vy = self._vel
+        sp = math.hypot(vx, vy)
+        b = self._fix if (sp >= self.vel_use and self._fix is not None) else self.ball(t)
+        if b is None:
+            return None
+        if sp < self.vel_use:
+            return b
+        dt = lead_s + max(0.0, t - self._fix_t)
+        if self.ball_decel > 0:
+            dt = min(dt, sp / self.ball_decel)
+            d = sp * dt - 0.5 * self.ball_decel * dt * dt
+        else:
+            d = sp * dt
+        return (b[0] + vx / sp * d, b[1] + vy / sp * d)
+
     def payload(self, t: float) -> dict:
         def num(v):
             return None if math.isinf(v) else round(v, 2)
 
+        vx, vy = self._vel
+        vel = [round(vx, 2), round(vy, 2)] if math.hypot(vx, vy) >= self.vel_use else None
         return {"name": self.name, "attacker": self.attacker(t),
                 **({"jobs": dict(self.jobs)} if self.jobs else {}),
+                **({"ballVel": vel} if vel is not None else {}),
                 "claims": {k: {"dist": num(c.dist), "cost": num(self.cost(k, t)), "age": round(t - c.t, 2),
                                **({"pos": [round(v, 2) for v in c.pos]} if c.pos is not None else {})}
                            for k, c in self.claims.items()}}
@@ -397,4 +472,4 @@ def kickoff_brains(brains: dict, teams: dict[str, "Team"]) -> None:
         tm.reset()
 
 
-__all__ = ["Claim", "Team", "brain_kwargs", "kickoff_brains"]
+__all__ = ["Claim", "Team", "ROLE_ZONES", "zones_for", "brain_kwargs", "kickoff_brains"]

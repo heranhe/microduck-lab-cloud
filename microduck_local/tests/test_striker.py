@@ -289,6 +289,17 @@ def test_the_scripted_chase_reaches_the_ball_and_outscores_a_standing_duck():
 
 
 # --- the head-to-head harness -------------------------------------------------
+def test_eval_pitch_and_chase_vs_chase_are_role_free():
+    """`eval-pitch` and the chase-vs-chase `eval-striker` arm must not pick up
+    lab-builtin formations — that would silently move every future A/B."""
+    from microduck_local.eval_striker import apply_roster, pitch_scenario
+    from microduck_local.world import make_pitch
+    for n in (1, 2, 3):
+        assert all(d.role is None for d in make_pitch(per_side=n).ducks)
+        sc = apply_roster(pitch_scenario(n, solo=False), "chase", "chase")
+        assert all(d.role is None for d in sc.ducks) and all(d.brain == "chase" for d in sc.ducks)
+
+
 def test_the_chase_arm_reproduces_eval_pitch_exactly():
     """The scripted arm of a striker battery must BE `eval-pitch`, field for
     field, or the comparison is against a different benchmark."""

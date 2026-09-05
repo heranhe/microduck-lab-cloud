@@ -1988,6 +1988,30 @@ directly.
       between kickoffs, and the kickoff's `_odom_reset` is the only thing
       re-anchoring it.
 
+      **And the same drift breaks the TEAM's shared frame, which is the
+      thing the blackboard is built on.** `brain/team.py` passes "the ball is
+      at (x, y)" and "I am at (x, y, yaw)" in each duck's own odometry frame,
+      and those frames are the same frame only for as long as nobody has
+      drifted. Measured on the same runs — the distance between two
+      teammates' position errors, i.e. how far apart their frames have
+      wandered:
+
+      | odom | teammates disagree about a point (median) |
+      |---|---:|
+      | ideal | 0.000 m |
+      | **datasheet** | **0.456 m** |
+      | hostile | 0.714 m |
+
+      Half a metre is wider than the goal mouth's half-width and about
+      thirteen ball diameters: at `datasheet`, one duck's "the ball is here"
+      is not a place its teammate can act on. The board's own hysteresis and
+      cost arithmetic are unaffected (they compare times, not places), but
+      `Team.ball()` — the fix a supporter walks to and a blind duck is costed
+      against — is. Nothing in the shipped brain notices. The fixes are the
+      same two as for the goal: re-anchor on something both can see, or carry
+      a per-duck frame offset the way `brain/mapping.py`'s loop closure
+      already does for one duck's own map.
+
       Three consequences worth writing down. **(1) Every soccer number in
       this repo is measured at `ideal` odometry** (`make_pitch`'s default),
       so none of them is affected — and none of them is evidence about a
@@ -2040,9 +2064,18 @@ What is left, in the order it is worth doing:
 
 1. ~~4.2's battery~~ — run, and it failed its confirmation; the knob ships
    at 0 and the sense stays for a better rule.
-2. **Zones that split at halfway for a roster with no midfielder.** The
-   thirds leave the middle unowned in a 2v2, measured at 25% of the run
-   (3.5). One line, unmeasured.
+2. ~~**Zones that split at halfway for a roster with no midfielder.**~~
+   **DONE (2026-09-05).** `zones_for` derives the split from the jobs that
+   are present: a defender+striker pair owns the pitch at halfway (midfield
+   is the striker's), thirds stay when a midfielder is on the roster.
+   Lab builtins `pitch-2v2` / `pitch-3v3` stamp `formation_roles` (2:
+   defender+striker, 3: defender+mid+striker); `eval-pitch` still calls
+   `make_pitch` without `formation`, so the chase-vs-chase control is
+   unchanged. Cover: a teammate `give_up_s` quicker than the zone owner may
+   attack without a job rewrite. After a kick the board publishes the
+   in-play exit line (`hunt_exit`, `Team.publish_kick`) only at kick-like
+   speed. Locked by `tests/test_team.py` / `test_world.py` / `test_striker.py`.
+   Skill: `.claude/skills/pitch-formation/SKILL.md`.
 3. **A striker that can reach the ball** (roadmap 4.4's own note). Every
    learned item is behind this one, and item 5 says why.
 4. **`Detection.name` stops carrying the sim id** (4.1). Its own battery,

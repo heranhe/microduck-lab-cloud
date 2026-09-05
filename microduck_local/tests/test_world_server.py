@@ -55,6 +55,20 @@ def test_user_scenarios_save_validate_delete(app, tmp_path):
         assert c.delete("/scenarios/wall-test").status_code == 409
 
 
+def test_pitch_2v2_builtin_reports_formation_roles(app):
+    """GET /world after loading the lab's `pitch-2v2` carries the stamped
+    jobs — the page's inspector and the brains both read `duck_info.role`."""
+    with TestClient(app) as c:
+        r = c.post("/world/load", json={"scenario": "pitch-2v2"})
+        assert r.status_code == 200, r.text
+        ducks = {d["id"]: d for d in r.json()["ducks"]}
+        assert ducks["d0"]["role"] == "defender" and ducks["d1"]["role"] == "striker"
+        assert ducks["d2"]["role"] == "defender" and ducks["d3"]["role"] == "striker"
+        world = c.get("/world").json()
+        assert {d["id"]: d["role"] for d in world["ducks"]} == {
+            "d0": "defender", "d1": "striker", "d2": "defender", "d3": "striker"}
+
+
 def test_load_world_and_stream_frames(app):
     with TestClient(app) as c:
         assert c.get("/world").json()["scenario"] is None

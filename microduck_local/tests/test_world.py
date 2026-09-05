@@ -176,6 +176,32 @@ def test_a_team_is_a_colorway_and_a_legacy_scene_still_loads():
     raw["ducks"][0]["team"] = None
     with pytest.raises(ScenarioError, match="role but no team"):
         validate_scenario(raw)
+    assert all(d.role is None for d in sc.ducks)           # make_pitch default is the role-free control
+
+
+def test_formation_roles_stamp_jobs_by_roster_size_and_eval_pitch_stays_role_free():
+    """Lab builtins stamp defender/striker (2v2) and defender/mid/striker (3v3).
+    `make_pitch` without `formation` — what `eval-pitch` calls — stays role-free
+    so turning roles on inside the battery cannot silently move the baseline."""
+    from microduck_local.world import formation_roles, make_pitch
+    from microduck_local.world_server import builtin_scenarios
+    assert formation_roles(1) == [None]
+    assert formation_roles(2) == ["defender", "striker"]
+    assert formation_roles(3) == ["defender", "midfielder", "striker"]
+    assert all(d.role is None for d in make_pitch(per_side=1).ducks)
+    assert all(d.role is None for d in make_pitch(per_side=2).ducks)
+    assert all(d.role is None for d in make_pitch(per_side=3).ducks)
+    formed2 = make_pitch(name="pitch-2v2", per_side=2, formation=True)
+    formed3 = make_pitch(name="pitch-3v3", per_side=3, formation=True)
+    home2 = [d.role for d in formed2.ducks if d.team == formed2.ducks[0].team]
+    away2 = [d.role for d in formed2.ducks if d.team != formed2.ducks[0].team]
+    assert home2 == away2 == ["defender", "striker"]
+    home3 = [d.role for d in formed3.ducks if d.team == formed3.ducks[0].team]
+    assert home3 == ["defender", "midfielder", "striker"]
+    builtins = builtin_scenarios()
+    assert [d.role for d in builtins["pitch"].ducks] == [None, None]
+    assert [d.role for d in builtins["pitch-2v2"].ducks][:2] == ["defender", "striker"]
+    assert [d.role for d in builtins["pitch-3v3"].ducks][:3] == ["defender", "midfielder", "striker"]
 
 
 def test_a_team_wears_its_colorway_in_the_compiled_model():

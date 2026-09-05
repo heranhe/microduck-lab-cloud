@@ -21,6 +21,7 @@ from .scenario import (
     make_pitch,
     make_playroom,
     make_room,
+    formation_roles,
     validate_scenario,
 )
 
@@ -28,5 +29,6 @@ __all__ = [
     "ROBOT_XML", "DuckAddress", "World", "WorldDuck", "WorldPerson", "compose", "duck_prefix",
     "spawn_duck", "zero_infer",
     "Ball", "Basket", "Box", "Duck", "Person", "Pickable", "Scenario", "Wall",
-    "load_scenario", "make_pitch", "make_playroom", "make_room", "validate_scenario",
+    "load_scenario", "make_pitch", "make_playroom", "make_room", "formation_roles",
+    "validate_scenario",
 ]

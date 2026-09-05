@@ -137,8 +137,8 @@ def builtin_scenarios() -> dict[str, Scenario]:
     playroom = make_playroom(seed=0, n=6, name="playroom")
     playroom.ducks[0].policy = DEFAULT_POLICY
     pitch = make_pitch(name="pitch")
-    pitch2 = make_pitch(name="pitch-2v2", per_side=2)
-    pitch3 = make_pitch(name="pitch-3v3", per_side=3)
+    pitch2 = make_pitch(name="pitch-2v2", per_side=2, formation=True)
+    pitch3 = make_pitch(name="pitch-3v3", per_side=3, formation=True)
     for d in pitch2.ducks + pitch3.ducks:
         d.policy = DEFAULT_POLICY
     for d in pitch.ducks:
