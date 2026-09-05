@@ -1799,6 +1799,18 @@ directly.
       position is that positional play here buys shape and safety, at a
       price in possession, with the score unresolved.
 
+      **Rendered and read** (`scripts/render_pitch.py`, 60 s of seed 0 as a
+      12-frame contact sheet), because a table cannot tell a defender
+      holding its post from one stuck against the boards. It holds its post:
+      through the last 20 s the striker is on the ball at the far end
+      (0.27–0.54 m, `lineup`) while the defender sits 2.7 m away at
+      depth 0.46–0.55 m, which is the geometry the item asked for. **And the
+      middle-third hole is visible in the same sheet**: at t = 27 s and
+      t = 33 s the depth reading jumps to 1.78–1.80 m with the defender in
+      `lineup` — the ball was at midfield, no role owns that third, the gate
+      fell back to "everybody may", and the defender left its post to go for
+      it. Both halves of 3.5's zone note, in pictures.
+
 - [x] **3.3 Striker** — measured with the defender, above (the roster arm is
       defender + striker against two plain chase brains, so the pair is what
       was tested). Whether a striker alone pays is a separate arm and has

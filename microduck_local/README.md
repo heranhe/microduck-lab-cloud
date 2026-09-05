@@ -1990,6 +1990,30 @@ attackers. The next form is positional play — supporters that mark
 rather than shadow. The scoreboard that counts possession exists now
 (`world/metrics.py`, above); positional play does not.
 
+**Positional play exists now, and it is the one thing on this page that
+resolved twice** (2026-09-05, roadmap Track 4.3). A duck can carry a
+ROLE — defender, midfielder, striker — which is a POST to hold when a
+teammate has the ball plus a THIRD of the pitch it may take the ball on.
+A defender + striker roster against two plain chase brains, 24 paired
+seeds and then 24 fresh ones, reading the roles side:
+
+| | plain | roles | pooled (48 seeds) |
+|---|---:|---:|---|
+| spread between the pair | 0.68 m | **1.63 m** | +0.945 ± 0.076, **48 of 48 seeds** |
+| two of ours within 0.5 m of the ball | 13.0% | **1.8%** | −0.112 ± 0.020, p < 0.001 |
+| deepest duck, from its own line | 1.43 m | **0.80 m** | −0.628 ± 0.124, p < 0.001 |
+| **falls** | 1.46 a run | **0.75** | −0.708 ± 0.417, p = 0.001, **70 → 36 events** |
+| possession | 10.8 s/min | 8.3 | −2.50 ± 1.07, p < 0.001 |
+
+Every row replicates in each block on its own. **The falls result is
+larger and better replicated than the bump-stand rule this page had to
+withdraw**, and the mechanism is in the table above it: most falls here
+are duck-on-duck, and there is far less crowd to fall into. What does
+NOT resolve is the score — goals went −0.21 on the first block and +0.63
+(p = 0.045) on the second, pooling to +0.21, p = 0.27, which is what
+this page keeps being about. And the cost is real: two ducks at posts
+are two ducks not chasing, so the roles side holds the ball 23% less.
+
 **3v3 falls, traced** (3 seeds × 300 s, 14 falls): 10 were supporters
 turning in place with a teammate 5–28 cm away or against the boards —
 a body beside the duck is outside the camera's 62° and the ToF's 45°,
