@@ -2014,6 +2014,30 @@ NOT resolve is the score — goals went −0.21 on the first block and +0.63
 this page keeps being about. And the cost is real: two ducks at posts
 are two ducks not chasing, so the roles side holds the ball 23% less.
 
+**In 3v3 — six ducks on one ball, the worst case on this page — it is
+all larger, and one more thing appears.** Defender + midfielder +
+striker against three plain chase brains, the same 48 paired seeds:
+
+| | plain | roles | pooled (48 seeds) |
+|---|---:|---:|---|
+| two of ours within 0.5 m of the ball | 22.4% | **3.5%** | −0.189 ± 0.023, **48 of 48 seeds** |
+| spread | 0.70 m | **1.56 m** | +0.860 ± 0.049, **48 of 48** |
+| deepest duck, from its own line | 1.29 m | **0.57 m** | −0.718 ± 0.129 |
+| **falls** | 1.96 a run | **0.85** | −1.104 ± 0.358, **94 → 41 events** |
+| **ballProgress (signed)** | **−0.206** | **−0.048** | **+0.157 ± 0.093, p = 0.001** |
+| ballAdvance | 0.372 | 0.257 | −0.115 ± 0.062 |
+| possession | 12.4 s/min | 6.5 | −5.92 ± 1.06 |
+
+The new one is signed `ballProgress` — the metric churn cannot inflate.
+The plain 3v3 roster carries the ball toward its OWN goal at
+−0.206 m/min and the roles roster very nearly does not. Read it beside
+`ballAdvance`, which goes DOWN: advance keeps only the forward part and
+is inflated by churn, and with 56% fewer kicks (151 → 66) there is far
+less churn to keep. Together: **the ball moves less and goes less
+wrong** — which is what a team that has stopped scrambling for it should
+look like, and is exactly the pair `eval-pitch`'s docstring says to read
+together. Possession halves, which is the price of three ducks at posts.
+
 **3v3 falls, traced** (3 seeds × 300 s, 14 falls): 10 were supporters
 turning in place with a teammate 5–28 cm away or against the boards —
 a body beside the duck is outside the camera's 62° and the ToF's 45°,

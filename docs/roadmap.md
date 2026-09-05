@@ -1909,23 +1909,38 @@ directly.
 
 ### 4. Telling a teammate from an opponent by colour — perception honesty
 
-- [ ] **4.1 The sim detector reports a colorway.** A `duck` detection
-      gains `color` (the detected duck's team) with a confusion rate in the
-      noise presets — datasheet: right 95% inside 1.0 m, unknown beyond;
-      hostile: 75% and 0.6 m — and `name` stops carrying the id. On the
-      robot this is a colour classifier over the duck box, which is the
-      cheapest detector class anyone will add and the reason team =
-      colorway is honest rather than cosmetic. `Tracker` keeps the colour
-      on the track (majority vote over hits).
-- [ ] **4.2 Brains use it.** `Chase` splits `duck_keepout` into a
-      teammate rule (yield: the board already knows who is quicker) and an
-      opponent rule (contest, but stand rather than turn beside it); the
-      defender marks the nearest OPPONENT in its third rather than
-      shadowing the ball. → **decide on:** the 13-fall trace's category —
-      falls beside an opponent — as an event count over 24 seeds, and
-      `crowd`. The keep-out measured off at 0.4 m without this sense; it is
-      the sense that was missing, not the rule, so re-measure the rule
-      with it.
+- [x] **4.1 The sim detector reports a colorway — DONE (2026-09-05).**
+      `Target.color` (the World fills it from the duck's team),
+      `Detection.color`, and two knobs in every noise preset:
+      `color_range` (beyond it the classifier gives up) and `color_p`
+      (inside it, how often it is right) — datasheet 1.0 m / 95%, hostile
+      0.6 m / 75%. **A wrong answer is ANOTHER COLORWAY, not "unknown"**,
+      because a softmax always answers, and a brain that treats
+      "not my colour" as "opponent" has to survive that. `Track` keeps a
+      VOTE over its hits, seeded at birth: at the hostile rate one look is
+      a coin, and a brain that yields to a teammate on a coin is worse than
+      one that ignores colour.
+
+      **One part of this item was NOT done, on purpose: `name` still
+      carries the sim id.** Removing it is not a detector change — the
+      `Tracker` associates detections to tracks by name, so dropping it
+      makes every duck track worse and moves every soccer number measured
+      through duck avoidance. It is its own experiment with its own
+      battery, not a line in this one.
+- [~] **4.2 Brains use it — BUILT, SHIPS OFF, being measured.** `Chase`
+      gains `use_color` and `opp_keepout`: with the sense on, a duck gives a
+      STRANGER its own keep-out radius and keeps the standard 0.40 m for a
+      teammate, on the reasoning that the team board already coordinates
+      teammates and nothing coordinates an opponent. `_is_mate` reads the
+      track's vote, and unknown counts as an opponent — the cost of treating
+      a teammate as a stranger is a wasted metre, the cost of the reverse is
+      walking into one.
+      → **measuring:** `MICRODUCK_CHASE="use_color=1,opp_keepout=0.55"`,
+      24 seeds × 300 s of 3v3 against a matched baseline (`runs/t7-*.jsonl`),
+      on falls (events), crowd and possession. The defender marking the
+      nearest opponent rather than shadowing the ball is NOT built — the
+      posts already emptied the crowd (3.4), so marking has to beat that
+      rather than the old roster, which is a different and harder question.
 - [x] **4.3 Goal sensing — MEASURED (2026-09-05), and the known-pitch
       assumption does NOT hold at the datasheet preset.**
       `scripts/probe_odom_goal.py`, 3 seeds × 300 s of 2v2 with the ducks
@@ -1960,6 +1975,18 @@ directly.
 
 ### 5. Learned role brains — after 3 lands, and only if a learned striker can reach the ball
 
+**Still gated, and item 3 landing does not open the gate.** The condition in
+this heading was written before any of the above was measured, and it has
+not been met: `striker-v1` loses to the scripted brain because it never
+reaches the ball (possession 11.8 → 5.9 s/min, 3612 kicks at empty floor),
+and nothing here has changed that. Item 3 makes the gate *harder*, not
+easier — the scripted roles a learned brain would have to beat now hold
+crowd at 3.5% and falls at 41 events over 48 seeds of 3v3, so a learned role
+has a much better opponent than it did this morning. Do the approach first
+(the roadmap's own note under 4.4: "a striker that reached the ball as often
+as `Chase` does would be worth measuring; this one is not"), and only then
+this.
+
 - [ ] `StrikerEnv` with the role as an observation (a one-hot in the
       contract's reserved slots, plus the board's teammate poses in the
       body frame — the same eight-float pattern the striker's goal geometry
@@ -1980,6 +2007,27 @@ directly.
 2 (two colours on the pitch and a scoreboard that says who scored); the
 first measured one is 3.1, and it has the cheapest number on the list:
 back-kicks, 28 of 53 today, judged on 24 seeds in two minutes.
+
+**That order was followed, and everything through 4.1 is done** (2026-09-05).
+What is left, in the order it is worth doing:
+
+1. **4.2's battery** — the colour keep-out, running.
+2. **Zones that split at halfway for a roster with no midfielder.** The
+   thirds leave the middle unowned in a 2v2, measured at 25% of the run
+   (3.5). One line, unmeasured.
+3. **A striker that can reach the ball** (roadmap 4.4's own note). Every
+   learned item is behind this one, and item 5 says why.
+4. **`Detection.name` stops carrying the sim id** (4.1). Its own battery,
+   because the tracker associates on it.
+5. **The clear** (3.1). Deliberately not built: the clamp already aims as
+   far up-pitch as the cone allows, and the case a clear would add — the
+   walk-round — is the arm that measured worse.
+
+And one thing this track did NOT settle, which every item above kept
+running into: **the score.** Goals need 136 seeds to move 25% and own goals
+347 (1.5). Positional play buys shape, safety and a ball that goes less
+wrong; whether it wins games is a question this benchmark cannot answer at
+any sane cost, and saying so is the honest end of the track.
 
 ## Later / parked
 
