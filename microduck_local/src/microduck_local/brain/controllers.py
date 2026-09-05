@@ -20,8 +20,13 @@ from dataclasses import dataclass, fields, replace
 import numpy as np
 
 from .gait import TURN_KICK, GaitWatch, back_up, clip_wz, max_wz, turn
+from .intercept import Interceptor
 from .runtime import REGISTRY, Intent, Senses, age_inputs
 from .tracker import Tracker, TrackerParams
+
+# The camera's horizontal HALF-field (62° full, sensors/detector.py) plus a
+# little: past this a target is not in the picture at any head pitch.
+GAZE_MAX_BEARING = 0.6
 
 
 @dataclass(frozen=True)
@@ -558,7 +563,28 @@ class ChaseParams:
     # points at the head and the blind radius instead.
     spot_lead: float = 0.0
     lineup_range: float = 0.6      # a ball seen inside this is worth lining up on
-    refresh_min: float = 0.35      # …and the spot is re-planned from sightings down to this range, then walked blind
+    # …and the spot is re-planned from sightings down to this range (the
+    # detector's own slant `range_est`), then walked blind.
+    #
+    # 0.35 IS THE LEVEL CAMERA'S BLIND RADIUS, measured: a floor ball inside
+    # 0.37 m of ground distance — 0.35 of slant range — is not reported at
+    # all (`scripts/probe_head_pitch.py`). So the constant is honest about
+    # what a level head can do, and the gaze can do better: pitched by
+    # `_gaze` the same camera holds the ball to 0.18 m at the shipped clamp
+    # and 0.08 m at the joint stop.
+    #
+    # MEASURED OFF ANYWAY, twice, for the same reason. The first time: at
+    # 0.2 m the bearing noise is centimetres, the foot choice flipped, and
+    # the spot dithered for 8 s. Re-measured over 24 seeds x 300 s of 2v2
+    # with the probe that can see the placement (`scripts/probe_kick_line.py`),
+    # `refresh_min` 0.35 -> 0.20 does exactly what it promises to the PLAN —
+    # ball ahead of the trunk 0.238 -> 0.184 m, side 0.141 -> 0.083,
+    # spot-to-ball 0.285 -> 0.220, plan age 3.26 -> 2.11 s, whiffs 18% ->
+    # 10% — and costs 58% of the touches: 191 kicks -> 80 (p < 1e-11). The
+    # whiff RATE improving while the kick COUNT halves is the `two_stage`
+    # shape again (AGENTS.md rule 6): in absolute terms it is 156 effective
+    # kicks against 72. Still 0 of 80 on the sweet spot. Ships at 0.35.
+    refresh_min: float = 0.35
     # The line-up is two stages (traced: with the spot 8 cm behind the
     # ball, the walk-in's last steering steps and the square-up's turn in
     # place pushed the ball 5-50 cm before the kick - the ball moved 15 cm
@@ -691,20 +717,84 @@ class ChaseParams:
     # verdict (4 kicks and 2 falls a run for 1.0 goals against 1.75 for the
     # cone rule) with an instrument that can see the mechanism.
     aim_mode: str = "clamp"
-    # The head. Level, the camera loses a floor ball ~0.3 m out. Pitched
-    # by `_gaze` (a law that puts the ball on the camera's axis: measured
-    # 0.6 of command = 0.647 rad of camera, 0.20 m up) while WALKING at a
-    # ball inside `head_range`, it keeps the ball in view to ~0.2 m, so the
-    # line-up spot is refreshed to `refresh_min` instead of 0.6 m. Only
-    # while walking: the walker cannot turn in place with its head down
-    # (measured, tidy.py). Re-planning the spot from sightings INSIDE
-    # refresh_min was measured and dropped: at 0.2 m the bearing noise is
-    # centimetres and the foot choice flipped, the spot dithered for 8 s.
+    # THE HEAD. `_gaze` is a law that puts a floor ball at range `rng` on the
+    # camera's axis; `head_down` clamps the command it may ask for, and the
+    # gaze is applied while WALKING at a ball inside `head_range`.
+    #
+    # MEASURED END TO END (`scripts/probe_head_pitch.py`: the command swept on
+    # the shipped walker, and the blind radius read off the REAL `Detector` on
+    # a real composed `World` at each pose). Three facts, none of which was
+    # known when 0.6 was chosen:
+    #
+    # 1. WHERE THE COMMAND SATURATES. Standing, the head-pitch slot buys
+    #    0.79 rad of camera depression per unit of command, linearly, until
+    #    cmd 1.25 — where the `head_pitch` JOINT reaches its +1.571 MJCF
+    #    limit and the camera stops at 1.17 rad (67°). Past that the command
+    #    does nothing. So the limit is the JOINT, not the policy (the walker
+    #    tracks the command all the way to it and stays upright), and 0.6
+    #    (0.65 rad, 37°) was half of what is there.
+    # 2. WHAT EACH POSE SEES. Nearest floor ball the detector still reports,
+    #    standing, ground distance trunk→ball (and the far edge, which is the
+    #    price — pitching down trades the horizon for the feet):
+    #        level        0.37 m … 0.90+   ("the level camera loses a floor
+    #                                        ball inside ~0.3 m" — measured
+    #                                        at 0.37, or 0.35 of the slant
+    #                                        `range_est` the brain compares
+    #                                        `refresh_min` against)
+    #        head 0.6     0.18 m … 0.77
+    #        head 0.9     0.12 m … 0.36
+    #        head 1.25    0.08 m … 0.21
+    #    so the deep end is only worth asking for when the ball really is
+    #    that close — which is exactly what `_gaze` decides, since the
+    #    command it asks for is a function of the range.
+    # 3. THE NECK SLOT IS FREE AND THE HEAD SLOT IS NOT. `head_pose_cmd[0]`
+    #    is `neck_pitch` and this brain never commanded it: `Chase.step`
+    #    emitted `(0.0, gaze, 0.0, 0.0)`. Swept (walking at 0.30, 4 headings,
+    #    steady over seconds 2-6), depression is additive and linear in the
+    #    two slots — +head looks DOWN at 0.79 rad/unit standing, +neck looks
+    #    UP, so a downward gaze is a NEGATIVE neck command, worth 0.43
+    #    rad/unit — and the same depression costs completely different
+    #    amounts of forward speed:
+    #        59°  head +1.00 alone      -19.6 %      neck -0.30 head +0.60   +4.4 %
+    #        69°  head +1.25 alone      -28.2 %      neck -0.60 head +0.60   -4.9 %
+    #        72°  (not reachable)                    neck -0.40 head +0.80   -1.1 %
+    #    `gaze_neck` is the fraction of the gaze command mirrored onto the
+    #    neck slot, and `neck_gain` its rad-per-command, so `_gaze` divides
+    #    the wanted depression by what the two slots together deliver. At 0
+    #    it is bit-for-bit the old single-slot law.
     head_down: float = 0.6
     head_range: float = 0.9
-    head_gain: float = 0.75
+    head_gain: float = 0.75        # camera rad per unit of head-pitch command (standing; measured 0.789)
+    neck_gain: float = 0.43        # …and per unit of NECK command (measured 0.43, same sweep)
+    gaze_neck: float = 0.0         # fraction of the gaze routed to the neck slot (see 3 above)
     cam_level: float = 0.197
     cam_z: float = 0.21
+    # Hold the gaze while the duck is STANDING STILL, instead of dropping it
+    # the moment it stops. The gaze used to be gated on `vx > 0`, so the
+    # settle in front of every swing was taken with the head level — and the
+    # level camera cannot see a ball inside 0.37 m, which is precisely where
+    # the ball is by then. Measured over 195 kicks (24 seeds x 300 s of 2v2,
+    # `scripts/probe_gaze.py`): the head-pitch command at the swing is 0.000
+    # at the median, the 3.5 s run-up is head-UP 55% of the time and standing
+    # still 49%, the duck has not seen the ball for 1.48 s and 0.175 m of
+    # walking when it fires, and 81% of the duck-steps spent with the ball
+    # truly inside 0.40 m are steps in which the detector is reporting
+    # nothing. That is the owner's "they walk around looking even when the
+    # ball is under their feet", and "they keep scaling back up", as numbers.
+    # STILL, NOT SLOW: a turn in place keeps the head level, because the
+    # walker cannot turn in place with its head down (0.2 rad in 5 s against
+    # 3.1 level — measured in tidy.py, and the reason the old gate existed).
+    gaze_still: bool = False
+    # …and yaw the head at it too while standing. The pitch alone cannot
+    # reach the endpoint: on the kick spot the ball is 0.08 m ahead and
+    # 0.06 m to the kicking foot's side, which is 37° off the nose, and the
+    # camera's horizontal HALF-field is 31°. A yaw would cover it (the walker
+    # tracks a head-yaw command to 1.42 rad, and standing there is no forward
+    # speed to lose) — but the ToF sits on the HEAD, so a yawed head points
+    # the bumper sideways, which is exactly how `look_aim` was measured off
+    # ("the brain stops for what it then sees"). Separate knob, measured
+    # separately.
+    gaze_yaw: bool = False
     # After a kick the ball is ahead and low: stand and look down `look_s`
     # before searching (measured: a 9 s search spin with the ball 0.17 m
     # ahead). A search dips the head every `search_dip_every`.
@@ -1020,7 +1110,10 @@ class ChaseParams:
     # `blocked` / `avoid` / `retreat` (the turn IS the escape) and never in
     # `search` (its circle WALKS at `search_vx`, and freezing that stops the
     # one behaviour that finds the ball - 5 of 8 traced falls were there).
-    bump_stand_states: tuple[str, ...] = ("support", "lineup", "settle", "turn")
+    # ("block" is inert unless `intercept_eta` is on, and it belongs here for
+    # the same reason `support` does: standing on the line is a turn in place
+    # with a body possibly beside it.)
+    bump_stand_states: tuple[str, ...] = ("support", "lineup", "settle", "turn", "block")
     # A contact episode ends after this long without one; the freeze runs
     # from its onset and is never extended by staying in contact.
     bump_gap_s: float = 1.0
@@ -1087,6 +1180,64 @@ class ChaseParams:
     yield_ratio: float = 0.7
     yield_s: float = 1.5
     yield_cooldown_s: float = 3.0
+    # Blocking a ball that is rolling into our own goal (brain/intercept.py):
+    # leave the play, walk onto the ball-to-goal line ahead of it, and let the
+    # body stop it. The repo owner's idea, watching a 2v2 — "come in from the
+    # side and deflect it" rather than line up a kick on a ball that is
+    # already past.
+    #
+    # `intercept_eta` is the master knob and 0 is OFF: a ball predicted to
+    # reach our own goal within this many seconds is worth leaving the play
+    # for. THE BASELINE it is aimed at (`scripts/probe_threat.py`, 48 seeds
+    # x 300 s of 2v2, `runs/thr-base48b.jsonl`): 54 of 70 threats conceded,
+    # with the best-placed defender playing on (support 24%, line-up 21%,
+    # chase 13%) or searching (18%) through them, and a defender 0.15-0.50 m
+    # off the ball's path conceding 31 of 31.
+    #
+    # SHIPS OFF: IT DOES WHAT IT SAYS AND THE THING IT WAS BUILT TO MOVE DOES
+    # NOT MOVE. Measured at 8.0 over 48 paired seeds x 300 s of 2v2 and then
+    # 48 FRESH ones (seeds 100-147), plus a 24-seed ledger:
+    #
+    #   * It engages, and exactly as designed: through a threat the
+    #     best-placed defender is in `block` 21% of the ticks, and `lineup`
+    #     falls 21% -> 6% and `chase` 13% -> 5%. It is not a dead path.
+    #   * The conceded fraction does NOT resolve: 108/137 (79%) -> 102/138
+    #     (74%) pooled over the 96 seeds, z = -0.96, p = 0.34 (77->73% and
+    #     81->75% on the two blocks; the direction is consistent and the
+    #     size is not).
+    #   * What DOES replicate is where the ball spends its time: seconds a
+    #     minute inside 0.9 m of some mouth, 15.80 -> 14.26, -1.53 +/- 0.60,
+    #     p = 0.010 pooled, better on 60 of 96 seeds, same sign on both
+    #     blocks (p = 0.093 then 0.054). The 0.45 m clock did not
+    #     (p = 0.016 -> 0.558).
+    #   * The ledger is quiet: goals 39 -> 36 (p = 0.71), falls 57 -> 46
+    #     (p = 0.19), possession +1.5 s/min (p = 0.16) - the feared cost of
+    #     abandoning the attack does not appear - advance, crowd, spread,
+    #     depth and back-kicks all flat. The one big number, signed
+    #     ballProgress -0.369 (p < 0.001), is attribution and not harm: a
+    #     duck standing in front of a goalward-rolling ball BECOMES the
+    #     possessing duck, and over 6 seeds 3804 of those ticks carry the
+    #     ball toward that duck's own mouth at 4.65 m/min against 0.75 in
+    #     every other state. `ballAdvance` - the forward half of the same
+    #     accumulator, credited by the same rule - is flat, which a duck
+    #     genuinely shoving the ball goalward could not manage.
+    #   * The cost that is real: kicks 193 -> 149, a fifth of the touches.
+    #
+    # The ceiling was in the baseline all along, and it is the reason to
+    # leave this off rather than tune it: 40 of the 70 threats are declared
+    # with the ball ALREADY inside 0.3 m of the goal line (38 of those 40
+    # conceded), and a block was geometrically available - perfect knowledge,
+    # a generous walk model - in only 20 of the 54 conceded ones. The lever
+    # is earlier than the block.
+    intercept_eta: float = 0.0
+    intercept_vmin: float = 0.12   # …closing this fast on our goal (m/s, a scalar rate, not a velocity)
+    intercept_dt: float = 0.6      # …differenced over this window of SIGHTINGS (never a coasted track)
+    intercept_age: float = 0.8     # …the newest of which is no older than this
+    intercept_ahead: float = 0.25  # stand at least this far goal-side of the ball
+    intercept_keep: float = 0.45   # …and no nearer than this to our own goal (below ahead+keep there is no block: see intercept.py)
+    intercept_tol: float = 0.12    # on the line within this: stand and face the ball
+    intercept_hold: float = 1.0    # keep blocking this long after the trigger drops (the estimate is jittery)
+    intercept_clear: float = 0.0   # > 0: with the ball this near, sweep ACROSS the line instead of standing in it
 
     @staticmethod
     def env_names(spec: str | None = None) -> set[str]:
@@ -1186,6 +1337,7 @@ class Chase:
         self.job = role
         self.tracker = Tracker()
         self.gait = GaitWatch()
+        self.blocker = Interceptor()
         self.reset()
 
     def reset(self) -> None:
@@ -1228,12 +1380,57 @@ class Chase:
         self._prev_skill = None
         self.tracker.reset()
         self.gait.reset()
+        self.blocker.reset()
 
     def _gaze(self, rng: float) -> float:
-        """head_pitch that puts a floor ball at `rng` on the camera's axis."""
+        """The gaze COMMAND that puts a floor ball at `rng` on the camera's
+        axis. With `gaze_neck` > 0 the same command drives both slots, so the
+        divisor is what the two of them deliver together (measured additive,
+        `head_gain` + `neck_gain` per unit); at 0 this is the old law."""
         p = self.p
         want = math.atan2(p.cam_z - 0.035, max(rng, 0.05))
-        return float(np.clip((want - p.cam_level) / p.head_gain, 0.0, p.head_down))
+        gain = p.head_gain + p.neck_gain * p.gaze_neck
+        return float(np.clip((want - p.cam_level) / max(gain, 1e-6), 0.0, p.head_down))
+
+    def _head_pose(self, cmd: float, yaw: float = 0.0) -> tuple[float, float, float, float]:
+        """The 4-slot head command for a gaze of `cmd`. The neck looks UP on a
+        positive command, so a downward gaze mirrors it negative. With both
+        extras off the slots are plain 0.0 and not -0.0 — the old tuple, to
+        the bit."""
+        k = self.p.gaze_neck
+        return (-k * cmd if k else 0.0, cmd, yaw, 0.0)
+
+    def _gaze_range(self, odom, ball) -> tuple[float, float] | None:
+        """(range, bearing) to aim the gaze at during a line-up when the ball
+        is not being seen right now: where the tracker last PLACED it
+        (odometry frame, so it survives the duck walking on — `Track.range`
+        does not, it only moves on a hit), else the ball this line-up was
+        planned around. None when neither exists, or when the target is
+        further off the nose than the camera's own horizontal half-field
+        (31°, so `GAZE_MAX_BEARING` is already generous): pitching the head
+        cannot bring in something the lens does not cover sideways, and
+        `gaze_yaw` is the knob that can.
+
+        Worth knowing about the endpoint: ON the kick spot the ball is
+        `kick_ahead` 0.08 m forward and `kick_side` 0.06 m to the side, i.e.
+        37° off the nose — OUTSIDE the 31° half-field. The last few
+        centimetres of a line-up are unseeable with a fixed head at any
+        pitch. What is inside is the run-in: at 0.20 m ahead the same side
+        offset is 17°, at 0.15 m it is 22°."""
+        p = self.p
+        tgt = None
+        if ball is not None and ball.xy is not None:
+            tgt = ball.xy
+        elif self.spot is not None:
+            sx, sy, _, u, _ = self.spot
+            tgt = (sx + p.kick_ahead * math.cos(u), sy + p.kick_ahead * math.sin(u))
+        if tgt is None:
+            return None
+        dx, dy = tgt[0] - odom[0], tgt[1] - odom[1]
+        bearing = _wrap(math.atan2(dy, dx) - odom[2])
+        if abs(bearing) > (p.head_yaw_max if p.gaze_yaw else GAZE_MAX_BEARING):
+            return None
+        return math.hypot(dx, dy), bearing
 
     def inputs(self) -> dict:
         if self._senses is None:
@@ -1316,6 +1513,40 @@ class Chase:
         h = _wrap(u - (p.kick_deflect_left if foot == "kick_left" else p.kick_deflect_right))
         return (bx - p.kick_ahead * math.cos(h) - side * math.sin(h),
                 by - p.kick_ahead * math.sin(h) + side * math.cos(h), foot, h, "kick")
+
+    def _board_ball(self, t: float) -> tuple[tuple[float, float] | None, float]:
+        """The freshest ball sighting on the team board, and its age. A duck
+        that cannot see the ball itself is usually standing off while a
+        teammate is on it, and the board is the only way it learns the ball
+        is coming at all — the camera loses a floor ball at 0.3 m and, over
+        the threat battery, the best-placed defender had a fresh detection on
+        22% of the ticks and any live track on 43%."""
+        if self.team is None:
+            return None, math.inf
+        best = None
+        for c in self.team.claims.values():
+            if c.ball is not None and (best is None or c.t > best.t):
+                best = c
+        return (None, math.inf) if best is None else (best.ball, t - best.t)
+
+    def _block_target(self, odom, ball, seen: bool, fresh: bool, t: float) -> tuple[float, float] | None:
+        """Where to stand to block a ball rolling at our own goal, or None to
+        carry on playing. The decision is `brain/intercept.py`'s; this only
+        assembles what it needs out of what this duck actually has."""
+        p = self.p
+        if p.intercept_eta <= 0 or self.goal is None:
+            return None
+        mine = self._ball_xy(odom, ball) if seen else None
+        board, age = self._board_ball(t)
+        # The trigger is differenced from SIGHTINGS: my own when it is fresh,
+        # else the board's, which is a teammate's. (The board cannot say how
+        # old the sighting UNDER a claim is — a claim is re-stamped every tick
+        # — so a teammate coasting a track can feed one stale point in. The
+        # 0.6 s difference window is what stops a single one from firing it.)
+        sight = mine if fresh else (board if age <= p.intercept_age else None)
+        return self.blocker.update(t, p, mine if mine is not None else board, sight,
+                                   self._own_goal(odom), odom, self.duck_id,
+                                   self.team.mates(self.duck_id, t) if self.team is not None else [])
 
     def _servo(self, odom, target, cold, stop: float, slow_in: float = 0.2) -> tuple[float, float, float, float]:
         """(vx, wz, dist, bearing) toward a point: turn in place first when
@@ -1424,6 +1655,7 @@ class Chase:
         skill = None
         head = (0.0, 0.0, 0.0, 0.0)
         gaze_at: float | None = None
+        gaze_yaw = 0.0
         retreating = t - self._retreat_t0 < p.retreat_turn_s + p.retreat_walk_s
         if self._prev_skill is not None and senses.skill is None:
             self._look_t0 = t                                   # the kick window just ended: look for the ball ahead
@@ -1459,6 +1691,9 @@ class Chase:
         if seeking and (ahead < p.hunt_stop or self._beside(t)):
             seeking = False                                     # something in the way: circle here instead
             self.memory = None
+        # Is the ball rolling into OUR goal, and am I the one to stand in
+        # front of it? (brain/intercept.py; `intercept_eta` = 0 ships it off.)
+        block_at = self._block_target(odom, ball, seen, fresh, t)
         if senses.skill is not None:
             vx, wz = 0.0, 0.0                                   # the kick owns the reflex tier
             self.state = "kick"
@@ -1486,6 +1721,22 @@ class Chase:
                 if abs(duck_rb[1]) < 0.5:
                     vx = 0.0
             self.state = "avoid"
+        elif block_at is not None:
+            # Leave the play and get in the way. Not a line-up: the servo
+            # faces where it WALKS, and only once it is on the line does the
+            # duck square up on the ball — so the body ends across the path
+            # with the camera on the thing it is stopping, and no square-up
+            # ever happens next to the ball (which is what turns a line-up
+            # into a shove).
+            self.spot = None
+            vx, wz, bdist, _ = self._servo(odom, block_at, cold, p.intercept_tol)
+            if bdist <= p.intercept_tol:
+                b = self.blocker.ball
+                bb = 0.0 if b is None else _wrap(math.atan2(b[1] - odom[1], b[0] - odom[0]) - odom[2])
+                vx, wz = (0.0, 0.0) if abs(bb) < 0.3 else turn(bb, cold)[::2]
+                if wz != 0.0 and self._beside(t):
+                    vx, wz = 0.0, 0.0                  # a body beside us: never a turn in place
+            self.state = "block"
         elif self.role == "support":
             vx, wz = self._support(odom, ball, seen, cold)
         elif yielding and self.state not in ("settle",):
@@ -1611,6 +1862,15 @@ class Chase:
                 self.state = "lineup"
                 if vx > 0 and fresh and ball.range < p.head_range and abs(ball.bearing) < 0.6:
                     gaze_at = ball.range
+            # …and keep looking at it through the settle and the square-up,
+            # which is where the swing is decided and where the old gate
+            # (`vx > 0`, below) dropped the head. Aimed at the ball's last
+            # PLACE rather than its last range, because the duck has walked
+            # since. The application gate still refuses a turn in place.
+            if p.gaze_still and gaze_at is None and self.state in ("lineup", "settle"):
+                got = self._gaze_range(odom, ball)
+                if got is not None:
+                    gaze_at, gaze_yaw = got
         elif seen:
             self.last_bearing = ball.bearing
             if fresh:
@@ -1698,8 +1958,20 @@ class Chase:
                 self._poses = []
                 self._retreat_t0 = t
                 self._retreat_sign = 1.0 if left_near >= right_near else -1.0
-        if gaze_at is not None and (vx > 0 or self.state in ("look", "search")):
-            head = (0.0, self._gaze(gaze_at), 0.0, 0.0)
+        # A turn in place keeps the head level whatever the state asked for:
+        # the walker cannot turn in place with its head down (0.2 rad in 5 s
+        # against 3.1 level, measured in tidy.py). A COLD turn carries
+        # `TURN_KICK` of forward command to start the gait, so "turning in
+        # place" is not "vx == 0" — which is why the old `vx > 0` gate let
+        # the head down during exactly the manoeuvre that cannot take it.
+        turning = wz != 0.0 and vx <= TURN_KICK
+        if gaze_at is not None and not (p.gaze_still and turning) \
+                and (vx > 0 or self.state in ("look", "search")
+                     or (p.gaze_still and wz == 0.0)):
+            head = self._head_pose(self._gaze(gaze_at),
+                                    float(np.clip(p.head_yaw_gain * gaze_yaw,
+                                                  -p.head_yaw_max, p.head_yaw_max))
+                                    if p.gaze_yaw else 0.0)
         look_at = pred_bearing if pred_bearing is not None else (
             ball.bearing if p.predict_s > 0 and ball is not None and ball.age(t) <= p.predict_s else None)
         if look_at is None and self.state == "look" and p.look_aim and self._last_foot is not None:

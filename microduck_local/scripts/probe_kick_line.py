@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 
 import numpy as np
 
@@ -139,12 +140,15 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seeds", type=int, default=24)
+    ap.add_argument("--seed0", type=int, default=0,
+                    help="first seed — a confirmation runs on seeds the effect was NOT found on")
     ap.add_argument("--seconds", type=float, default=300.0)
     ap.add_argument("--per-side", type=int, default=2)
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--out", default=None, help="write every kick as a JSON line")
     args = ap.parse_args()
-    todo = [(s, args.seconds, args.per_side) for s in range(args.seeds)]
+    todo = [(s, args.seconds, args.per_side)
+            for s in range(args.seed0, args.seed0 + args.seeds)]
     rows: list[dict] = []
     if args.jobs > 1 and len(todo) > 1:
         import multiprocessing as mp
@@ -160,8 +164,9 @@ def main() -> None:
             for r in rows:
                 fh.write(json.dumps(r) + "\n")
     hit = [r for r in rows if r.get("err") is not None]
-    print(f"{len(rows)} kicks over {args.seeds} seeds x {args.seconds:g} s of "
-          f"{args.per_side}v{args.per_side}; {len(rows) - len(hit)} moved the ball < 10 cm (a whiff)\n")
+    print(f"{len(rows)} kicks over {args.seeds} seeds (from {args.seed0}) x {args.seconds:g} s of "
+          f"{args.per_side}v{args.per_side}; {len(rows) - len(hit)} moved the ball < 10 cm (a whiff)")
+    print(f"MICRODUCK_CHASE={os.environ.get('MICRODUCK_CHASE', '')!r}\n")
     print(f"{'foot':<12}{'n':>5}{'mean err':>10}{'median':>9}{'sd':>8}{'wrong side':>12}"
           f"{'the map says':>14}{'mean off heading':>18}")
     for foot in ("kick_left", "kick_right"):

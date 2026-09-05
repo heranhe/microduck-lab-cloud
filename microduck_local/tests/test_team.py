@@ -9,7 +9,7 @@ import os
 import numpy as np
 import pytest
 
-from microduck_local.brain.controllers import Chase, ChaseParams
+from microduck_local.brain.controllers import Chase, ChaseParams, _wrap
 from microduck_local.brain.gait import TURN_KICK
 from microduck_local.brain.runtime import Senses
 from microduck_local.brain.team import Team, brain_kwargs
@@ -270,6 +270,95 @@ def test_chase_pitches_the_head_down_walking_at_a_near_ball_and_not_when_turning
     c.step(_senses(0.0, (1.2, 0.7), speed=0.0))
     out = c.step(_senses(0.1, (1.2, 0.7), speed=0.0))
     assert out.note == "turn" and out.head[1] == 0.0 and out.head[2] != 0.0   # level pitch, the head yawed to the ball
+
+
+def _settling(still: bool, neck: float = 0.0, yaw: bool = False,
+              heading_off: float = 0.0, stale: float | None = None, n: int = 9):
+    """Walk a Chase in to the settle in front of a kick, the way the sim does:
+    a fixed ball at 0.5 m, a detection consistent with the pose every step,
+    and the duck closing half the remaining gap to its own spot. Returns the
+    brain and its last Intent.
+
+    `heading_off` leaves it ON the spot but off the kick heading — the
+    square-up, which is a turn in place and must take the head level.
+    `stale` moves the TRACK that far out in front before one last step: the
+    plan gone stale, which is the ordinary case in play (spot-to-ball a
+    median 0.285 m over 191 kicks) and the one a held gaze is for."""
+    b = Chase(ChaseParams(gaze_still=still, gaze_neck=neck, gaze_yaw=yaw), goal=(1.5, 0.0))
+    x, y, head = 0.0, 0.0, 0.0
+    out = None
+    for i in range(n):
+        rng = math.hypot(0.5 - x, 0.0 - y)
+        bear = _wrap(math.atan2(0.0 - y, 0.5 - x) - head)
+        out = b.step(_senses(0.1 * i, (bear, rng), odom=(x, y, head)))
+        if b.spot is not None:
+            sx, sy, _, u, _ = b.spot
+            x, y, head = x + 0.5 * (sx - x), y + 0.5 * (sy - y), u + heading_off
+    if stale is not None:
+        track = b.tracker.best("ball", 0.1 * (n - 1), min_hits=1)
+        track.xy = (x + stale * math.cos(head), y + stale * math.sin(head))
+        out = b.step(_senses(0.1 * n - 0.05, None, odom=(x, y, head)))   # still inside settle_s
+    return b, out
+
+
+def test_chase_holds_the_gaze_through_the_settle_only_when_gaze_still_is_on():
+    """The gaze was gated on `vx > 0`, so the settle in front of every swing
+    was taken with the head level — and the level camera cannot see a floor
+    ball inside 0.37 m, which is where the ball is by then (measured,
+    scripts/probe_head_pitch.py). `gaze_still` holds it; off, nothing moves."""
+    for still in (False, True):
+        b, out = _settling(still)
+        assert b.state == "settle" and out.twist[0] == 0.0
+        # ON the spot the ball is 0.08 m ahead and 0.06 m to the foot's side —
+        # 37° off the nose, outside the camera's 31° half-field. No pitch
+        # reaches it, and `gaze_still` correctly declines.
+        assert out.head[1] == 0.0
+        # The ordinary case in play: the plan is stale and the ball is out in
+        # front, where a pitched head can see it and a level one cannot.
+        b, out = _settling(still, stale=0.22)
+        assert b.state == "settle" and out.twist == (0.0, 0.0, 0.0)
+        assert (out.head[1] > 0.35) is still, f"gaze_still={still} gave head {out.head}"
+    # A square-up is a turn in place: the head stays level even with
+    # `gaze_still` on, because the walker cannot turn in place head-down —
+    # and a COLD turn carries forward command, so the old `vx > 0` test would
+    # have let the head down for exactly that manoeuvre.
+    b, out = _settling(True, heading_off=0.6, stale=0.22)
+    assert out.twist[2] != 0.0 and out.head[1] == 0.0
+
+
+def test_chase_gaze_range_aims_at_where_the_ball_IS_and_refuses_what_is_off_the_lens():
+    """`Track.range` only moves on a hit, so a duck that has walked since the
+    last sighting would aim at a range it left behind. `_gaze_range` uses the
+    track's ODOMETRY position, and returns the bearing with it so `gaze_yaw`
+    can decide — refusing anything past the camera's horizontal half-field
+    when it may not."""
+    b = Chase(ChaseParams(gaze_still=True), goal=(1.5, 0.0))
+    b.step(_senses(0.0, (0.0, 0.5)))
+    b.step(_senses(0.1, (0.0, 0.5)))
+    track = b.tracker.best("ball", 0.1, min_hits=1)
+    assert track is not None and track.xy is not None and abs(track.range - 0.5) < 0.12
+    rng, bear = b._gaze_range((0.4, 0.0, 0.0), track)
+    assert abs(rng - 0.1) < 0.06 and abs(bear) < 0.05          # 0.1 m away NOW, not 0.5
+    assert b._gaze_range((0.0, 0.0, math.pi), track) is None   # behind us: no pitch reaches it
+    assert b._gaze_range((0.45, -0.06, 0.0), track) is None    # 50° off the nose: outside the lens
+    y = Chase(ChaseParams(gaze_still=True, gaze_yaw=True), goal=(1.5, 0.0))
+    assert y._gaze_range((0.45, -0.06, 0.0), track) is not None  # ...unless the head may yaw to it
+
+
+def test_chase_gaze_neck_splits_the_command_across_both_head_slots():
+    """`head_pose_cmd[0]` is `neck_pitch` and this brain never used it. Swept
+    on the walker the two slots ADD (0.79 rad/unit of head, 0.43 of neck,
+    standing) and cost very different amounts of forward speed, so the same
+    depression can be bought either way. `gaze_neck` is the fraction routed
+    to the neck; `_gaze`'s divisor follows it, so the LAW is unchanged."""
+    a, b = Chase(ChaseParams()), Chase(ChaseParams(gaze_neck=1.0))
+    assert a._head_pose(0.5) == (0.0, 0.5, 0.0, 0.0)          # off: the old tuple, to the bit
+    assert b._head_pose(0.5) == (-0.5, 0.5, 0.0, 0.0)         # the neck looks UP on a positive command
+    # Same wanted depression, fewer command units, because two slots deliver it.
+    want = a.p.cam_level + a.p.head_gain * a._gaze(0.4)
+    assert abs((b.p.cam_level + (b.p.head_gain + b.p.neck_gain) * b._gaze(0.4)) - want) < 1e-6
+    _, out = _settling(True, neck=1.0, stale=0.22)
+    assert out.head[0] == -out.head[1] and out.head[1] > 0.0
 
 
 def test_chase_wall_rule_turns_away_from_a_wall_beside_it():
