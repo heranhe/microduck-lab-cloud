@@ -1326,6 +1326,308 @@ MuJoCo contacts between duck and basket, peak forward gravity, landing.
       taken at 0.42 m; the hand-back to the ordinary servo-and-aim fixed
       it. Worth knowing before touching the deliver leg again.)
 
+## Track 4 — positional soccer: teams by colorway, the right goal, role brains — OPEN (2026-09-05)
+
+Context: the ask is a game that *looks* like soccer — ducks that know which
+team they are on, score on the far goal and not their own, clear the ball up
+the pitch or hold the goal when it is near, and in 2v2 / 3v3 split into a
+defender, a mid and a striker instead of six ducks on one ball. What the
+code already does is more than the ask assumed and worse than it looks, so
+read this before designing anything:
+
+- **Teams and goals exist, and every duck attacks the right mouth.**
+  `Duck.team` is in the scenario contract, `make_pitch` makes `left`
+  (spawns at −x, attacks +x) and `right`, teammates share a blackboard
+  (`brain/team.py`: one attacker by predicted time-to-ball with hysteresis,
+  the rest support), and a goal restarts play from the spawns.
+  `World.goal_for` hands each `chase` brain the mouth **its spawn heading
+  faces** — not the nearest one — and `Chase._plan` lays the kick line at
+  that goal. "They score on whichever goal is closest" is not what the code
+  does. What it does is subtler:
+- **Over half of all kicks are aimed AWAY from the goal the kicker
+  attacks.** `_plan` aims at the goal only when that costs under `aim_max`
+  = 1.05 rad of detour from the line of sight; otherwise it kicks along the
+  line of sight, and `push_beyond` is ∞ so there is no dribble or clear mode
+  at all. A duck that reaches the ball from the goal side — which the
+  support geometry guarantees, since a supporter stands 0.7 m goal-side of
+  the ball (`support_back`) and walks in from there when it becomes the
+  attacker — kicks it toward its own goal. The baseline in item 0 is the
+  number.
+- **The benchmark cannot see an own goal.** `World.goals` is keyed by
+  MOUTH (`left` / `right`), `eval-pitch` reports mouths, the /sim
+  scoreboard shows mouths. A ball the sky team puts into its own net and
+  one the cream team scores are the same row. `PitchMetrics` knows who last
+  had the ball (`_holder`) and the World knows *when* the last kick was
+  (`last_kick_t`) but not whose; nobody reads either at the goal tick.
+- **The editor has no notion of a team.** `SimEditor` offers
+  `wander / follow / tidy / script` — not `chase` — has no team field, and
+  its `ScenarioDuck` type lacks `team` and `odom` (they survive a save only
+  because the draft is a JSON deep copy). A team's goal is inferred from
+  spawn yaw, so a hand-placed roster with one duck facing the other way
+  makes `PitchMetrics` raise `ValueError` *after* the world is swapped in
+  (`world_server.load_world` builds the metrics outside its `try`: the load
+  answers 500 and the scoreboard keeps the previous world's metrics object).
+- **Every duck is the same colour.** The viewer builds ONE template
+  geometry from `GET /scene` (the single-robot walk scene) and reuses it for
+  every duck. The composed world does carry per-duck materials
+  (`d0/left_shell_material`, verified on the pinned MuJoCo), but nothing
+  writes them and nothing streams a colour.
+- **No brain can tell a teammate from an opponent by sight.** A `duck`
+  detection carries `name` (the duck id — privileged, and no brain reads it;
+  `tidy` reads toy names only). Mates are known only from the board's Wi-Fi
+  poses; opponents are anonymous `duck` tracks — which is why
+  `mate_keepout` measured off (12 of 13 traced falls were beside an
+  OPPONENT the board does not carry).
+- **The learned striker loses** (sim-roadmap 4.4: it never reaches the
+  ball). Learned role brains are downstream of that, not a way round it.
+- **The shipped colorways** (Pollen press kit): Cream `#f7e6cb` (orange
+  trim and beak), Graphite `#6c6a68` (yellow trim), Lavender `#bfa9cf`
+  (yellow trim), Sky `#a9dbe8` (orange trim). Two ducks of one colorway
+  cannot be told apart on hardware either, which is the honest reason to
+  make **team = colorway**.
+
+The order below is deliberate: the benchmark first (an own goal has to be
+countable before a rule that prevents one can be judged), the contract and
+editor second (so the page can *show* a team and a role), scripted roles
+third (cheap, over the existing chase brain, judged on the new numbers),
+perception fourth, learning last. Every "measured" line above about brain
+ideas ends the same way in `microduck_local/README.md` ("Where the soccer
+track actually stands"): found on four seeds, gone on twelve fresh ones. So
+each item here names its number and its seed count before its code.
+
+### 0. Baseline — DONE (2026-09-05): what the pitch does today
+
+The `eval-pitch` loop with two things added: the kick line read off the
+brain at the moment it fires (`Chase._hunt_u`, cos against the direction
+from the ball to the goal it attacks), and the team credited at each goal —
+by the last kick within `KICK_GOAL_S` = 4 s, else by `PitchMetrics`'
+possession rule (last team within 0.25 m).
+`microduck_local/scripts/probe_own_goals.py` (run it from `microduck_local`:
+`uv run python scripts/probe_own_goals.py <seed> 300 <per_side>`); the
+fields become `eval-pitch`'s in 1.1. Four seeds × 300 s, shipped `chase`
+both sides, seeds 0–3:
+
+| roster | goals (kicked in / walked in) | own goals | kicks | kicks aimed away from the attacked goal | falls |
+|---|---:|---:|---:|---:|---:|
+| 1v1 | 6 (0 / 6) | 3 | 26 | **14 (54%)** | 4 |
+| 2v2 | 8 (1 / 7) | **8** | 27 | **14 (52%)** | 16 |
+
+Read it the playbook's way: fourteen goals is an event count that resolves
+nothing; **28 back-kicks out of 53 kicks** is the finding, and it is the
+mechanism, not the score. Two more things the rows say. Every goal but one
+was *walked* in — a duck at its own line shoving the ball over it, credited
+by the possession rule to the team standing there, which is how 8 of 8 in
+2v2 are own goals: today's own goal is a supporter's or a blocked attacker's
+stumble at its own mouth, and a defender parked ON that line (3.2) is the
+duck most likely to make one, so 3.2 is judged on `ownGoals` first. And the
+run is deterministic in the seed — two runs of the probe matched to the
+tick — so a paired A/B pairs exactly. A brain that never kicks toward its
+own goal is the cheapest change on this list, and the metric that judges it
+costs about as many seeds as `kicks` (62 for a 25% shift), not goals' 146.
+Cost of a seed on this Mac: 300 s of 1v1 in ~10 s, of 2v2 in ~27 s, eight
+in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
+
+### 1. A benchmark that can see an own goal, a back-kick and a pile-up
+
+- [ ] **1.1 Goals per TEAM: for, against, own.** `World` records the team
+      of the last kick (`last_kick_team`, beside `last_kick_t`) and
+      `PitchMetrics` attributes each goal at the tick it happens: the
+      kicking team if a kick started within `KICK_GOAL_S`, else the last
+      holder; own = the credited team's attacked mouth ≠ the mouth scored
+      on. Row fields `goalsFor`, `goalsAgainst`, `ownGoals` per team;
+      `eval-pitch` prints them beside the mouths (the mouth keys stay — old
+      rows and `side_reading` read them). The /sim scoreboard shows the
+      per-team counts. Test in `tests/test_pitch_metrics.py`: push the
+      ball over a line with each team as last holder and as last kicker.
+      `uv run eval-pitch --seeds 4 --seconds 300` → the four seeds above
+      reproduce (the loop is deterministic in the seed: the probe's two
+      runs matched to the tick).
+- [ ] **1.2 Kick direction, measured off the BALL, not the plan.** Per
+      kick, the ball's signed displacement toward the kicker's goal over
+      the 2 s after the swing (`CARRY_S`) and its angle to the goal line;
+      `kicksBack` per team = kicks whose 2 s displacement is toward the
+      kicker's own goal. This is playbook rule 6 — the plan's `_hunt_u` says
+      where the brain *meant* the ball to go, the ball says where it went,
+      and only the second one can judge a line-up. → **decide on:** the
+      baseline's 54% by the plan line against the ball's own number; if
+      they differ by more than the noise, the line-up is scattering shots
+      and item 3.1 is only half the story.
+- [ ] **1.3 Shape.** Per team at the control tick: `ballOwnHalf` (s/min
+      the ball is in the team's own half), `spread` (mean pairwise distance
+      between teammates), `crowd` (fraction of ticks with two teammates
+      inside 0.5 m of the ball — the 24.5% the README quotes from a trace,
+      made a row field), `depth` (the deepest teammate's distance from its
+      own goal line). These are what "pile up" and "somebody defends"
+      mean as numbers; goals cannot say either.
+- [ ] **1.4 A roster A/B harness.** `eval_striker` already swaps the LEFT
+      duck's brain (`--left striker:v1`); generalise it to a per-duck spec
+      per side — `--left chase,chase --right defender,striker` — with
+      `--out/--tag` resume and a paired summary (per-seed wins on
+      `ownGoals`, signed `ballProgress` per team, `crowd`, falls). This is
+      how every role brain below is measured: against today's roster, same
+      seeds, one side changed. Keep `eval_striker`'s byte-for-byte pin
+      against `eval_pitch` when both sides are `chase`.
+- [ ] **1.5 Power, before the first A/B.** Run the baseline roster on 24
+      seeds × 300 s of 2v2 (~5 min) and record the CV of `ownGoals`,
+      `kicksBack`, `crowd` and `ballOwnHalf` the way `eval_pitch`'s
+      docstring records the first six — the seeds a 25% shift costs. A
+      metric that needs 100+ seeds is reported, not judged.
+
+### 2. Team = colorway — in the contract, the world, the stream, the editor
+
+- [ ] **2.1 Contract.** `Duck.team` ∈ {`cream`, `graphite`, `lavender`,
+      `sky`} or null; `validate_scenario` maps the legacy `left` → `cream`
+      and `right` → `sky` so every saved scene still loads, and `make_pitch`
+      emits cream (attacks +x) v sky. A scenario-level
+      `attacks: {team: "left"|"right"}` says which mouth a team attacks;
+      absent, it comes from the spawn heading as today — and validation
+      refuses a team whose ducks face both mouths with a `ScenarioError`
+      naming the duck, at PUT time, instead of the 500-after-swap above.
+      `eval-pitch` rows keep working (the metric dicts are keyed by team
+      name; `_fmt` sorts them).
+- [ ] **2.2 The world paints it.** After `compose`, write the colorway's
+      shell rgba into the duck's `*_shell_material` (left, right, top and
+      bottom head) and the trim colour (orange for cream / sky, yellow for
+      graphite / lavender) into `foot_*`, `ankle_*`, `jaw_material` —
+      per-duck materials exist, so it is `model.mat_rgba[...]` and nothing
+      else. `duck_info` streams `team` (and the swatch); the physics is
+      unchanged (a colour is not a mass), which `tests/test_arena.py`'s
+      step-for-step lock against the walk env must keep saying.
+- [ ] **2.3 The viewer paints it.** `buildBodyGeometries(scene, colorway)`
+      recolours geoms by material name at build time and is cached per
+      colorway (four at most, so still one geometry set per colorway, not
+      per duck); `<Duck>` takes the colorway from `SimDuck.team`; the
+      label carries a swatch; the editor's spawn rings take the team's
+      colour instead of amber. The scoreboard reads `goalsFor / against /
+      own` per team under the team's swatch, with the mouth counts in the
+      tooltip where they belong. → **check:** eight ducks on screen still
+      hold the WebGL context (the README's pitfall) — four geometry sets,
+      not eight.
+- [ ] **2.4 The editor.** Per duck: a team select (the four colorways or
+      none) and a role select (item 3.5); the brain select built from
+      `world.brains` (every registry kind, `chase` included) instead of the
+      hard-coded four; `ScenarioDuck` gains `team`, `role`, `odom`. A
+      "make it a pitch" control sets `goal_width` and the teams' mouths. A
+      duck placed on a pitch defaults to the team whose half it stands in.
+      `npm test` covers `applyFloorClick` for the default; the server test
+      covers the refusal in 2.1.
+
+### 3. Scripted positional play — the brains that make it look like soccer
+
+Scripted first, and over the existing `Chase`, not beside it: every role
+is the same state machine with a different *target* and a different rule
+for when to attack. The README's record is that nothing new at the brain
+tier has survived a fresh-seed confirmation; a role is a change to where a
+duck STANDS, which is the one thing the shape metrics in 1.3 can see
+directly.
+
+- [ ] **3.1 Never kick toward your own goal (the "clear").** In
+      `Chase._plan`, when the goal line is more than `aim_max` off the line
+      of sight, clamp the kick line to the edge of the aim cone on the
+      goal's side instead of giving up and kicking along the line of sight
+      — the ball goes sideways-and-forward, never backward. Two lines.
+      Then the real clear: with the ball inside `clear_zone` of the own
+      goal line (start at 0.6 m), the plan mode is `clear` — a kick spot
+      behind the ball on the line to the far touchline on the attacked
+      side, and the two-stage line-up's precision is not needed for it.
+      → **decide on:** `MICRODUCK_CHASE=aim_clamp=1 uv run eval-pitch
+      --per-side 2 --seeds 24 --out runs/t4-clamp.jsonl --tag clamp` against
+      the baseline, paired: `kicksBack` per team (events; the baseline is
+      28 of 53), `ownGoals` (events), signed `ballProgress` per team — and
+      falls (events) not up, because a clamped line-up walks round the
+      ball more. If back-kicks do not fall by half on 24 seeds the clamp is
+      not doing what the geometry says; trace it before touching pay.
+- [ ] **3.2 Defender.** A role the board assigns to the deepest rank: it
+      holds a spot on the line ball → own goal, `defend_depth` (0.5 m) out
+      from the goal line, facing the ball, and steps sideways to stay
+      between (the `_support` code with a different anchor). It attacks
+      only when the ball is inside its own third AND the board says it is
+      the quickest — the existing hysteresis, gated by zone — and it never
+      leaves its own half. Ball position from its own track when it sees
+      it, else the board's freshest fix (as `_support` does today).
+      → **decide on:** 2v2 and 3v3, 24 seeds each, defender + today's
+      roster v today's roster: `ownGoals` and `goalsAgainst` (events),
+      `depth` (the deepest duck is now ~0.5 m from its line, not 0.7 m
+      behind a ball at midfield), `crowd` down, `possession` not down by
+      more than the defender's share, falls (events) flat. A defender that
+      stands still near the boards is the fall mode to watch
+      (`support_margin`, `_beside`); render one seed before reading the
+      table.
+- [ ] **3.3 Striker.** The attacker role as today, plus a *position* when
+      a teammate has the ball: ahead of the ball toward the attacked goal
+      at `strike_ahead` (0.8 m) and OFF the kick line by `strike_side`
+      (0.4 m), facing the ball. Note what this is not: the poacher
+      (`support_mode="ahead"`) stood *on* the line ahead of the ball and
+      reversed on fresh seeds (34 v 31 goals over 24). The lateral offset
+      and the numbers it is judged on are the difference, and if it lands
+      inside the noise it ships off like the poacher did.
+      → **decide on:** signed `ballProgress` for the striker's team,
+      `goalsFor` (events, reported), `crowd` (a striker off the line is
+      not a second duck on the ball), falls.
+- [ ] **3.4 Midfielder (3v3).** The link: holds the middle third between
+      the ball and the centre spot, laterally on the ball's side; attacks
+      when quickest with the ball in the middle third; a ball in the final
+      third is the striker's, in the own third the defender's — three
+      zones, one attacker per zone, the board's hysteresis inside each.
+      Zones by odometry x, which the kickoff re-anchors to the pitch after
+      every goal (`test_a_goal_restarts_play_from_a_kickoff` pins that).
+- [ ] **3.5 Roles in the contract, on the board, in the inspector.**
+      `Duck.role` ∈ {`defender`, `midfielder`, `striker`} or null (null =
+      today's dynamic attacker / support). `Team.roles` reads the roster;
+      `payload()` carries each duck's role; the chase brain's `inputs.chase.role`
+      already reaches the inspector, so the page shows it for free; the
+      brain picker gains nothing — a role is a property of the duck on
+      the pitch, not a brain kind. Static roles first: dynamic swapping is
+      exactly the churn the board's hysteresis was built to stop, and "the
+      defender is nearest, swap" is its own measured item afterwards.
+
+### 4. Telling a teammate from an opponent by colour — perception honesty
+
+- [ ] **4.1 The sim detector reports a colorway.** A `duck` detection
+      gains `color` (the detected duck's team) with a confusion rate in the
+      noise presets — datasheet: right 95% inside 1.0 m, unknown beyond;
+      hostile: 75% and 0.6 m — and `name` stops carrying the id. On the
+      robot this is a colour classifier over the duck box, which is the
+      cheapest detector class anyone will add and the reason team =
+      colorway is honest rather than cosmetic. `Tracker` keeps the colour
+      on the track (majority vote over hits).
+- [ ] **4.2 Brains use it.** `Chase` splits `duck_keepout` into a
+      teammate rule (yield: the board already knows who is quicker) and an
+      opponent rule (contest, but stand rather than turn beside it); the
+      defender marks the nearest OPPONENT in its third rather than
+      shadowing the ball. → **decide on:** the 13-fall trace's category —
+      falls beside an opponent — as an event count over 24 seeds, and
+      `crowd`. The keep-out measured off at 0.4 m without this sense; it is
+      the sense that was missing, not the rule, so re-measure the rule
+      with it.
+- [ ] **4.3 Goal sensing** stays known-pitch + odometry (sim-roadmap 4.7)
+      until a drift preset makes the far goal's odometry position wrong by
+      more than the goal's half-width; measure that first with
+      `odom: hostile` on a 300 s run before inventing a goal detector.
+
+### 5. Learned role brains — after 3 lands, and only if a learned striker can reach the ball
+
+- [ ] `StrikerEnv` with the role as an observation (a one-hot in the
+      contract's reserved slots, plus the board's teammate poses in the
+      body frame — the same eight-float pattern the striker's goal geometry
+      used), scripted teammates and opponents as the world, reward = the
+      per-team signed `ballProgress` the benchmark judges by minus an own
+      goal (observable: the goal geometry slots). Every run named and
+      described (`train-brain --title/--description --group soccer-roles`;
+      add the group to `describe_brain.GROUPS`). The self-play ladder
+      (sim-roadmap 4.5) after that. → **decide on:** `eval-striker`
+      paired against the scripted role from item 3 on 24 fresh seeds —
+      `possession` and advance-per-kick not below the scripted brain's,
+      then the same numbers as 3.2 / 3.3. The striker-v1 lesson stands:
+      an approach that cannot reach the ball is not a reward problem.
+
+### What to build first, and what settles it
+
+1 → 2 → 3.1 → 3.2 → 3.5 → 3.3 → 3.4 → 4 → 5. The first visible change is
+2 (two colours on the pitch and a scoreboard that says who scored); the
+first measured one is 3.1, and it has the cheapest number on the list:
+back-kicks, 28 of 53 today, judged on 24 seeds in two minutes.
+
 ## Later / parked
 
 - **Port `find_ball` to an mjlab cfg** and retrain on GPU in upstream
