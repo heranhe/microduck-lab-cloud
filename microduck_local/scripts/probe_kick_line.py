@@ -55,6 +55,8 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
     w.data.qpos[q:q + 2] = rng.uniform(-0.2, 0.2, 2)
     pending: list[dict] = []
     out: list[dict] = []
+    plan: dict[str, tuple[float, tuple[float, float]] | None] = {}
+    prev_spot: dict[str, object] = {}
     goal_seq = 0
     while w.t < seconds:
         for d in w.ducks.values():
@@ -70,8 +72,31 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             # ball again. Both halves of "which way is it going" in one
             # number.
             if intent.skill in MAP_DEG and b._hunt_u is not None:
+                # Where the ball REALLY is relative to the kicking body at the
+                # instant of the swing. The sweet spot is `kick_ahead` 0.08 m
+                # forward and `kick_side` 0.06 m to the foot's side, and the
+                # deflection is a steep function of that offset — so this says
+                # whether a kick was ever going to go where it was aimed.
+                bx, by = w.ball_xy()
+                ox, oy, oyaw = w.odom(d)
+                dx, dy = bx - ox, by - oy
+                ahead = dx * math.cos(oyaw) + dy * math.sin(oyaw)
+                side = -dx * math.sin(oyaw) + dy * math.cos(oyaw)
                 pending.append({"t": w.t, "duck": d.id, "foot": intent.skill,
-                                "u": b._hunt_u, "heading": w.odom(d)[2], "ball0": w.ball_xy()})
+                                "u": b._hunt_u, "heading": oyaw, "ball0": (bx, by),
+                                "ahead": round(ahead, 3), "side": round(side, 3),
+                                # How far the ball has drifted since the spot
+                                # this swing is standing on was planned.
+                                "moved": None if plan.get(d.id) is None else
+                                round(math.dist((bx, by), plan[d.id][1]), 3),
+                                "plan_age": None if plan.get(d.id) is None else
+                                round(w.t - plan[d.id][0], 2)})
+            # Remember when this duck last laid a spot, and where the ball was
+            # then: the plan's age and the ball's drift since are the two ways
+            # a line-up goes wrong that aiming cannot fix.
+            if b.spot is not None and b.state == "lineup" and prev_spot.get(d.id) != b.spot:
+                plan[d.id] = (w.t, w.ball_xy())
+            prev_spot[d.id] = b.spot
             w.apply_intent(d, intent)
             if d.skill is None:
                 d.set_cmd(w.data, intent.twist, intent.head)
@@ -88,12 +113,14 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             bx, by = w.ball_xy()
             dx, dy = bx - k["ball0"][0], by - k["ball0"][1]
             dist = math.hypot(dx, dy)
+            rec = {"t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
+                   "dist": round(dist, 3), "ahead": k["ahead"], "side": k["side"],
+                   "moved": k["moved"], "plan_age": k["plan_age"]}
             if dist < 0.10:                    # the swing missed: no line to speak of
-                out.append({**k, "dist": dist, "went": None, "err": None, "off_heading": None, "ball0": None})
+                out.append({**rec, "err": None, "off_heading": None})
                 continue
             went = math.atan2(dy, dx)
-            out.append({"t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
-                        "dist": round(dist, 3),
+            out.append({**rec,
                         "err": round(math.degrees(wrap(went - k["u"])), 2),
                         "off_heading": round(math.degrees(wrap(went - k["heading"])), 2)})
         pending = keep
@@ -139,6 +166,27 @@ def main() -> None:
     e = np.array([r["err"] for r in hit])
     print(f"\nall kicks: mean {e.mean():+.1f}°, mean |error| {np.abs(e).mean():.1f}°, "
           f"sd {e.std(ddof=1):.1f}°")
+    # Why a kick scatters: where the ball actually was, and how stale the plan
+    # was. The sweet spot is 6-10 cm ahead and 4-8 cm to the side.
+    sweet = [r for r in rows if r.get("ahead") is not None]
+    if sweet:
+        ah = np.array([r["ahead"] for r in sweet])
+        sd = np.array([abs(r["side"]) for r in sweet])
+        mv = np.array([r["moved"] for r in sweet if r.get("moved") is not None])
+        ag = np.array([r["plan_age"] for r in sweet if r.get("plan_age") is not None])
+        onspot = ((ah >= 0.06) & (ah <= 0.10) & (sd >= 0.04) & (sd <= 0.08)).mean()
+        whiff = np.array([r.get("err") is None for r in rows])
+        print(f"\nwhere the ball WAS when the swing fired ({len(sweet)} kicks; "
+              f"the sweet spot is 0.06-0.10 m ahead, 0.04-0.08 m to the side):")
+        print(f"  ahead of the trunk   median {np.median(ah):.3f} m   IQR "
+              f"{np.percentile(ah, 25):.3f}-{np.percentile(ah, 75):.3f}")
+        print(f"  to the side          median {np.median(sd):.3f} m   IQR "
+              f"{np.percentile(sd, 25):.3f}-{np.percentile(sd, 75):.3f}")
+        print(f"  actually ON the sweet spot: {onspot:.0%} of kicks;  whiffed "
+              f"(<10 cm of ball travel): {whiff.mean():.0%}")
+        if len(mv):
+            print(f"  ball drift since the spot was planned  median {np.median(mv):.3f} m "
+                  f"(90th {np.percentile(mv, 90):.3f});  plan age median {np.median(ag):.2f} s")
     print("READ IT AS: 'mean err' is the SYSTEMATIC part — it lands on every kick of that foot "
           "the same way and can be designed out.\n'sd' is the scatter, which cannot. "
           "'mean off heading' is the same error measured against the BODY, which is what the "
