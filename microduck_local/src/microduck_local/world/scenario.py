@@ -9,7 +9,10 @@ Format v1 (JSON, saved under microduck_local/scenarios/<name>.json):
                 "mass": 0.0, "rgba": [r, g, b, a]}],     # mass 0 = static scenery
      "balls": [{"pos": [x, y], "radius": 0.035, "mass": 0.015}],
      "ducks": [{"id": "d0", "spawn": [x, y, yaw], "policy": "pollen:alpha_walking",
-                "tof": "datasheet", "detector": "datasheet", "brain": "follow"}],
+                "tof": "datasheet", "detector": "datasheet", "brain": "follow",
+                "team": "cream", "role": "striker"}],      # soccer: a colorway, a job
+     "goal_width": 0.7,                                # > 0 makes it a pitch
+     "attacks": {"cream": "right"},                    # …and which mouth a team attacks
      "persons": [{"id": "p0", "pos": [x, y], "yaw": 0.0, "path": [[x, y], ...],
                   "speed": 0.3, "radius": 0.2, "height": 1.0, "yield_m": 0.0}],  # kinematic walkers
      "pickables": [{"id": "t0", "kind": "brick"|"block"|"sock", "pos": [x, y], "yaw": 0.0}],
@@ -41,6 +44,32 @@ DUCK_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
 BRAIN_RE = re.compile(r"^[a-z][a-z0-9_]*(?::[A-Za-z0-9][A-Za-z0-9_.-]{0,63})?$")
 MAX_DUCKS = 12
 MAX_PERSONS = 4
+
+# A team IS a colorway (roadmap Track 4.2). Two reasons, one practical and one
+# honest. Practical: the editor and the viewer need to say which duck is on
+# which side, and a shell colour is the only thing a person watching six ducks
+# can read at a glance. Honest: on the robot two ducks of the same colorway
+# cannot be told apart by any sensor either, which is exactly what a team is —
+# so a team that is a colour is a team the hardware could actually play.
+#
+# The four Pollen ships (press kit): shell, then the trim-and-beak colour that
+# goes with it. sRGB, as the MJCF materials are.
+TEAM_COLORWAYS: dict[str, dict[str, tuple[float, float, float]]] = {
+    "cream":    {"shell": (0.969, 0.902, 0.796), "trim": (0.95, 0.55, 0.13)},   # #f7e6cb, orange trim
+    "graphite": {"shell": (0.424, 0.416, 0.408), "trim": (0.98, 0.78, 0.10)},   # #6c6a68, yellow trim
+    "lavender": {"shell": (0.749, 0.663, 0.812), "trim": (0.98, 0.78, 0.10)},   # #bfa9cf, yellow trim
+    "sky":      {"shell": (0.663, 0.859, 0.910), "trim": (0.95, 0.55, 0.13)},   # #a9dbe8, orange trim
+}
+# What the first pitches called their teams. They were the two SIDES of the
+# pitch, which collided head-on with the goal MOUTH keys the World writes
+# (`goals["right"]` is the mouth at +x, which the "left" team attacks) — a
+# collision the README needed a standing warning paragraph for. A saved scene
+# still loads: the names map to the two colorways `make_pitch` now uses.
+LEGACY_TEAMS = {"left": "cream", "right": "sky"}
+# What a duck is for on a pitch (roadmap Track 4.3). None keeps today's
+# behaviour: the team blackboard picks one attacker by predicted time to the
+# ball and the rest support it.
+ROLES = ("defender", "midfielder", "striker")
 MAX_OBJECTS = 200
 MAX_FLOOR_M = 20.0
 MAX_WALL_HEIGHT_M = 2.0
@@ -84,7 +113,8 @@ class Duck:
     detector: str | None = "datasheet" # camera+NPU detector preset, None = none
     brain: str | None = None           # brain kind in auto mode; None = wander if ToF else script
     odom: str = "ideal"                # odometry drift preset the brain's (x, y, yaw) carries (roadmap 1.7)
-    team: str | None = None            # soccer: teammates share a blackboard (brain/team.py); None = alone
+    team: str | None = None            # soccer: a TEAM_COLORWAYS name; teammates share a blackboard (brain/team.py)
+    role: str | None = None            # soccer: a ROLES name; None = the board's dynamic attacker/support
 
 
 @dataclass
@@ -142,6 +172,11 @@ class Scenario:
     pickables: list[Pickable] = field(default_factory=list)
     basket: Basket | None = None
     goal_width: float = 0.0            # > 0: a pitch — goals on both short walls this wide (World counts them)
+    # Which goal MOUTH each team attacks ({"cream": "right"}), for a pitch
+    # whose ducks are not all placed facing it. Absent, a team attacks the
+    # mouth its spawn heading faces, which is what every pitch did before this
+    # field and what `World.goal_for` still falls back to.
+    attacks: dict[str, str] = field(default_factory=dict)
     collision: str = "walk"
     version: int = SCENARIO_VERSION
 
@@ -262,9 +297,16 @@ def validate_scenario(raw: dict) -> Scenario:
         if odom not in TOF_PRESETS:
             raise ScenarioError(f"ducks[{i}].odom must be one of {TOF_PRESETS}")
         team = d.get("team")
-        if team is not None and (not isinstance(team, str) or not DUCK_ID_RE.match(team)):
-            raise ScenarioError(f"ducks[{i}].team must be a short name or null")
-        ducks.append(Duck(did, spawn, policy, tof, det, brain, odom, team))
+        if isinstance(team, str):
+            team = LEGACY_TEAMS.get(team, team)      # a scene saved when teams were sides
+        if team is not None and team not in TEAM_COLORWAYS:
+            raise ScenarioError(f"ducks[{i}].team must be one of {sorted(TEAM_COLORWAYS)} or null")
+        role = d.get("role")
+        if role is not None and role not in ROLES:
+            raise ScenarioError(f"ducks[{i}].role must be one of {sorted(ROLES)} or null")
+        if role is not None and team is None:
+            raise ScenarioError(f"ducks[{i}] has a role but no team")
+        ducks.append(Duck(did, spawn, policy, tof, det, brain, odom, team, role))
     if len(ducks) > MAX_DUCKS:
         raise ScenarioError(f"more than {MAX_DUCKS} ducks")
     persons = []
@@ -316,9 +358,45 @@ def validate_scenario(raw: dict) -> Scenario:
     goal_width = raw.get("goal_width", 0.0) or 0.0
     if not isinstance(goal_width, (int, float)) or not 0.0 <= goal_width <= 5.0:
         raise ScenarioError("goal_width must be a number in [0, 5]")
+    attacks = _validate_attacks(raw.get("attacks") or {}, ducks, float(goal_width))
     return Scenario(name=name, seed=seed, floor=floor, walls=walls, boxes=boxes, goal_width=float(goal_width),
                     balls=balls, ducks=ducks, persons=persons, pickables=pickables,
-                    basket=basket, collision=collision)
+                    basket=basket, collision=collision, attacks=attacks)
+
+
+def _validate_attacks(raw: dict, ducks: list[Duck], goal_width: float) -> dict[str, str]:
+    """Which mouth each team attacks, and the check that every team has ONE.
+
+    Without `attacks` a duck attacks the mouth its spawn heading faces
+    (`World.goal_for`), so a roster placed by hand with one duck turned round
+    is a team attacking both goals at once. That used to surface as a
+    `ValueError` out of `PitchMetrics` — raised AFTER the world had been
+    swapped in, so the page answered 500 and went on streaming the old world's
+    score. It belongs here, where the editor's save is refused with the duck's
+    name in the message and nothing has been swapped anywhere."""
+    if not isinstance(raw, dict):
+        raise ScenarioError("attacks must be an object")
+    teams = {d.team for d in ducks if d.team}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if k not in teams:
+            raise ScenarioError(f"attacks[{k!r}]: no duck is on that team")
+        if v not in ("left", "right"):
+            raise ScenarioError(f"attacks[{k!r}] must be 'left' or 'right' (the goal MOUTH), got {v!r}")
+        out[k] = v
+    if len(set(out.values())) < len(out):
+        raise ScenarioError("attacks: two teams cannot attack the same goal")
+    if goal_width <= 0:
+        return out
+    for tm in sorted(teams - set(out)):
+        facing = {d.id: (math.cos(d.spawn[2]) >= 0) for d in ducks if d.team == tm}
+        first = next(iter(facing.values()))
+        if len(set(facing.values())) > 1:
+            odd = sorted(k for k, v in facing.items() if v != first)
+            raise ScenarioError(
+                f"team {tm!r} faces both goals ({', '.join(odd)} the other way), so which one it "
+                f"attacks is undefined - turn the duck round or set attacks[{tm!r}]")
+    return out
 
 
 def load_scenario(path: Path) -> Scenario:
@@ -396,14 +474,22 @@ def make_playroom(seed: int = 0, n: int = 6, size: tuple[float, float] = (3.0, 2
 
 
 def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
-               goal_width: float = 0.7, per_side: int = 1) -> Scenario:
+               goal_width: float = 0.7, per_side: int = 1,
+               teams: tuple[str, str] = ("cream", "sky")) -> Scenario:
     """`per_side` ducks a side, one ball, walls all round (the soccer track).
     A goal is the ball crossing either short wall's line inside
-    `goal_width`; the World counts them and re-centres the ball. The left
-    team ("left", d0…) attacks +x, the right team ("right") attacks −x;
-    the pitch grows a little with the roster. Teammates share a
+    `goal_width`; the World counts them and re-centres the ball. The CREAM
+    team (d0…) spawns at −x and attacks the +x mouth; the SKY team attacks
+    −x; the pitch grows a little with the roster. Teammates share a
     blackboard (brain/team.py) — a message a second over Wi-Fi on the
-    robot — that says who attacks and where the ball was seen."""
+    robot — that says who attacks and where the ball was seen.
+
+    The teams are colorways and not "left"/"right" on purpose: those were
+    the two SIDES, and the World writes its goal counts under the two
+    MOUTHS with the same two words, so `goals["right"]` was the left
+    team's tally and every per-side reading of a row was one slip away
+    from being inverted (`eval_pitch` carries the warning that slip
+    earned). A cream duck and the +x mouth cannot be confused."""
     per_side = max(1, int(per_side))
     if size is None:
         size = (3.0 + 0.4 * (per_side - 1), 2.5 + 0.35 * (per_side - 1))
@@ -412,12 +498,13 @@ def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
     walls = [Wall(corners[i], corners[(i + 1) % 4], 0.3, 0.02) for i in range(4)]
     ducks = []
     ys = [0.0] if per_side == 1 else [(-0.5 + i / (per_side - 1)) * (hy - 0.5) * 1.4 for i in range(per_side)]
+    home, away = teams
     for i, y in enumerate(ys):
         x = 0.9 + 0.3 * (i % 2)                       # a little staggered, so nobody starts nose to nose
-        ducks.append(Duck(f"d{i}", (-x, y, 0.0), None, "datasheet", "datasheet", "chase", team="left"))
+        ducks.append(Duck(f"d{i}", (-x, y, 0.0), None, "datasheet", "datasheet", "chase", team=home))
     for i, y in enumerate(ys):
         x = 0.9 + 0.3 * (i % 2)
-        ducks.append(Duck(f"d{per_side + i}", (x, -y, math.pi), None, "datasheet", "datasheet", "chase", team="right"))
+        ducks.append(Duck(f"d{per_side + i}", (x, -y, math.pi), None, "datasheet", "datasheet", "chase", team=away))
     return Scenario(name=name or ("pitch" if per_side == 1 else f"pitch-{per_side}v{per_side}"),
                     floor=(size[0] + 0.5, size[1] + 0.5), walls=walls,
                     balls=[Ball((0.0, 0.0))], ducks=ducks, goal_width=goal_width)

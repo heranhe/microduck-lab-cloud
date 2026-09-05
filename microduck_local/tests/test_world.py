@@ -146,6 +146,54 @@ def test_all_collision_robot_variant_composes():
     assert mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, "d0/mouth_tip") >= 0
 
 
+def test_a_team_is_a_colorway_and_a_legacy_scene_still_loads():
+    """Track 4.2: the two teams used to be called after the two SIDES of the
+    pitch, which are the same two words the World writes its goal MOUTHS
+    under — the ambiguity `eval_pitch` carries a standing warning about. A
+    colorway cannot be confused with a mouth, and it is also the only thing a
+    person watching six ducks can read at a glance."""
+    from microduck_local.world import make_pitch
+    from microduck_local.world.scenario import TEAM_COLORWAYS, ScenarioError, validate_scenario
+    sc = make_pitch(per_side=2)
+    assert [d.team for d in sc.ducks] == ["cream", "cream", "sky", "sky"]
+    assert all(t in TEAM_COLORWAYS for t in ("cream", "sky"))
+    raw = sc.to_dict()
+    raw["ducks"][0]["team"] = "left"                       # a scene saved before the rename
+    assert validate_scenario(raw).ducks[0].team == "cream"
+    for field, bad in (("team", "red"), ("role", "goalie")):
+        raw = sc.to_dict()
+        raw["ducks"][0][field] = bad
+        with pytest.raises(ScenarioError, match=field):
+            validate_scenario(raw)
+    raw = sc.to_dict()
+    raw["ducks"][0]["role"] = "striker"                    # a role needs a team to have it on
+    raw["ducks"][0]["team"] = None
+    with pytest.raises(ScenarioError, match="role but no team"):
+        validate_scenario(raw)
+
+
+def test_a_team_facing_both_goals_is_refused_at_validation_not_at_load():
+    """It used to raise out of `PitchMetrics` — after the world had been swapped
+    in, so /sim answered 500 and went on streaming the previous world's score.
+    The editor's save is the right place to say no."""
+    from microduck_local.world import World, make_pitch
+    from microduck_local.world.scenario import ScenarioError, validate_scenario
+    sc = make_pitch(per_side=2)
+    raw = sc.to_dict()
+    raw["ducks"][1]["spawn"] = [-0.9, 0.5, math.pi]        # a cream duck facing its own goal
+    with pytest.raises(ScenarioError, match="faces both goals"):
+        validate_scenario(raw)
+    # Declaring the mouth is how a roster like that is legal — and then the
+    # World hands BOTH cream ducks the same goal, whatever way they face.
+    raw["attacks"] = {"cream": "right"}
+    sc2 = validate_scenario(raw)
+    w = World(sc2)
+    hx = sc2.floor[0] / 2 - 0.25
+    assert w.goal_for(w.ducks["d0"]) == (hx, 0.0)
+    assert w.goal_for(w.ducks["d1"]) == (hx, 0.0)          # …the one it is turned away from
+    assert w.goal_for(w.ducks["d2"]) == (-hx, 0.0)
+
+
 def test_pitch_counts_goals_and_recentres_the_ball():
     """Soccer, first form: a ball across a short wall's line inside the goal
     width is a goal for that side; the ball comes back to the centre."""

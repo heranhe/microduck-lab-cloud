@@ -241,7 +241,8 @@ def test_a_pitch_streams_the_metrics_the_benchmark_judges_by():
     soc = st.frame(np.zeros(3), "auto")["soccer"]
     assert soc is not None and set(soc) >= {"left", "right", "kicked", "bumped",
                                             "ballAdvance", "ballProgress", "possession"}
-    assert set(soc["possession"]) == {"left", "right"}          # per team, as the battery reports it
+    assert set(soc["possession"]) == {"cream", "sky"}           # per TEAM (a colorway), as the battery reports it
+    assert set(soc["ownGoals"]) == {"cream", "sky"} and soc["goalsUnattributed"] == 0
     assert all(isinstance(v, (int, float)) for v in soc["ballAdvance"].values())
     tidy = WorldState(None)
     tidy.preload("playroom")

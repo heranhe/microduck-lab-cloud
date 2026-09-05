@@ -1407,10 +1407,15 @@ possession rule (last team within 0.25 m).
 fields become `eval-pitch`'s in 1.1. Four seeds × 300 s, shipped `chase`
 both sides, seeds 0–3:
 
-| roster | goals (kicked in / walked in) | own goals | kicks | kicks aimed away from the attacked goal | falls |
-|---|---:|---:|---:|---:|---:|
-| 1v1 | 6 (0 / 6) | 3 | 26 | **14 (54%)** | 4 |
-| 2v2 | 8 (1 / 7) | **8** | 27 | **14 (52%)** | 16 |
+| roster | goals (kicked in / walked in) | own goals | kicks | aimed away by the PLAN | sent back by the BALL | falls |
+|---|---:|---:|---:|---:|---:|---:|
+| 1v1 | 6 (0 / 6) | 2 (+2 unplaced) | 26 | **14 (54%)** | 12 (46%) | 4 |
+| 2v2 | 8 (1 / 7) | **6 (+2 unplaced)** | 27 | **14 (52%)** | 18 (67%) | 16 |
+
+Own goals here are the shipped instrument's (item 1.1: the kicker inside 4 s,
+else the last team on the ball inside 4 s, else unplaced); the probe's looser
+"whoever last held it, however long ago" gave 3 and 8. Both say the same
+thing about 2v2.
 
 Read it the playbook's way: fourteen goals is an event count that resolves
 nothing; **28 back-kicks out of 53 kicks** is the finding, and it is the
@@ -1429,7 +1434,16 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
 
 ### 1. A benchmark that can see an own goal, a back-kick and a pile-up
 
-- [ ] **1.1 Goals per TEAM: for, against, own.** `World` records the team
+- [x] **1.1 Goals per TEAM: for, against, own — DONE (2026-09-05).**
+      `World.last_kick_duck` and `World.goal_credit_duck` (filled on exactly
+      the test the World's own kicked/walked-in split uses, so the two cannot
+      disagree), and `PitchMetrics` turns them into `goalsFor`, `goalsAgainst`,
+      `ownGoals` per team plus a run-scalar `goalsUnattributed`. `goalsFor` and
+      `goalsAgainst` need no credit at all — the mouth a team attacks is known
+      — which is why they are split out from `ownGoals`, the only one that
+      does. `eval-pitch` prints the ledger per team; 8 tests in
+      `tests/test_pitch_metrics.py` drive it on hand-built states. Baseline
+      reproduced through it (the table in item 0). The original: `World` records the team
       of the last kick (`last_kick_team`, beside `last_kick_t`) and
       `PitchMetrics` attributes each goal at the tick it happens: the
       kicking team if a kick started within `KICK_GOAL_S`, else the last
@@ -1442,7 +1456,18 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       `uv run eval-pitch --seeds 4 --seconds 300` → the four seeds above
       reproduce (the loop is deterministic in the seed: the probe's two
       runs matched to the tick).
-- [ ] **1.2 Kick direction, measured off the BALL, not the plan.** Per
+- [x] **1.2 Kick direction, measured off the BALL — DONE, and it agrees with
+      the plan (2026-09-05).** `kickCount`, `kicksBack` and `kickCarry` per
+      team, off each duck's own kick window (`WorldDuck.skill_t0`, not the
+      World's single last-kick stamp — two ducks kicking on the same step
+      would have collapsed into one), settled `CARRY_S` later or at the goal
+      line if a goal lands first. The decide-on, answered: **28 of 53 kicks
+      back by the plan line, 30 of 53 by the ball** over the same 4+4 seeds.
+      Aggregate agreement; per roster the two differ by 2 kicks (1v1) and 4
+      (2v2), which is noise at this size. So the aim rule (3.1) is the
+      mechanism, and line-up scatter is neither shown nor ruled out — it needs
+      the 24-seed battery, where it will show up as the ball number staying
+      high after the plan number falls. The original: Per
       kick, the ball's signed displacement toward the kicker's goal over
       the 2 s after the swing (`CARRY_S`) and its angle to the goal line;
       `kicksBack` per team = kicks whose 2 s displacement is toward the
@@ -1452,14 +1477,27 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       baseline's 54% by the plan line against the ball's own number; if
       they differ by more than the noise, the line-up is scattering shots
       and item 3.1 is only half the story.
-- [ ] **1.3 Shape.** Per team at the control tick: `ballOwnHalf` (s/min
+- [x] **1.3 Shape — DONE (2026-09-05).** `ballOwnHalf`, `spread`, `crowd`
+      (`CROWD_R` 0.5 m) and `depth` per team at the control tick, `None` for
+      the two a one-duck team cannot have. Baseline 2v2, 4 seeds: crowd
+      **9% / 17%**, spread 0.62 / 0.70 m, depth 1.30 / 1.37 m of a 1.7 m half
+      — i.e. nobody stays back at all, which is what item 3.2 is for.
+      `ballOwnHalf` is printed per team and never averaged: over the pair it
+      is 60 s/min by construction. The original: Per team at the control tick: `ballOwnHalf` (s/min
       the ball is in the team's own half), `spread` (mean pairwise distance
       between teammates), `crowd` (fraction of ticks with two teammates
       inside 0.5 m of the ball — the 24.5% the README quotes from a trace,
       made a row field), `depth` (the deepest teammate's distance from its
       own goal line). These are what "pile up" and "somebody defends"
       mean as numbers; goals cannot say either.
-- [ ] **1.4 A roster A/B harness.** `eval_striker` already swaps the LEFT
+- [x] **1.4 A roster A/B harness — DONE (2026-09-05).** `eval-striker` takes
+      a roster a side: `--left "chase+defender,chase" --right chase`, one entry
+      a duck (a brain kind with an optional `+role`), a single entry covering
+      the side. It writes the roster onto the scenario's ducks and builds every
+      brain through the same `brain_kwargs` the lab uses, so the harness and
+      the page cannot drift. `side_reading` is per TEAM and now carries the
+      ledger (own goals, back-kicks, crowd); the byte-for-byte pin against
+      `eval-pitch` still holds when both sides are plain `chase`. The original: `eval_striker` already swaps the LEFT
       duck's brain (`--left striker:v1`); generalise it to a per-duck spec
       per side — `--left chase,chase --right defender,striker` — with
       `--out/--tag` resume and a paired summary (per-seed wins on
@@ -1475,7 +1513,18 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
 
 ### 2. Team = colorway — in the contract, the world, the stream, the editor
 
-- [ ] **2.1 Contract.** `Duck.team` ∈ {`cream`, `graphite`, `lavender`,
+- [x] **2.1 Contract — DONE (2026-09-05), and it closed an old trap.**
+      `TEAM_COLORWAYS` (cream, graphite, lavender, sky, each with its trim
+      colour), `Duck.team` restricted to them with `left`/`right` mapping
+      forward so saved scenes still load, `Duck.role` from `ROLES`, and
+      `Scenario.attacks` declaring the mouth a team attacks. `make_pitch` is
+      cream (−x, attacks +x) v sky. The trap: the teams used to be called
+      after the two SIDES, which are the same two words the World writes its
+      goal MOUTHS under — the ambiguity `eval_pitch` carries a standing
+      warning paragraph about. A cream duck and the +x mouth cannot be
+      confused, so that class of misreading is now impossible rather than
+      documented. A team facing both goals is refused by `validate_scenario`
+      with the duck's name in the message, at PUT time. The original: `Duck.team` ∈ {`cream`, `graphite`, `lavender`,
       `sky`} or null; `validate_scenario` maps the legacy `left` → `cream`
       and `right` → `sky` so every saved scene still loads, and `make_pitch`
       emits cream (attacks +x) v sky. A scenario-level

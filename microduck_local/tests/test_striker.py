@@ -310,6 +310,40 @@ def test_solo_drops_the_opponent_but_keeps_the_pitch():
     assert [(w.start, w.end) for w in solo.walls] == [(w.start, w.end) for w in full.walls]
 
 
+def test_a_roster_spec_puts_one_brain_and_role_on_each_duck_of_a_side():
+    """The A/B harness for Track 4: both sides keep the same world, the same
+    walker and the same metrics, and ONE side's roster changes."""
+    from microduck_local.eval_striker import apply_roster, home_away, parse_roster, pitch_scenario
+    assert parse_roster("chase", 3) == [("chase", None)] * 3          # one entry covers the side
+    assert parse_roster("chase+defender,chase,chase+striker", 3) == [
+        ("chase", "defender"), ("chase", None), ("chase", "striker")]
+    sc = apply_roster(pitch_scenario(2, solo=False), "chase+defender,chase", "chase")
+    assert home_away(sc) == ("cream", "sky")
+    assert [(d.team, d.brain, d.role) for d in sc.ducks] == [
+        ("cream", "chase", "defender"), ("cream", "chase", None),
+        ("sky", "chase", None), ("sky", "chase", None)]
+    # …and the result is still a scenario the contract accepts.
+    from microduck_local.world.scenario import validate_scenario
+    assert validate_scenario(sc.to_dict()) == sc
+
+
+def test_a_roster_that_does_not_fit_the_side_is_refused_before_anything_runs():
+    from microduck_local.eval_striker import apply_roster, parse_roster, pitch_scenario
+    with pytest.raises(SystemExit):
+        parse_roster("chase,chase", 3)                                # two entries, three ducks
+    with pytest.raises(SystemExit):
+        parse_roster("chase+goalie", 1)                               # not a role
+    with pytest.raises(SystemExit):
+        apply_roster(pitch_scenario(1, solo=False), "chase,chase", "chase")
+
+
+def test_a_solo_pitch_has_no_away_side_to_give_a_roster_to():
+    from microduck_local.eval_striker import apply_roster, home_away, pitch_scenario
+    sc = apply_roster(pitch_scenario(1, solo=True), "striker:nobody", "chase")
+    assert home_away(sc) == ("cream", None)
+    assert [(d.team, d.brain) for d in sc.ducks] == [("cream", "striker:nobody")]
+
+
 def test_side_reading_quotes_advance_progress_and_advance_per_kick_together():
     """`ballAdvance` alone is inflatable by churn (eval_pitch's docstring):
     the reader must always get the signed progress and the per-kick number

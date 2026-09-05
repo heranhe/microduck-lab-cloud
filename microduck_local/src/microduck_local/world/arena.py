@@ -327,6 +327,7 @@ class World:
         targets += [Target(t.id, "toy", self.pickables[t.id],
                            max(PICKABLE_KINDS[t.kind]["size"]) / 2) for t in scenario.pickables]
         self.basket = scenario.basket
+        self.team_of = {d.id: d.team for d in scenario.ducks}
         # Soccer (first form): a pitch counts goals on both short walls.
         self.goal_width = float(scenario.goal_width)
         self.goals = {"left": 0, "right": 0}
@@ -338,6 +339,15 @@ class World:
         self.kickoff_hold_s = 1.0
         self.kickoff_until = -1.0
         self.last_kick_t = -1e9            # when a kick skill last started (attribution, KICK_GOAL_S)
+        self.last_kick_duck: str | None = None    # …and which duck took it
+        # Who the World says put the last goal in: the duck whose kick was
+        # inside KICK_GOAL_S at the moment the ball crossed, else None (it
+        # was walked in). Exactly the test `goals_kicked` / `goals_bumped`
+        # splits on, recorded per goal so a caller that knows the ROSTER —
+        # `PitchMetrics`, which owns the duck→team map — can turn it into
+        # "this team scored" or "this team scored on itself" without
+        # re-deriving the window and disagreeing with the split above.
+        self.goal_credit_duck: str | None = None
         self.goals_kicked = 0
         self.goals_bumped = 0
         self._ball_joint: int | None = None
@@ -411,6 +421,8 @@ class World:
         self.last_goal = None
         self.kickoff_until = -1.0
         self.last_kick_t = -1e9
+        self.last_kick_duck = None
+        self.goal_credit_duck = None
         self.goals_kicked = self.goals_bumped = 0
         for p in self.persons.values():
             p.reset(self.data)
@@ -470,8 +482,10 @@ class World:
             self.goal_seq += 1
             if self.t - self.last_kick_t <= KICK_GOAL_S:
                 self.goals_kicked += 1
+                self.goal_credit_duck = self.last_kick_duck
             else:
                 self.goals_bumped += 1
+                self.goal_credit_duck = None
             self.kickoff()
 
     def kickoff(self) -> None:
@@ -503,10 +517,19 @@ class World:
 
     def goal_for(self, d: WorldDuck) -> tuple[float, float] | None:
         """The goal this duck attacks (world = odometry-at-spawn frame): the
-        one its team is placed to face, by its spawn heading. None off a pitch."""
+        mouth its team is declared to attack (`Scenario.attacks`), else the one
+        its spawn heading faces. None off a pitch.
+
+        The declaration exists because the heading rule cannot answer for a
+        roster placed by hand — a defender is placed facing its OWN goal — and
+        an undeclared team whose ducks disagree is refused by
+        `validate_scenario` rather than resolved here."""
         if self.goal_width <= 0:
             return None
         hx = self.scenario.floor[0] / 2 - 0.25
+        mouth = self.scenario.attacks.get(self.team_of.get(d.id) or "")
+        if mouth is not None:
+            return (hx if mouth == "right" else -hx), 0.0
         return (hx if math.cos(d.spawn[2]) >= 0 else -hx), 0.0
 
     def ball_xy(self) -> tuple[float, float] | None:
@@ -662,7 +685,7 @@ class World:
         d._hold_yaw = None
         if name.startswith("kick"):
             self._set_gain_ratio(d, STANDING_GAIN_RATIO)
-            self.last_kick_t = self.t
+            self.last_kick_t, self.last_kick_duck = self.t, d.id
         if d.holding is None:
             d.beak_closed = False          # a cycle starts with an open, empty beak
         return True

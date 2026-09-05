@@ -11,11 +11,17 @@ on /sim.
 
 READ THE `left`/`right` GOAL KEYS THE WAY THE WORLD WRITES THEM. They are
 goal MOUTHS, not team scores: `World._check_goal` puts a ball crossing at +x
-into `goals["right"]`, and `World.goal_for` puts the LEFT team's attack at
-+x — so a row's `right` count is the number of goals the LEFT TEAM SCORED.
-The run TOTAL (`left + right`) is unaffected, but every per-side reading of
-a row is inverted if this is missed, and reading it the natural way flipped
-the sign of a whole correlation table here before it was caught.
+into `goals["right"]`, and the team spawned at −x attacks +x — so a row's
+`right` count is the number of goals THE TEAM AT −x SCORED. The run TOTAL
+(`left + right`) is unaffected, but every per-side reading of a row is
+inverted if this is missed, and reading it the natural way flipped the sign
+of a whole correlation table here before it was caught.
+
+Two things now stand between that trap and a reader. The teams are
+COLORWAYS (`cream` at −x, `sky` at +x — Track 4.2), so a team name and a
+mouth name can no longer be the same word; and `goalsFor` / `goalsAgainst`
+per team are in the row (below), which is the translation done once in the
+one place that cannot get it wrong.
 
 Measured, 16 seeds x 300 s of 1v1 per arm, shipped lens vs a 120x93 deg one
 (two independent 8-seed batteries, both replicated), coefficient of variation
@@ -51,6 +57,33 @@ much of the run a duck spends standing over the ball. Ball progress summed
 over both teams is near zero by construction in self-play (the two sides
 attack opposite goals) and carries nothing; it is a per-TEAM metric, for an
 asymmetric matchup.
+
+THE PER-TEAM LEDGER (roadmap Track 4.1). The `left`/`right` mouth keys above
+cannot tell an own goal from a scored one, and the first four seeds measured
+through them hid the fact that 8 of 8 goals in a 2v2 battery were own goals.
+So a row also carries, per TEAM (`world/metrics.py` documents the credit
+rule):
+
+    goalsFor/goalsAgainst  the mouth this team attacks / defends. Exact — no
+                           attribution, so nothing to get wrong.
+    ownGoals               the subset of goalsAgainst this team put in itself,
+                           credited to the kicker inside KICK_GOAL_S else to
+                           the last team on the ball inside GOAL_CREDIT_S.
+    goalsUnattributed      goals neither test could place (a run-scalar).
+    kickCount/kicksBack    kicks, and the ones whose ball ended up nearer the
+                           kicker's OWN goal CARRY_S later. Measured off the
+                           ball, never off the brain's plan: the plan says
+                           what it meant to do (rule 6).
+    kickCarry              metres toward the attacked goal summed over that
+                           team's kicks; divide by kickCount for the mean.
+    ballOwnHalf            s/min the ball spends in this team's own half.
+    spread/crowd/depth     mean distance between teammates; the fraction of
+                           ticks two of them are within 0.5 m of the ball
+                           (a pile-up); how far back the deepest one keeps.
+                           spread and crowd are None for a one-duck team.
+
+Baseline, 4 seeds x 300 s of shipped `chase` both sides (2026-09-05):
+1v1 3 own goals of 6, 14 of 26 kicks back; 2v2 8 of 8, 14 of 27 back.
 """
 
 from __future__ import annotations
@@ -70,13 +103,20 @@ from .world.arena import (
 )
 from .world.metrics import (  # noqa: F401  (re-exported: tooling imports these from here)
     CARRY_S,
+    GOAL_CREDIT_S,
+    GOAL_FIELDS,
     METRIC_FIELDS,
     POSSESSION_R,
     POSSESSION_WIDE_R,
+    SHAPE_FIELDS,
     SPIN_FIELDS,
     PitchMetrics,
     SpinMetrics,
 )
+
+# Every per-team dict a row may carry. A row written before one of them
+# existed gets None for it on resume, never 0.0 (see `load_done`).
+ROW_FIELDS = METRIC_FIELDS + GOAL_FIELDS + SHAPE_FIELDS
 
 
 def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = None) -> dict:
@@ -149,8 +189,9 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float) -> dict
                     f"{path}:{n} was measured with tag={r.get('tag', '')!r} perSide={r.get('perSide')} "
                     f"seconds={r.get('seconds')}, not tag={tag!r} perSide={per_side} seconds={seconds}. "
                     "Write a different variant to a different file.")
-            for f in METRIC_FIELDS:
+            for f in ROW_FIELDS:
                 r.setdefault(f, None)
+            r.setdefault("goalsUnattributed", None)
             done[int(r["seed"])] = r
     return done
 
@@ -173,15 +214,92 @@ def _fmt(v: dict | None, unit: str) -> str:
     return " ".join(f"{k} {x:+.2f}" if unit == "m/min" else f"{k} {x:.1f}" for k, x in sorted(v.items())) + f" {unit}"
 
 
+def _ratio(num: dict | None, den: dict | None) -> str:
+    """"back 8/27" — the count and what it is out of, both summed over teams.
+    Events, per the playbook's first rule; a dash if the row predates them."""
+    if num is None or den is None:
+        return "—"
+    return f"{int(sum(num.values()))}/{int(sum(den.values()))}"
+
+
 def _seed_line(r: dict) -> str:
+    own = r.get("ownGoals")
     return (f"seed {r['seed']}: goals left {r['left']} · right {r['right']} ({r['kickGoals']} kicked, {r['bumpGoals']} bumped)"
-            f" · kicks {sum(r['kicks'].values())} · pushes {sum(r['pushes'].values())} · falls {r['falls']}"
+            f" · own {'—' if own is None else int(sum(own.values()))}"
+            f" · kicks {sum(r['kicks'].values())} (back {_ratio(r.get('kicksBack'), r.get('kickCount'))})"
+            f" · pushes {sum(r['pushes'].values())} · falls {r['falls']}"
             f" · progress {_fmt(r.get('ballProgress'), 'm/min')}"
             f" · possession {_fmt(r.get('possession'), 's/min')}")
 
 
 def _run_one_args(a: tuple) -> dict:
     return run_one(*a)
+
+
+def _events(rows: list[dict], field: str) -> tuple[float, int]:
+    """(total over both teams and every seed, seeds that carried the field)."""
+    vals = [v for v in (_total(r, field) for r in rows) if v is not None]
+    return float(np.sum(vals)), len(vals)
+
+
+def _team_totals(rows: list[dict], field: str) -> dict[str, float]:
+    """One team's field summed over the battery — the form an event count is
+    read in (`ownGoals` left 3 right 5, not a mean of 4)."""
+    out: dict[str, float] = {}
+    for r in rows:
+        for t, v in (r.get(field) or {}).items():
+            if v is not None:
+                out[t] = out.get(t, 0.0) + float(v)
+    return out
+
+
+def _team_means(rows: list[dict], field: str) -> dict[str, float]:
+    """One team's field averaged over the seeds that carried it — the form a
+    RATE or a mean is read in (`crowd`, `spread`, `ballOwnHalf`)."""
+    acc: dict[str, list[float]] = {}
+    for r in rows:
+        for t, v in (r.get(field) or {}).items():
+            if v is not None:
+                acc.setdefault(t, []).append(float(v))
+    return {t: float(np.mean(v)) for t, v in acc.items()}
+
+
+def _print_ledger(rows: list[dict]) -> None:
+    """The goal ledger and the shape numbers (roadmap Track 4.1), per TEAM.
+
+    Per team and not summed, for the same reason `ballProgress` is a per-team
+    metric: in self-play the two sides mirror each other and several of these
+    are degenerate over the pair (`ballOwnHalf` sums to 60 s/min by
+    construction, whatever the brains do). The battery that reads them is an
+    asymmetric one — one side's roster changed, `eval_striker`-style — and
+    there the per-team split IS the measurement.
+
+    Counts are printed as "n of N": a difference in own goals or back-kicks
+    means nothing without the total it came out of (the playbook's rule 1)."""
+    if not any(r.get("ownGoals") for r in rows):
+        return
+    fors, againsts = _team_totals(rows, "goalsFor"), _team_totals(rows, "goalsAgainst")
+    owns = _team_totals(rows, "ownGoals")
+    unatt = sum(r.get("goalsUnattributed") or 0 for r in rows)
+    print("goals: " + " · ".join(
+        f"{t} for {fors.get(t, 0):.0f} against {againsts.get(t, 0):.0f} (own {owns.get(t, 0):.0f})"
+        for t in sorted(owns)) + (f" · {unatt} unattributed" if unatt else ""))
+    kicks, back = _team_totals(rows, "kickCount"), _team_totals(rows, "kicksBack")
+    carry = _team_totals(rows, "kickCarry")
+    if any(kicks.values()):
+        print("kicks: " + " · ".join(
+            f"{t} {kicks.get(t, 0):.0f} (back {back.get(t, 0):.0f}"
+            + (f", carry {carry.get(t, 0.0) / kicks[t]:+.3f} m each)" if kicks.get(t) else ")")
+            for t in sorted(kicks)))
+    parts = []
+    for f, unit in (("ballOwnHalf", "s/min"), ("spread", "m"), ("crowd", ""), ("depth", "m")):
+        m = _team_means(rows, f)
+        if not m:
+            continue
+        vals = " ".join((f"{t} {v:.0%}" if f == "crowd" else f"{t} {v:.2f}") for t, v in sorted(m.items()))
+        parts.append(f"{f} {vals}" + (f" {unit}" if unit else ""))
+    if parts:
+        print("shape: " + " · ".join(parts))
 
 
 def main() -> None:
@@ -259,6 +377,7 @@ def main() -> None:
         parts.append(f"{f} {'—' if m is None else f'{m:+.2f}' if unit == 'm/min' else f'{m:.1f}'} {unit}")
     print("both teams: " + " · ".join(parts)
           + (f"   ({len(rows) - missing}/{len(rows)} seeds; the rest predate these metrics)" if missing else ""))
+    _print_ledger(rows)
 
 
 if __name__ == "__main__":

@@ -272,7 +272,7 @@ def test_pitch_with_teams_and_brain_kwargs():
     from microduck_local import contract as C
     from microduck_local.world import World, make_pitch, validate_scenario
     sc = make_pitch(per_side=2)
-    assert len(sc.ducks) == 4 and {d.team for d in sc.ducks} == {"left", "right"}
+    assert len(sc.ducks) == 4 and {d.team for d in sc.ducks} == {"cream", "sky"}   # teams are colorways
     assert validate_scenario(sc.to_dict()) == sc
     assert make_pitch(per_side=3).name == "pitch-3v3" and len(make_pitch(per_side=3).ducks) == 6
     if not C.SCENE_WALK_XML.exists():
@@ -282,7 +282,7 @@ def test_pitch_with_teams_and_brain_kwargs():
     kw = {d.id: brain_kwargs(d, w, teams) for d in sc.ducks}
     assert kw["d0"]["goal"][0] > 0 and kw["d2"]["goal"][0] < 0 and kw["d0"]["goal"] == kw["d1"]["goal"]
     assert kw["d0"]["team"] is kw["d1"]["team"] and kw["d0"]["team"] is not kw["d2"]["team"]
-    assert set(teams) == {"left", "right"}
+    assert set(teams) == {"cream", "sky"}
     assert kw["d0"]["p"].bump_stand_s == ChaseParams().team_bump_stand_s   # a roster with teammates: the bump sense on
     solo = make_pitch(per_side=1)
     assert "p" not in brain_kwargs(solo.ducks[0], World(solo), {})   # a lone attacker keeps the default

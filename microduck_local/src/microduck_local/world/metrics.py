@@ -60,6 +60,39 @@ CARRY_S = 2.0
 # summary reports how many seeds it could use (see `_mean_field`).
 METRIC_FIELDS = ("ballProgress", "ballAdvance", "possession", "possessionWide")
 
+# --- the goal ledger (roadmap Track 4.1.1) ------------------------------------
+# `World.goals` is keyed by MOUTH, so a ball the sky team puts into its own net
+# and one the cream team scores are the same row - which is why the first
+# measured fact about this pitch (8 of 8 goals in a 4-seed 2v2 battery were own
+# goals) needed a scratchpad probe to see at all. These fields are per TEAM.
+#
+# `goalsFor` / `goalsAgainst` need no attribution and are exact: the mouth a
+# team attacks and the mouth it defends are known from its spawn heading
+# (`World.goal_for`), so every goal is one of each. `ownGoals` is the subset of
+# `goalsAgainst` this team put in ITSELF, and that one needs credit:
+#
+#   * a kick inside `KICK_GOAL_S` of the ball crossing - the World records
+#     which duck took it (`goal_credit_duck`), decided on exactly the test its
+#     own kicked/walked-in split uses, so the two can never disagree;
+#   * failing that, the last team strictly on the ball (`POSSESSION_R`) within
+#     `GOAL_CREDIT_S` - which is what a walked-in goal is, and 13 of the first
+#     14 goals measured here were walked in;
+#   * failing that the goal is nobody's, and `goalsUnattributed` counts it
+#     rather than a mean quietly absorbing a guess.
+GOAL_FIELDS = ("goalsFor", "goalsAgainst", "ownGoals", "kickCount", "kicksBack", "kickCarry")
+# How long after a touch a goal is still that team's. The same 4 s the World
+# allows a kick: "whoever last kicked or held this ball put it in".
+GOAL_CREDIT_S = 4.0
+
+# --- shape (roadmap Track 4.1.3) ----------------------------------------------
+# What "they all pile onto the ball" and "somebody stayed back" are as numbers.
+# Goals cannot say either, and the README's crowding figures ("two teammates
+# inside 0.5 m of the ball 24.5% of the time") came from a one-off trace; these
+# accumulate at the control tick like everything else here, so a roster change
+# is judged on them the same way a brain change is judged on possession.
+SHAPE_FIELDS = ("ballOwnHalf", "spread", "crowd", "depth")
+CROWD_R = 0.5              # two teammates this near the ball at once: a pile-up
+
 
 class PitchMetrics:
     """Ball progress and possession, accumulated at the 50 Hz control tick.
@@ -118,27 +151,156 @@ class PitchMetrics:
             s = 1.0 if g is None or g[0] >= 0 else -1.0
             if self.sign.setdefault(tm, s) != s:
                 raise ValueError(f"team {tm!r} has ducks attacking opposite goals")
+        # The mouth each team attacks, in the World's own keys: a ball crossing
+        # at +x is recorded under "right" (`World._check_goal`) and the team
+        # whose sign is +1 attacks it. The other mouth is the one it defends,
+        # which is where its own goals land.
+        self.attacks = {t: ("right" if sg > 0 else "left") for t, sg in self.sign.items()}
+        self.defends = {t: ("left" if sg > 0 else "right") for t, sg in self.sign.items()}
+        self.ducks_of: dict[str, list[str]] = {t: [] for t in self.teams}
+        for did, tm in sorted(self.team_of.items()):
+            self.ducks_of[tm].append(did)
+        self.half_x = world.scenario.floor[0] / 2 - 0.25      # the goal lines (arena._check_goal)
         self.progress = {t: 0.0 for t in self.teams}
         self.advance = {t: 0.0 for t in self.teams}
         self.possession = {t: 0.0 for t in self.teams}
         self.possession_wide = {t: 0.0 for t in self.teams}
+        # The goal ledger (GOAL_FIELDS above).
+        self.goals_for = {t: 0 for t in self.teams}
+        self.goals_against = {t: 0 for t in self.teams}
+        self.own_goals = {t: 0 for t in self.teams}
+        self.goals_unattributed = 0
+        # Kicks, judged on where the BALL went and not on where the brain
+        # meant it to go (the playbook's rule 6: a plan is not an outcome).
+        # A kick is pending until CARRY_S has run or a goal ends it.
+        self.kick_count = {t: 0 for t in self.teams}
+        self.kicks_back = {t: 0 for t in self.teams}
+        self.kick_carry = {t: 0.0 for t in self.teams}
+        self._pending: list[tuple[str, float, tuple[float, float]]] = []
+        # A kick is read off the DUCK that is taking it (`skill_t0`), not off
+        # the World's `last_kick_t`: the World keeps one last-kick stamp, so
+        # two ducks kicking on the same control step would silently collapse
+        # into one — the "knob that changes nothing" failure with a different
+        # hat on. A kick already in the air when this object is built belongs
+        # to whatever came before it and is not counted.
+        self._kick_t0 = {did: self._kick_start(d) for did, d in world.ducks.items()}
+        # Shape (SHAPE_FIELDS above).
+        self.own_half = {t: 0.0 for t in self.teams}
+        self._spread = {t: 0.0 for t in self.teams}
+        self._crowd = {t: 0 for t in self.teams}
+        self._depth = {t: 0.0 for t in self.teams}
+        self.ticks = 0
         self._prev = world.ball_xy()
         self._holder: str | None = None       # team credited with the ball right now
         self._holder_t = -1e9                 # when it was last strictly on the ball
         self._goal_seq = world.goal_seq
 
-    def nearest(self) -> tuple[str | None, float]:
+    def positions(self) -> dict[str, tuple[float, float]]:
+        """Every duck's trunk in the plane, read once a tick (the shape
+        metrics, the possession test and `nearest` all want it)."""
+        out = {}
+        for did, d in self.w.ducks.items():
+            p = d.trunk_pos(self.w.data)
+            out[did] = (float(p[0]), float(p[1]))
+        return out
+
+    def nearest(self, pos: dict[str, tuple[float, float]] | None = None) -> tuple[str | None, float]:
         """(duck id, planar distance) of the duck closest to the ball."""
         ball = self.w.ball_xy()
         if ball is None:
             return None, math.inf
+        pos = self.positions() if pos is None else pos
         best, best_d = None, math.inf
-        for did, d in self.w.ducks.items():
-            p = d.trunk_pos(self.w.data)
-            r = math.hypot(float(p[0]) - ball[0], float(p[1]) - ball[1])
+        for did, (x, y) in pos.items():
+            r = math.hypot(x - ball[0], y - ball[1])
             if r < best_d:
                 best, best_d = did, r
         return best, best_d
+
+    # -- the goal ledger and the kick ledger ---------------------------------
+    def _credit(self) -> str | None:
+        """Whose goal the one that just crossed is: the team of the duck the
+        World says kicked it in, else the last team on the ball if that touch
+        is inside GOAL_CREDIT_S, else nobody's."""
+        w = self.w
+        who = w.goal_credit_duck
+        if who is not None and who in self.team_of:
+            return self.team_of[who]
+        if self._holder is not None and w.t - self._holder_t <= GOAL_CREDIT_S:
+            return self._holder
+        return None
+
+    def _score_goal(self) -> None:
+        """A goal has just been counted by the World (`goal_seq` moved). Its
+        MOUTH is `World.last_goal`; every team gets a for or an against off
+        that alone, and the credited team gets an own goal if the mouth is the
+        one it defends."""
+        mouth = self.w.last_goal
+        if mouth is None:
+            return
+        for t in self.teams:
+            if self.attacks[t] == mouth:
+                self.goals_for[t] += 1
+            else:
+                self.goals_against[t] += 1
+        by = self._credit()
+        if by is None:
+            self.goals_unattributed += 1
+        elif self.defends[by] == mouth:
+            self.own_goals[by] += 1
+
+    @staticmethod
+    def _kick_start(d) -> float | None:
+        """When this duck's current kick window began, or None if it is not
+        kicking (`World.start_skill` / `_skill_cmd` own both fields)."""
+        return d.skill_t0 if (d.skill or "").startswith("kick") else None
+
+    def _note_kick(self, ball: tuple[float, float]) -> None:
+        """Any duck that has just STARTED a kick: remember where the ball was,
+        so the swing can be judged on where it ends up."""
+        for did, d in self.w.ducks.items():
+            t0 = self._kick_start(d)
+            if t0 is not None and t0 != self._kick_t0.get(did) and did in self.team_of:
+                self._pending.append((self.team_of[did], self.w.t, ball))
+            self._kick_t0[did] = t0
+
+    def _resolve_kicks(self, ball: tuple[float, float], force: bool = False) -> None:
+        """Every kick whose CARRY_S has run (all of them, on a goal — the ball
+        is about to be teleported back to the centre spot). What is scored is
+        the SAME quantity `ballProgress` scores, the signed displacement along
+        the pitch's long axis toward the goal that team attacks, so "the kick
+        went backwards" and "the team lost ground" cannot disagree."""
+        keep = []
+        for tm, t0, xy0 in self._pending:
+            if not force and self.w.t - t0 < CARRY_S:
+                keep.append((tm, t0, xy0))
+                continue
+            d = self.sign[tm] * (ball[0] - xy0[0])
+            self.kick_count[tm] += 1
+            self.kick_carry[tm] += d
+            if d < 0.0:
+                self.kicks_back[tm] += 1
+        self._pending = keep
+
+    def _shape(self, ball: tuple[float, float], pos: dict[str, tuple[float, float]]) -> None:
+        """One tick of the shape metrics: where the ball is, how spread out a
+        team is, whether two of it are on the ball at once, and how deep its
+        deepest duck is."""
+        self.ticks += 1
+        for tm, ids in self.ducks_of.items():
+            if ball[0] * self.sign[tm] < 0:
+                self.own_half[tm] += C.CTRL_DT              # the ball is in our half
+            near = sum(1 for i in ids if math.dist(pos[i], ball) <= CROWD_R)
+            if near >= 2:
+                self._crowd[tm] += 1
+            if len(ids) > 1:
+                pairs = [math.dist(pos[a], pos[b])
+                         for k, a in enumerate(ids) for b in ids[k + 1:]]
+                self._spread[tm] += sum(pairs) / len(pairs)
+            # The deepest duck's distance from the goal line it defends: how
+            # far back this team keeps anybody at all.
+            line = -self.sign[tm] * self.half_x
+            self._depth[tm] += min(abs(pos[i][0] - line) for i in ids)
 
     def tick(self) -> None:
         w = self.w
@@ -155,7 +317,13 @@ class PitchMetrics:
             # A goal: the World teleported the ball back to the centre spot.
             # That jump is not anybody's progress (counted, it would cancel
             # almost exactly the goal it followed), and the next possession
-            # starts clean.
+            # starts clean. The ledger is written FIRST, while `_holder` still
+            # says who had the ball and `_prev` still holds the last position
+            # before the teleport — which is also the only honest place to
+            # settle a kick that is still in the air.
+            self._score_goal()
+            if self._prev is not None:
+                self._resolve_kicks(self._prev, force=True)
             self._goal_seq = w.goal_seq
             self._prev, self._holder = ball, None
         elif self._prev is not None and self._holder is not None and w.t - self._holder_t <= CARRY_S:
@@ -163,25 +331,54 @@ class PitchMetrics:
             self.progress[self._holder] += dx
             self.advance[self._holder] += max(0.0, dx)
         self._prev = ball
+        self._note_kick(ball)
+        self._resolve_kicks(ball)
         # Then who is on the ball at the end of the step, which is who the NEXT
         # step's motion belongs to.
-        who, r = self.nearest()
+        pos = self.positions()
+        who, r = self.nearest(pos)
         if who is not None and r <= POSSESSION_R:
             tm = self.team_of[who]
             self.possession[tm] += C.CTRL_DT
             self._holder, self._holder_t = tm, w.t          # control (and credit) passes
         if who is not None and r <= POSSESSION_WIDE_R:
             self.possession_wide[self.team_of[who]] += C.CTRL_DT
+        self._shape(ball, pos)
 
     def row(self) -> dict:
-        """The four per-team metrics, as RATES per minute of play, so a row is
-        comparable across `--seconds` (the totals divide out; `simSeconds` is
-        in the row if anyone wants them back)."""
+        """Everything this class accumulated, per team.
+
+        The four continuous metrics and `ballOwnHalf` are RATES per minute of
+        play, so a row is comparable across `--seconds` (the totals divide
+        out; `simSeconds` is in the row if anyone wants them back). Goals and
+        kicks are EVENT COUNTS, deliberately: the playbook's first rule is to
+        quote the events, and a count that has been divided by anything can no
+        longer be added up across a battery. `kickCarry` is a SUM of metres
+        for the same reason — divide it by `kickCount` for the per-kick mean.
+        `spread`, `crowd` and `depth` are means over the run's ticks.
+
+        No side effects: the /sim page calls this every frame. A kick still in
+        the air when the run ends therefore never lands in `kickCount`, which
+        costs at most the last 2 s of a run and costs it to both teams."""
         per_min = 60.0 / max(self.w.t, 1e-9)
+        n = max(self.ticks, 1)
         return {"ballProgress": {t: round(v * per_min, 3) for t, v in self.progress.items()},
                 "ballAdvance": {t: round(v * per_min, 3) for t, v in self.advance.items()},
                 "possession": {t: round(v * per_min, 3) for t, v in self.possession.items()},
-                "possessionWide": {t: round(v * per_min, 3) for t, v in self.possession_wide.items()}}
+                "possessionWide": {t: round(v * per_min, 3) for t, v in self.possession_wide.items()},
+                "goalsFor": dict(self.goals_for),
+                "goalsAgainst": dict(self.goals_against),
+                "ownGoals": dict(self.own_goals),
+                "goalsUnattributed": self.goals_unattributed,
+                "kickCount": dict(self.kick_count),
+                "kicksBack": dict(self.kicks_back),
+                "kickCarry": {t: round(v, 3) for t, v in self.kick_carry.items()},
+                "ballOwnHalf": {t: round(v * per_min, 2) for t, v in self.own_half.items()},
+                "spread": {t: (round(self._spread[t] / n, 3) if len(self.ducks_of[t]) > 1 else None)
+                           for t in self.teams},
+                "crowd": {t: (round(self._crowd[t] / n, 4) if len(self.ducks_of[t]) > 1 else None)
+                          for t in self.teams},
+                "depth": {t: round(self._depth[t] / n, 3) for t in self.teams}}
 
 
 SPIN_FIELDS = ("spinFrac", "steerFrac", "spinYaw", "spinRate")
