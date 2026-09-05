@@ -17,11 +17,11 @@ from .scenario import (
     Pickable,
     Scenario,
     Wall,
+    formation_roles,
     load_scenario,
     make_pitch,
     make_playroom,
     make_room,
-    formation_roles,
     validate_scenario,
 )
 

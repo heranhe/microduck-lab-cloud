@@ -707,8 +707,25 @@ class ChaseParams:
     kick_exit_left: float = math.radians(23.6)
     kick_exit_right: float = math.radians(-28.7)
     # After a kick, hunt along where the ball REALLY went (`u` plus the exit
-    # angle above) instead of along the line the kick was aimed at. Pure
-    # knowledge: it changes where the duck looks, never how it stands.
+    # angle above) instead of along the line the kick was aimed at, and
+    # publish THAT line to the team board. Pure knowledge: it changes where
+    # the duck looks and what it tells its teammates, never how it stands.
+    #
+    # MEASURED NEUTRAL, and shipping on anyway — with the reason stated so
+    # nobody mistakes it for a win. 24 paired seeds x 300 s of 2v2 and then
+    # 24 fresh ones, exit line against aim line, nothing resolves on either
+    # block or pooled over the 48: goals +0.125 (p = 0.49), falls -0.083
+    # (p = 0.77), possession -0.514 (p = 0.32), ballAdvance +0.023
+    # (p = 0.48), signed progress -0.026 (p = 0.54), crowd -0.003 (p = 0.64),
+    # back-kicks 34% -> 37% (p = 0.45). It is a real null and not a dead
+    # path — the arms differ seed by seed (68 falls against 57 on one block,
+    # 57 against 64 on the other), which is what rule 0 asks you to check.
+    #
+    # It ships on because the alternative is knowingly hunting along a line
+    # the ball does not take: the hunt is a fallback that fires only when a
+    # kicked ball is lost, and the search behind it finds the ball anyway,
+    # so being right costs nothing and buys nothing measurable. No
+    # performance claim is made for it.
     #
     # The other way of using the same measurement — rotating the STANCE so the
     # kick flies along `u` (`kick_deflect_*`) — is refuted, and this time with
