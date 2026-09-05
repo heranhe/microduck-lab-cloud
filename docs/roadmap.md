@@ -1656,6 +1656,27 @@ in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
       distinction it exists for. Caught by looking at the /sim scoreboard,
       not by a test.
 
+- [x] **2.6 The score panels minimize — DONE (2026-09-05).** Both score
+      overlays (`Pitch` and `Tidy score`) grew the same —/+ in their title
+      bar, on `B`, persisted as `simScoreOpen`. They sit top-left over the
+      near half of the room, and the pitch one is the tallest panel on the
+      page once the per-minute table is showing — 8 rows over the ground the
+      ducks are actually playing on.
+
+      Collapsed keeps the HEADLINE and drops the table: the score line with
+      its team chips on a pitch, `n / N in the basket` on a playroom. A
+      scoreboard whose minimize costs you the score is not worth pressing;
+      what covers the room is the table under it. The kickoff banner also
+      survives a collapse — it is one line and it is live state you want at
+      the moment it appears. The head-camera inset re-measures its dock every
+      frame (`CamInset`'s `belowRef`), so it slides up on its own.
+
+      The four title-bar toggles (inspector, controls, and the two score
+      panels) are now one `PanelToggle` — they were three copies of the same
+      twelve inline style properties. The head camera's button is deliberately
+      NOT this one: it floats over the video with its own backing rather than
+      sitting in a title row.
+
 ### 3. Scripted positional play — the brains that make it look like soccer
 
 Scripted first, and over the existing `Chase`, not beside it: every role
@@ -1815,13 +1836,47 @@ directly.
       defender + striker against two plain chase brains, so the pair is what
       was tested). Whether a striker alone pays is a separate arm and has
       not been run.
-- [ ] **3.4 Midfielder (3v3).** The link: holds the middle third between
-      the ball and the centre spot, laterally on the ball's side; attacks
-      when quickest with the ball in the middle third; a ball in the final
-      third is the striker's, in the own third the defender's — three
-      zones, one attacker per zone, the board's hysteresis inside each.
-      Zones by odometry x, which the kickoff re-anchors to the pitch after
-      every goal (`test_a_goal_restarts_play_from_a_kickoff` pins that).
+- [x] **3.4 Midfielder, and the full 3v3 — MEASURED (2026-09-05), and it is
+      the strongest result on this track.** The midfielder holds the middle
+      third on the ball's side, and with all three roles filled every third
+      of the pitch has an owner, so the zone gate is live everywhere (the
+      2v2 hole in 3.5 does not exist here).
+
+      `--left "chase+defender,chase+midfielder,chase+striker" --right chase`,
+      3v3, reading the roles side, 24 paired seeds and then 24 fresh ones
+      (`runs/t6-*.jsonl`):
+
+      | | plain | roles | pooled Δ (48) | p | blocks |
+      |---|---:|---:|---:|---:|---|
+      | **crowd** | 22.4% | **3.5%** | **−0.189 ± 0.023** | **< 0.001** | both; better on **48 of 48** |
+      | **spread** | 0.70 m | **1.56 m** | **+0.860 ± 0.049** | **< 0.001** | both; **48 of 48** |
+      | **depth** | 1.29 m | **0.57 m** | **−0.718 ± 0.129** | **< 0.001** | both |
+      | **falls** | 1.96 a run | **0.85** | **−1.104 ± 0.358** | **< 0.001** | both; **94 → 41 events** |
+      | **ballProgress (signed)** | **−0.206** | **−0.048** | **+0.157 ± 0.093** | **0.001** | both in direction; better on 32 of 48 |
+      | ballAdvance | 0.372 | 0.257 | −0.115 ± 0.062 | < 0.001 | both |
+      | possession | 12.4 s/min | 6.5 | −5.92 ± 1.06 | < 0.001 | both |
+      | goals | 0.60 a run | 0.56 | −0.04 ± 0.25 | 0.74 | neither |
+      | own goals | 16 | 5 | — | — | 21 events; cannot resolve |
+
+      **Everything 2v2 showed, larger — and one thing 2v2 could not show.**
+      Six ducks on one ball was the worst case in this repo (the README's
+      "falls per duck climb with the roster"), and roles cut the crowding
+      from 22% of the run to 3.5% and the falls from 94 events to 41.
+
+      The new thing is **signed `ballProgress`, the metric churn cannot
+      inflate**: the plain 3v3 roster carries the ball toward its OWN goal
+      at −0.206 m/min and the roles roster very nearly does not (−0.048),
+      **+0.157, p = 0.001**, and the direction holds in both blocks. Read it
+      with `ballAdvance`, which goes DOWN by 0.115: advance keeps only the
+      forward part and is inflated by churn, and with 56% fewer kicks
+      (151 → 66) there is far less churn to keep. Together they say the ball
+      moves less and goes less wrong — which is what a team that stops
+      scrambling for it should look like, and is the pattern `eval_pitch`'s
+      docstring says to read these two for.
+
+      The cost is the same one, doubled: **possession halves** (12.4 → 6.5
+      s/min). Goals are flat and, at 56 events over 48 seeds, could not have
+      said anything either way.
 - [x] **3.5 Roles in the contract, on the board, in the inspector — DONE
       (2026-09-05).** `Duck.role` validated against `ROLES` (and refused
       without a team); `Team.jobs` + `Team.half_x` + `Team.attack_sign`

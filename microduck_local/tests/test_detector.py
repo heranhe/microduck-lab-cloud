@@ -322,3 +322,54 @@ def test_the_camera_sits_eleven_degrees_down_on_a_standing_duck():
     assert 0.26 < b48 < 0.31 and 0.21 < b60 < 0.25
     assert 0.04 < b48 - b60 < 0.07, "60deg should buy ~5.5 cm of floor, not the 11 cm a level camera gives"
     assert blind(48.0, down, z_down) < 0.11                    # head fully down: ~9 cm
+
+
+# -- the colour classifier (roadmap Track 4.4.1) ---------------------------------
+
+def test_the_detector_reads_a_ducks_colorway_and_gives_up_at_range():
+    """A team IS a colorway, so the one thing a camera could really tell about
+    another duck is which team it is on. The classifier fails the two ways a
+    real one does — it gives up on a small box, and inside its range it is
+    sometimes WRONG (another colorway, not "unknown": a softmax always
+    answers)."""
+    from microduck_local.sensors.detector import Detector, DetectorNoise, Target
+
+    class Fake(Detector):
+        def __init__(self, noise, seed=0):
+            self.noise = noise
+            self.rng = np.random.default_rng(seed)
+
+    tgt = Target("d1", "duck", 0, 0.10, color="cream")
+    sure = Fake(DetectorNoise(color_range=1.0, color_p=1.0))
+    assert sure._color(tgt, 0.9) == "cream"
+    assert sure._color(tgt, 1.1) is None                    # too far to say
+    assert sure._color(Target("ball0", "ball", 0, 0.035), 0.5) is None   # no colour to read
+    # At a hostile-ish rate it is wrong sometimes, and wrong means ANOTHER
+    # colorway — a brain that treats "not cream" as "opponent" must cope.
+    rough = Fake(DetectorNoise(color_range=1.0, color_p=0.75))
+    got = [rough._color(tgt, 0.5) for _ in range(400)]
+    right = sum(g == "cream" for g in got)
+    assert 0.65 < right / len(got) < 0.85                   # about the stated rate
+    assert all(g is not None for g in got)                  # never "unknown" inside the range
+    assert {g for g in got} - {"cream"}                     # …and the errors are other colorways
+
+
+def test_the_presets_agree_that_colour_is_harder_than_finding_the_box():
+    from microduck_local.sensors.detector import DetectorNoise
+    assert DetectorNoise.ideal().color_p == 1.0 and DetectorNoise.ideal().color_range == math.inf
+    assert DetectorNoise.datasheet().color_range == 1.0 and DetectorNoise.datasheet().color_p == 0.95
+    assert DetectorNoise.hostile().color_range < DetectorNoise.datasheet().color_range
+    assert DetectorNoise.hostile().color_p < DetectorNoise.datasheet().color_p
+
+
+def test_a_pitch_gives_every_duck_target_its_teams_colour():
+    from microduck_local.world import World, make_pitch
+    if not C.SCENE_WALK_XML.exists():
+        pytest.skip("microduck_rl checkout not found")
+    sc = make_pitch(per_side=2)
+    w = World(sc)
+    det = next(d.detector for d in w.ducks.values() if d.detector is not None)
+    by_name = {t.name: t for t in det.targets}
+    for d in sc.ducks:
+        assert by_name[d.id].color == d.team
+    assert by_name["ball0"].color is None

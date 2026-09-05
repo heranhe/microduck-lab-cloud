@@ -95,3 +95,25 @@ def test_a_rolling_ball_gets_a_position_and_a_velocity_and_a_prediction():
     plain = Tracker()
     plain.update(DetectionFrame(0.0, [Detection("ball", "ball0", 0.0, 0.0, 0.07, 1.0, 0.9)]), 0.0, 0.0)
     assert plain.best("ball", 0.0, min_hits=1).xy is None and plain.best("ball", 0.0, min_hits=1).predict(1.0) is None
+
+
+def test_a_track_votes_on_the_colour_rather_than_believing_one_look():
+    """At the hostile preset the colour classifier is right three times in
+    four, so one frame of it is a coin. A track that has been seen ten times
+    knows better than any single look at it."""
+    from microduck_local.sensors.detector import Detection, DetectionFrame
+    tk = Tracker()
+    t = 0.0
+    seen = ["cream", "cream", "sky", "cream", "cream", "lavender", "cream"]
+    for i, c in enumerate(seen):
+        t = 0.1 * i
+        tk.update(DetectionFrame(t=t, detections=[
+            Detection("duck", "d1", 0.0, 0.0, 0.2, 0.6, 0.9, color=c)]), t)
+    tr = tk.best("duck", t, min_hits=1)
+    assert tr.color == "cream"                      # the plurality, not the last frame
+    assert tr.colors["cream"] == 5 and tr.colors["sky"] == 1
+    # A detection with no colour (out of range) leaves the vote alone.
+    t += 0.1
+    tk.update(DetectionFrame(t=t, detections=[
+        Detection("duck", "d1", 0.0, 0.0, 0.2, 0.6, 0.9)]), t)
+    assert tk.best("duck", t, min_hits=1).color == "cream"

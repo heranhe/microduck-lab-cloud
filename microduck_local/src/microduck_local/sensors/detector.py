@@ -22,6 +22,7 @@ positive UP (+z), both in radians; `width` is the apparent angular width.
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from dataclasses import dataclass, replace
 
@@ -172,6 +173,17 @@ class DetectorNoise:
     latency_s: float = 0.0         # frame → detection availability
     latency_jitter_s: float = 0.0
     conf_floor: float = 1.0        # confidence spread: conf ∈ [floor, 1] × visibility
+    # Telling one duck's colorway from another is a colour classifier over
+    # the box — the cheapest detector class anyone will add to this robot,
+    # and the reason a team IS a colorway (a shell colour is the only thing
+    # that distinguishes two of these robots to a camera OR to a person).
+    # It fails the two ways a real one does: it gives up when the box is
+    # small, and inside that range it is sometimes simply WRONG — reporting
+    # another colorway, not "unknown", because a classifier with a softmax
+    # always answers. A brain that trusts one frame of it deserves what it
+    # gets; `Tracker` votes over the track's hits instead.
+    color_range: float = math.inf  # beyond this the colour is not reported
+    color_p: float = 1.0           # …inside it, P(the colour is right)
 
     @classmethod
     def ideal(cls) -> "DetectorNoise":
@@ -182,12 +194,14 @@ class DetectorNoise:
         # Bearing to ~1°, width ±10 %, the measured p50/p95 latency spread,
         # a few misses on clean views, a rare ghost.
         return cls(bearing_sigma_rad=np.deg2rad(1.0), width_sigma_frac=0.10, miss_p=0.03,
-                   false_p=0.005, latency_s=0.026, latency_jitter_s=0.02, conf_floor=0.6)
+                   false_p=0.005, latency_s=0.026, latency_jitter_s=0.02, conf_floor=0.6,
+                   color_range=1.0, color_p=0.95)
 
     @classmethod
     def hostile(cls) -> "DetectorNoise":
         return cls(bearing_sigma_rad=np.deg2rad(3.0), width_sigma_frac=0.3, miss_p=0.25,
-                   false_p=0.05, latency_s=0.06, latency_jitter_s=0.05, conf_floor=0.3)
+                   false_p=0.05, latency_s=0.06, latency_jitter_s=0.05, conf_floor=0.3,
+                   color_range=0.6, color_p=0.75)
 
     @classmethod
     def preset(cls, name: str) -> "DetectorNoise":
@@ -206,6 +220,10 @@ class Target:
     cls: str
     body: int
     radius: float
+    # What COLOUR this thing is, for the classes that have one: a duck's
+    # colorway, i.e. its team (world/scenario.py TEAM_COLORWAYS). The
+    # detector reports it, badly, at range (`DetectorNoise.color_range`).
+    color: str | None = None
     # Vertical extent centred on the body (a person: its height). A detector
     # on a 24 cm-high head sees a person's legs long after its middle has
     # left the 48 deg vertical frustum (the capsule's centre leaves it at
@@ -222,12 +240,18 @@ class Detection:
     width: float         # rad, apparent angular width
     range_est: float     # m, from width and the class's nominal radius (what a brain may use)
     conf: float
+    # The colorway the classifier read off the box, or None for "too far to
+    # say" and for classes that have no colour. Unlike `name` this is NOT
+    # privileged: a real camera can see a shell colour, which is the whole
+    # argument for teams being colorways.
+    color: str | None = None
 
     def as_payload(self) -> dict:
         return {"cls": self.cls, "name": self.name,
                 "bearing": round(self.bearing, 4), "elevation": round(self.elevation, 4),
                 "width": round(self.width, 4), "range": round(self.range_est, 3),
-                "conf": round(self.conf, 3)}
+                "conf": round(self.conf, 3),
+                **({"color": self.color} if self.color else {})}
 
 
 @dataclass
@@ -330,6 +354,19 @@ class Detector:
         return (self.spec.seen_angle(bearing, self.spec.fov_h_deg),
                 self.spec.seen_angle(elev, self.spec.fov_v_deg), width, rng)
 
+    def _color(self, tgt: "Target", range_est: float) -> str | None:
+        """What the colour classifier says about this box: the truth inside
+        `color_range` with probability `color_p`, another colorway otherwise,
+        and nothing at all beyond the range."""
+        nz = self.noise
+        if not tgt.color or range_est > nz.color_range:
+            return None
+        if self.rng.random() < nz.color_p:
+            return tgt.color
+        from ..world.scenario import TEAM_COLORWAYS  # noqa: PLC0415  (cycle at import time)
+        others = [c for c in TEAM_COLORWAYS if c != tgt.color]
+        return str(self.rng.choice(others)) if others else None
+
     # -- measurement -------------------------------------------------------
     def capture(self, data: mujoco.MjData, t: float) -> DetectionFrame:
         """Run the detector on the world as it is now (no latency applied)."""
@@ -356,7 +393,8 @@ class Detector:
             conf = p_find * float(self.rng.uniform(nz.conf_floor, 1.0))
             rad = NOMINAL_RADIUS.get(tgt.cls, tgt.radius)
             range_est = rad / max(np.tan(width / 2), 1e-4)
-            out.append(Detection(tgt.cls, tgt.name, bearing, elev, width, float(range_est), conf))
+            out.append(Detection(tgt.cls, tgt.name, bearing, elev, width, float(range_est), conf,
+                                 self._color(tgt, float(range_est))))
         if nz.false_p and self.rng.random() < nz.false_p:
             cls = str(self.rng.choice(DETECT_CLASSES))
             width = float(self.rng.uniform(s.w_none, s.w_full))

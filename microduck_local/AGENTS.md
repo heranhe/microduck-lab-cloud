@@ -207,6 +207,13 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    mean. Several knobs in `ChaseParams` ship off on differences that never
    cleared the noise; re-screening them with `possession` is cheap and at
    least one of those verdicts is probably wrong.
+8. **A battery must survive the machine.** Use `--out FILE --tag TAG`:
+   every seed is appended as it lands and a re-run of the same command
+   skips what is already there. A cloud container reclaimed mid-run cost
+   about ninety minutes of 3v3 twice before the benchmarks streamed. The
+   tag is refused if it disagrees, so two variants can never be stitched
+   into one comparison.
+
 9. **Count the events, not the runs — the SAME measurement can be cheap or
    hopeless depending on which you pick.** Measured on the soccer benchmark
    (24 seeds × 300 s of 2v2, `docs/roadmap.md` Track 4.1.5): `kicksBack` as
@@ -235,12 +242,6 @@ and later reversed; several "measured off" verdicts turned out to be noise.
     running — `assert brain.p.aim_mode == "clamp"` — not off a fresh
     `ChaseParams()`, which will happily agree with you while the live brain
     does something else.
-8. **A battery must survive the machine.** Use `--out FILE --tag TAG`:
-   every seed is appended as it lands and a re-run of the same command
-   skips what is already there. A cloud container reclaimed mid-run cost
-   about ninety minutes of 3v3 twice before the benchmarks streamed. The
-   tag is refused if it disagrees, so two variants can never be stitched
-   into one comparison.
 
 ## Before you commit: `./scripts/precommit.sh` (1 second)
 

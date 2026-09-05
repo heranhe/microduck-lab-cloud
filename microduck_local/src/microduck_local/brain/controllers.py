@@ -842,6 +842,14 @@ class ChaseParams:
     mid_side: float = 0.5
     beside_m: float = 0.3
     beside_s: float = 1.5
+    # Use the colour classifier to tell a teammate from an opponent
+    # (roadmap Track 4.4.2). SHIPS OFF until it is measured. What it changes:
+    # `mate_keepout` was measured off at 0.4 m and the trace said why — 12
+    # of 13 falls were beside an OPPONENT, which no team board carries — so
+    # the keep-out is re-measured WITH the sense that was missing rather
+    # than the rule being re-tried unchanged.
+    use_color: bool = False
+    opp_keepout: float = 0.0       # an opponent this near and ahead: treat it as a duck to avoid
     # The ToF sees the ball at the feet (tof_floor_ball): inside `tof_ball_m`
     # with the head dipped, a floor blob feeds the tracker as a ball sighting
     # when the camera has none - the level camera loses a floor ball inside
@@ -1287,8 +1295,14 @@ class Chase:
         other = self.tracker.best("duck", t, min_hits=1)
         # The nearest duck ahead to avoid: a seen one, or a teammate by the board.
         threats = [(r, b) for r, b in self._mates if r < p.mate_keepout and abs(b) < p.duck_bearing]
-        if other is not None and other.age(t) <= 0.6 and other.range < p.duck_keepout and abs(other.bearing) < p.duck_bearing:
-            threats.append((other.range, other.bearing))
+        if other is not None and other.age(t) <= 0.6 and abs(other.bearing) < p.duck_bearing:
+            # With the colour sense on, an OPPONENT gets its own keep-out:
+            # a teammate is on the board (which knows who is quicker) and a
+            # stranger is not, so they are not the same obstacle.
+            keep = (p.opp_keepout if (p.use_color and p.opp_keepout > 0 and not self._is_mate(other))
+                    else p.duck_keepout)
+            if other.range < keep:
+                threats.append((other.range, other.bearing))
         duck_rb = min(threats) if threats else None
         near_duck = duck_rb is not None
         clearly_nearer = (other is not None and other.age(t) <= p.lost_s and other.range < p.yield_range
@@ -1698,6 +1712,15 @@ class Chase:
             return False
         x, y = odom[0] + margin * math.cos(odom[2]), odom[1] + margin * math.sin(odom[2])
         return abs(x) > self.bounds[0] or abs(y) > self.bounds[1]
+
+    def _is_mate(self, tr) -> bool:
+        """Is this duck track one of ours? Only with the colour sense on, and
+        only on the track's VOTE — one frame of the classifier is a coin at
+        the hostile preset. Unknown counts as an opponent: the cost of
+        treating a teammate as a stranger is a wasted metre, and the cost of
+        the reverse is walking into one."""
+        return bool(self.p.use_color and self.team is not None
+                    and getattr(tr, "color", None) == self.team.name)
 
     def _beside(self, t: float) -> bool:
         """Any duck track inside `beside_m`, at any bearing, within `beside_s`;

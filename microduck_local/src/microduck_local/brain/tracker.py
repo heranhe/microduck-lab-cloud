@@ -38,6 +38,13 @@ class Track:
     misses: int = 0             # FRAMES since the last hit (no frame, no miss: use age() for staleness)
     name: str = ""
     names: dict = field(default_factory=dict)   # sim name → count, for `name`
+    # The colour classifier's VOTES over this track's hits, and the winner.
+    # A vote, not the last frame's answer: at the hostile preset the
+    # classifier is right three times in four, so one frame of it is a coin
+    # a brain must not act on — and a track that has been seen ten times has
+    # a colour that is right far more often than any single look.
+    colors: dict = field(default_factory=dict)
+    color: str | None = None
     # Where it is and where it is going, in the ODOMETRY frame (only when
     # the brain passes its position in): the last hit's position, the time
     # of it, and a smoothed velocity from consecutive hits. A rolling ball
@@ -233,6 +240,9 @@ class Tracker:
             if d.name:
                 tr.names[d.name] = tr.names.get(d.name, 0) + 1
                 tr.name = max(tr.names, key=tr.names.get)
+            if d.color:
+                tr.colors[d.color] = tr.colors.get(d.color, 0) + 1
+                tr.color = max(tr.colors, key=tr.colors.get)
             used.add(i)
             hit.add(tid)
         for tr in self.tracks:
@@ -243,7 +253,8 @@ class Tracker:
             if i in used:
                 continue
             tr = Track(self._next_id, d.cls, body[i], d.elevation, d.width, d.range_est, d.conf,
-                       t, t, name=d.name, names={d.name: 1} if d.name else {})
+                       t, t, name=d.name, names={d.name: 1} if d.name else {},
+                       colors={d.color: 1} if d.color else {}, color=d.color)
             self.tracks.append(tr)
             born.append(tr)
             self._next_id += 1

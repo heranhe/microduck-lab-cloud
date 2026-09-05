@@ -314,8 +314,10 @@ class World:
         self.persons: dict[str, WorldPerson] = {
             p.id: WorldPerson(self.model, p) for p in scenario.persons}
         # What a detector can find: every duck's trunk, every ball, every person.
+        # A duck's colour is its team's colorway — the one thing about another
+        # duck a camera could really read (world/compose.paint_team paints it).
         targets = [Target(d.id, "duck", mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY,
-                                                          f"{d.id}/trunk_base"), 0.10)
+                                                          f"{d.id}/trunk_base"), 0.10, color=d.team)
                    for d in scenario.ducks]
         targets += [Target(f"ball{i}", "ball", mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY,
                                                                 f"ball{i}"), b.radius)
