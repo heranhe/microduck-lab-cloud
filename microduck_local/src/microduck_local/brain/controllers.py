@@ -843,11 +843,24 @@ class ChaseParams:
     beside_m: float = 0.3
     beside_s: float = 1.5
     # Use the colour classifier to tell a teammate from an opponent
-    # (roadmap Track 4.4.2). SHIPS OFF until it is measured. What it changes:
-    # `mate_keepout` was measured off at 0.4 m and the trace said why — 12
-    # of 13 falls were beside an OPPONENT, which no team board carries — so
-    # the keep-out is re-measured WITH the sense that was missing rather
-    # than the rule being re-tried unchanged.
+    # (roadmap Track 4.4.2): with it on, a duck gives a STRANGER
+    # `opp_keepout` of room and keeps the standard `duck_keepout` for a
+    # teammate, since the team board already coordinates teammates and
+    # nothing coordinates an opponent.
+    #
+    # SHIPS OFF, MEASURED. At 0.55 m on 3v3 it looked like the crowding fix
+    # the 13-fall trace asked for — crowd 26.5% -> 19.7%, p = 0.002 over 24
+    # seeds — and then did NOT replicate: 21.4% -> 20.5%, p = 0.593 on 24
+    # fresh ones, and better on 25 of 48 pooled, which is a coin. Falls
+    # (181 -> 160, p = 0.27) and everything else are unresolved; the only
+    # replicated effect is the cost, possession -2.16 s/min (p = 0.032).
+    # The same shape as the poacher and the bump-stand rule, caught by the
+    # same rule: confirm on seeds the effect was not found on.
+    #
+    # The SENSE is not what failed, and it stays: a colour-aware rule with a
+    # better idea than "stand further off" can use it. For scale, the static
+    # roles (Track 4.3) take the same metric from 22.4% to 3.5% and DID
+    # replicate — standing somewhere useful beats standing further away.
     use_color: bool = False
     opp_keepout: float = 0.0       # an opponent this near and ahead: treat it as a duck to avoid
     # The ToF sees the ball at the feet (tof_floor_ball): inside `tof_ball_m`

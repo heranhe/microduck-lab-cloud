@@ -1927,7 +1927,7 @@ directly.
       makes every duck track worse and moves every soccer number measured
       through duck avoidance. It is its own experiment with its own
       battery, not a line in this one.
-- [~] **4.2 Brains use it — BUILT, SHIPS OFF, being measured.** `Chase`
+- [x] **4.2 Brains use it — BUILT, MEASURED, SHIPS OFF.** `Chase`
       gains `use_color` and `opp_keepout`: with the sense on, a duck gives a
       STRANGER its own keep-out radius and keeps the standard 0.40 m for a
       teammate, on the reasoning that the team board already coordinates
@@ -1935,12 +1935,39 @@ directly.
       track's vote, and unknown counts as an opponent — the cost of treating
       a teammate as a stranger is a wasted metre, the cost of the reverse is
       walking into one.
-      → **measuring:** `MICRODUCK_CHASE="use_color=1,opp_keepout=0.55"`,
-      24 seeds × 300 s of 3v3 against a matched baseline (`runs/t7-*.jsonl`),
-      on falls (events), crowd and possession. The defender marking the
-      nearest opponent rather than shadowing the ball is NOT built — the
-      posts already emptied the crowd (3.4), so marking has to beat that
-      rather than the old roster, which is a different and harder question.
+      **MEASURED, AND IT FAILED ITS CONFIRMATION — the knob ships off.**
+      `MICRODUCK_CHASE="use_color=1,opp_keepout=0.55"` against a matched
+      baseline, 3v3, 24 seeds and then 24 fresh ones (`runs/t7-*.jsonl`):
+
+      | `crowd` | plain | colour | Δ | p | better on |
+      |---|---:|---:|---:|---:|---|
+      | seeds 0–23 | 26.5% | 19.7% | −0.068 | **0.002** | 16 of 24 |
+      | **seeds 100–123** | **21.4%** | **20.5%** | **−0.009** | **0.593** | **9 of 24** |
+      | pooled (48) | 23.9% | 20.1% | −0.038 | 0.008 | **25 of 48** |
+
+      The pooled p is 0.008 and the pooled win rate is 25 of 48 — a coin.
+      That combination IS the finding: the whole effect lives in the
+      discovery block, which is the poacher's shape and the bump-stand
+      rule's shape, and the rule that catches all three is this repo's
+      third. Nothing else resolves either (falls 181 → 160, p = 0.27; goals
+      +0.31, p = 0.30; advance −0.000; back-kicks 37% → 41%), and the one
+      thing that does replicate is the COST: possession −2.16 s/min,
+      p = 0.032.
+
+      So a duck that gives strangers more room does not measurably crowd
+      less, and it does hold the ball less. `use_color` and `opp_keepout`
+      ship at 0. **The sense itself is not what failed** — the classifier
+      and the track vote are exercised by tests and cost nothing at 0 — and
+      it is now available for a rule that has a better idea what to do with
+      it. Note also what this arm was up against: item 3.4's roles take the
+      same metric from 22.4% to 3.5%, five times further, and they were
+      confirmed. Standing off an opponent is a much weaker lever than
+      standing somewhere useful in the first place.
+
+      The defender marking the nearest opponent rather than shadowing the
+      ball is NOT built — the posts already emptied the crowd, so marking
+      would have to beat THAT rather than the old roster, which is a
+      different and harder question.
 - [x] **4.3 Goal sensing — MEASURED (2026-09-05), and the known-pitch
       assumption does NOT hold at the datasheet preset.**
       `scripts/probe_odom_goal.py`, 3 seeds × 300 s of 2v2 with the ducks
@@ -2011,7 +2038,8 @@ back-kicks, 28 of 53 today, judged on 24 seeds in two minutes.
 **That order was followed, and everything through 4.1 is done** (2026-09-05).
 What is left, in the order it is worth doing:
 
-1. **4.2's battery** — the colour keep-out, running.
+1. ~~4.2's battery~~ — run, and it failed its confirmation; the knob ships
+   at 0 and the sense stays for a better rule.
 2. **Zones that split at halfway for a roster with no midfielder.** The
    thirds leave the middle unowned in a 2v2, measured at 25% of the run
    (3.5). One line, unmeasured.

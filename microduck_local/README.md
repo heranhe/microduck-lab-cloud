@@ -1399,6 +1399,7 @@ what killed each:
 | **the bump-stand rule** | **the last one standing, and it failed too: −1.88 on its own 12 layouts, +0.25 on 12 fresh ones** |
 | `bump_back` (reverse out of a contact instead of standing) | a *closed* null: it cuts contact time 43% and moves falls by exactly 0.00 |
 | **a learned striker** (roadmap 4.4) | **loses to the scripted brain: it carries the ball toward its OWN goal** |
+| a colour-aware keep-out (give a stranger more room than a teammate) | the same shape again: crowd −6.8 pts at p = 0.002 on its own 24 seeds, −0.9 pts at p = 0.593 on 24 fresh ones |
 
 The learned striker is the sharpest of these, because it is the one that
 was supposed to sidestep the hand-written brain entirely. `striker-v1`
