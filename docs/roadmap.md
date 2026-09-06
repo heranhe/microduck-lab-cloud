@@ -2125,135 +2125,121 @@ LONGER lost: **a longer line-up is a staler plan.**
       rate (18%). Both are per-kick events with ~150–190 of them a battery,
       so they resolve where goals cannot. Only then the ledger.
 
-#### 4c. The head — the blind radius is a choice, not a limit (open, 2026-09-05)
+#### 4c. The head — the blind radius IS a choice, and un-choosing it does not help (MEASURED, 2026-09-05)
 
 Watching the ducks, the repo owner said they hunt for a ball that is under
 their feet, that the neck looks straight when it could clearly bend further,
-and that the head comes back UP as they walk in to kick. The code agrees with
-all three, which is why this is the live lead rather than a fourth aim fix:
+and that the head comes back UP as they walk in to kick. **All three are
+true, all three are now measured, and fixing them changes nothing the kick
+can feel.** Two new probes carry the numbers: `scripts/probe_head_pitch.py`
+(the command swept on the shipped walker, and the blind radius read off the
+real `Detector` on a real composed `World` at each pose) and
+`scripts/probe_gaze.py` (what the head is doing, and how long the duck has
+been blind, at each swing in play).
 
-- `Chase._gaze` clamps the head-pitch command to `ChaseParams.head_down`
-  = 0.6 rad. The MJCF joints are `neck_pitch` −1.571…+1.047 and `head_pitch`
-  ±1.571 — the mechanism allows far more than the brain asks for.
-- The gaze is applied only while `vx > 0` or the state is `look`/`search`.
-  **A duck standing on its spot in `settle` — the second before it kicks —
-  drops the gaze and lets the head return to neutral**, which is exactly the
-  moment it most needs to see the ball.
-- Nobody has ever measured the head-PITCH command against what the walker
-  delivers. The equivalent for head YAW is measured (1.42 rad while walking,
-  12% forward-speed cost, `walker-facts`), and it showed the shipped range
-  was a curriculum stage rather than a limit. There is every reason to think
-  pitch is the same story, and no measurement either way.
+**The command against the camera.** Standing, the head-pitch slot buys
+0.79 rad of camera depression per unit of command, linearly, until cmd 1.25
+— where the `head_pitch` JOINT hits its +1.571 MJCF limit and the camera
+stops at 1.17 rad (67°). The walker tracks the command all the way there and
+stays upright, so **the limit is the joint, not the policy**, and
+`head_down` = 0.6 (0.65 rad, 37°) was half of what is available. Walking,
+the same slot costs forward speed: −11.7% at 0.6, −19.6% at 1.0, −28.2% at
+1.25.
 
-If the blind radius comes down from 0.35 m to something near contact, the
-staleness that causes every kick failure above goes away at its source rather
-than being compensated for. Being measured now.
+**The neck slot is real, free, and was never commanded.** `head_pose_cmd[0]`
+is `neck_pitch`; `Chase.step` emitted `(0.0, gaze, 0.0, 0.0)`, so the brain
+has never moved it. Positive looks UP, so a downward gaze is a NEGATIVE neck
+command, worth 0.43 rad/unit standing. Depression is additive across the two
+slots — and the price is not:
 
-#### 4d. Defence — get in the way instead of lining up (measured 2026-09-05, ships off)
+| camera depression | through the head slot | through both slots |
+|---|---|---|
+| 59° | cmd +1.00, **−19.6%** speed | neck −0.30 head +0.60, **+4.4%** |
+| 69° | cmd +1.25, **−28.2%** | neck −0.60 head +0.60, **−4.9%** |
+| 72° | not reachable (joint) | neck −0.40 head +0.80, **−1.1%** |
+| 80° | not reachable | neck −0.75 head +0.75, −24.0% |
 
-The repo owner, watching a 2v2: the ball rolls slowly toward a duck's own goal
-and the duck keeps trying to set up a proper kick instead of "coming in from
-the side and deflecting it". A block is the one soccer job in this repo that
-does *not* need the precision the kick has never had — 0 of 191 kicks on the
-sweet spot (4b) — so it was the obvious thing to try.
+(walking at 0.30, four headings, steady over seconds 2–6). Standing the
+depression peaks at **1.47 rad (84°)** at neck −1.0 / head +1.0 and then
+comes back UP as the head joint saturates and the neck keeps folding.
 
-- [x] **The instrument first: `scripts/probe_threat.py`.** Goals cannot judge a
-      defensive change (136 seeds for 25%, own goals 347 — item 1.5), so this
-      counts **threats**: the ball moving, its path crossing the defending
-      team's own goal line inside the mouth, arriving within `--eta`, held
-      for 0.4 s. There is no deceleration term because this floor has none —
-      rolled at 0.15/0.3/0.6/1.0 m/s the ball drops at once to 0.597 of its
-      launch speed and then holds it flat for the six seconds it takes to
-      cross the pitch. **A ball rolling at the mouth here does not stop by
-      itself.** Outcomes are conceded / cleared / reset / expired, and the
-      probe also names the best-placed defender and records what it was
-      doing. It carries two companion measures because the strict threat is
-      rare: an **incursion** (every visit the ball pays to a goal area) and a
-      **danger clock** (s/min the ball is inside 0.45 / 0.9 m of some mouth —
-      not degenerate over a self-play pair, unlike `ballOwnHalf`).
-      `--vs A B` reads two batteries paired.
+**The blind radius per pose**, nearest floor ball the real detector still
+reports, standing, ground distance trunk→ball — with the far edge beside it,
+because pitching down trades the horizon for the feet:
 
-      **BASELINE, 48 seeds × 300 s of 2v2, `runs/thr-base48b.jsonl`:** 71
-      threats (1.5 a run), **54 of 70 decided are conceded (77%)**. The
-      defender is not idle — tick-weighted it is in `support` 24%, `lineup`
-      21%, `search` 18%, `chase` 13%, `retreat` 11%. Three numbers set the
-      ceiling for anything built on top:
-      * **40 of the 70 threats are declared with the ball already inside
-        0.3 m of the goal line, and 38 of those 40 are conceded.** Most of
-        this metric is a goal in progress, not a situation. The addressable
-        ones start 0.8 m out and are ~50% conceded.
-      * **A block was geometrically available — perfect knowledge of the
-        ball's velocity, a generous walk model — in 35 of 71 threats, and in
-        only 20 of the 54 conceded ones.**
-      * **A defender within 0.15 m of the ball's path clears 16 of 33; one
-        0.15–0.50 m off it concedes 31 of 31.** Being one step out of the way
-        scores exactly as badly as being on the other side of the pitch, and
-        nothing in the brain takes that step. That is the owner's
-        observation with a number on it.
+| head pose | camera | nearest ball | visible out to |
+|---|---:|---:|---:|
+| level | 0.19 rad (11°) | **0.37 m** | 0.90+ m |
+| head 0.6 (shipped clamp) | 0.65 (37°) | 0.18 m | 0.77 m |
+| head 0.9 | 0.90 (52°) | 0.12 m | 0.36 m |
+| head 1.25 (joint stop) | 1.17 (67°) | 0.08 m | 0.21 m |
+| neck −1.0 head +1.0 | 1.46 (84°) | **0.05 m** | 0.15 m |
 
-      Sensing, for anyone designing on this: the best-placed defender had a
-      fresh detection on 22% of threat ticks and any live track on 43%, and
-      its tracker's ball-velocity DIRECTION is off by a median 25°.
-- [x] **The behaviour: `brain/intercept.py`, `ChaseParams.intercept_eta`,
-      ships at 0.** Walk onto the ball-to-goal line ahead of the ball and let
-      the body stop it; one duck goes, chosen by the shortest walk to its own
-      block point off the shared blackboard. Two design notes that are the
-      reusable part: the closing rate is only the TRIGGER and it is a
-      **scalar** differenced from the ball's distance to our own goal (a 25°
-      direction error costs 9% of a projection and a metre of an aim point),
-      and the standing point is laid on the ball→goal line, whose two ends
-      are both known to centimetres. The history is fed from **sightings
-      only**, never a coasted track, whose odometry-frame position walks with
-      the duck holding it.
+So "the level camera loses a floor ball inside ~0.3 m" is right: 0.37 m of
+ground distance, which is 0.35 m of the slant `range_est` that `refresh_min`
+is compared against. `refresh_min` = 0.35 is **exactly the level camera's
+blind radius**, and a pitched head beats it by 20–30 cm.
 
-      **MEASURED AT 8.0, 48 paired seeds + 48 fresh (100–147) + a 24-seed
-      ledger.** It engages as designed — through a threat the best-placed
-      defender is in `block` 21% of ticks, `lineup` 21% → 6%, `chase`
-      13% → 5% — and:
+**What the ducks were actually doing** (195 kicks, 24 seeds × 300 s of 2v2):
+the head-pitch command at the swing is **0.000** at the median; the 3.5 s
+run-up is head-UP 55% of the time and standing still 49%; the duck has not
+seen the ball for **1.48 s and 0.175 m of walking** when it fires, 16 of 195
+kicks never saw it at all in the whole run-up, and **81%** of the duck-steps
+spent with the ball truly inside 0.40 m are steps in which the detector is
+reporting nothing. Every one of the owner's three observations, as a number.
 
-      | | base | block | pooled Δ (96) | p | blocks |
-      |---|---:|---:|---:|---:|---|
-      | conceded threats | 108/137 | 102/138 | 79% → 74% | 0.337 | 77→73%, 81→75% |
-      | danger clock < 0.9 m | 15.80 | 14.26 | −1.53 ± 0.60 s/min | **0.010** | 0.093, 0.054 |
-      | danger clock < 0.45 m | 4.88 | 4.21 | −0.67 ± 0.34 s/min | 0.051 | 0.016, **0.558** |
-      | incursion: nearest the mouth | 0.411 | 0.437 | +0.025 ± 0.016 m | 0.104 | 0.084, 0.546 |
-      | incursions a run | 5.54 | 5.52 | −0.02 ± 0.20 | 0.916 | +0.42, −0.46 |
-
-      (`runs/thr-base48b.jsonl` / `thr-i8-48.jsonl`, then `thr-base48f` /
-      `thr-i8-48f`; ledger `runs/led2-base24.jsonl` / `led2-i8-24.jsonl`.)
-
-      Ledger, 24 paired seeds: goals 39 → 36 (p = 0.71), falls 57 → 46
-      (p = 0.19), possession +1.5 s/min (p = 0.16), advance +0.014
-      (p = 0.78), crowd/spread/depth flat, back-kicks 32% → 32%, own goals
-      23 → 22. **The feared cost — a duck that abandons the attack to shadow
-      slow balls loses possession and falls more — does not appear.** The
-      real cost is touches: kicks 193 → 149, a fifth of them.
-
-      Signed `ballProgress` −0.369 (p < 0.001) is **attribution, not harm**,
-      and the mechanism was measured rather than assumed: a duck standing in
-      front of a goalward-rolling ball becomes the possessing duck, and over
-      6 seeds × 300 s, 3804 such ticks carry the ball toward that duck's own
-      mouth at 4.65 m/min against 0.75 m/min in every other state — which is
-      the situation the block exists for, not something it caused.
-      `ballAdvance`, the forward half of the same accumulator credited by the
-      same rule, is flat, which a duck genuinely shoving the ball goalward
-      could not manage; and the danger clock, which reads the BALL and not
-      the possession, moves the other way.
-
-      **Verdict: it works and it does not pay.** The behaviour is real, the
-      side effects are absent, and the number it was built to move does not
-      resolve. Ships off with the table above. The baseline says why, and
-      says where to look next: a block was available in only 20 of 54
-      conceded threats, so **the lever is earlier than the block** — the ball
-      should not be rolling at the mouth unmarked in the first place, which
-      is a positional question (item 3's roles, `depth` at one seed) rather
-      than a reactive one.
-- [ ] **The sweep, untried.** `intercept_clear` > 0 aims ACROSS the line with
-      the ball nearly there instead of standing in it — the owner's "push it
-      out of the way" rather than "get in front of it". Implemented, ships at
-      0, never measured. → **decide on:** the same table, against
-      `intercept_eta=8, intercept_clear=0` rather than against the shipped
-      brain, so it measures the sweep and not the block.
+- [x] **Hold the gaze through the settle — mechanism confirmed, result null.**
+      `ChaseParams.gaze_still` keeps the head down while the duck is standing
+      still (a turn in place still takes it level: the walker cannot turn
+      head-down, 0.2 rad in 5 s against 3.1), and `gaze_neck` routes the
+      command across both slots. With both on: head-up 55% → 37%, blind at
+      the swing 1.48 s / 0.175 m → **0.14 s / 0.006 m**, never-saw-it kicks
+      16 of 195 → **1 of 189**. Then, over **48 paired seeds** (two blocks of
+      24, the second fresh), 360 baseline kicks against 339: on the sweet
+      spot 0/360 → 4/339 (p = 0.055, **all four in the first block**), whiff
+      69/360 = 19.2% → 64/339 = 18.9% (p = 1.00), ball-ahead / spot-to-ball /
+      plan age / drift all flat. The play ledger over 24 seeds of 2v2 is flat
+      on goals, falls, possession, signed progress, spread, crowd and depth,
+      with `ballAdvance` +0.115 (p = 0.048) while signed `ballProgress` is
+      −0.003 (p = 0.98) — churn, per the reading rule. **Ships off.**
+- [x] **Through the head slot ALONE it is worse, and that replicates.**
+      `gaze_still` at `gaze_neck` = 0 takes the whiff rate 19.2% → **26.4%**
+      (84 of 318, p = 0.027) in BOTH blocks (27.9%, 25.1%); with the neck
+      carrying the same depression the cost disappears (18.9%). The bench
+      predicted it: the head slot costs 12–28% of forward speed at these
+      depressions and the split costs about nothing. **If the gaze is ever
+      turned on, it must go through the neck.**
+- [x] **Why it cannot win, measured.** On the kick spot the ball is
+      `kick_ahead` 0.08 m ahead and `kick_side` 0.06 m to the side — **37°
+      off the nose, and the camera's horizontal HALF-field is 31°**. The last
+      centimetres of a line-up are unseeable at any pitch. What a held gaze
+      recovers is the run-IN (at 0.20 m ahead the same side offset is 17°),
+      and the spot has already been planned by then. The blindness was real;
+      it was not what the kick was waiting for.
+- [x] **`refresh_min` 0.35 → 0.20 is the one arm that survived fresh seeds
+      — and it is a trade, not a win.** Pooled over 48 paired seeds, 150
+      kicks against 360: ball ahead 0.244 → **0.182 m** (p = 7e-11),
+      spot-to-ball 0.297 → **0.215** (p = 1e-12), plan age 3.32 → **2.30 s**
+      (p = 2e-19), drift 0.224 → **0.151** (p = 7e-8), near the sweet spot
+      1/360 → 9/150 (p = 0.0001). On the ledger, **possession 21.6 → 26.5
+      s/min (p = 0.0003, better on 19 of 24 seeds)** and goals 39 → 47
+      (p = 0.34) — with signed `ballProgress` FLAT (−0.050, p = 0.66) and
+      **58% of the touches gone** (193 kicks → 84). The duck re-plans
+      instead of swinging: possession bought with touches, the ball no
+      further forward. Ships at 0.35, with the numbers.
+- [ ] **What is left, in order.** (1) `gaze_yaw` — wired, unit-tested,
+      **never run in a battery**: the only thing that can reach a ball 37°
+      off the nose, and the ToF is in the HEAD, so a yawed head points the
+      bumper sideways (which is how `look_aim` died). Unknown, not measured
+      off. (2) The endpoint is a GEOMETRY problem, not a sensing one: with
+      `kick_side` = 0.06 at `kick_ahead` = 0.08 the ball is outside the lens
+      at the moment that matters, so a kick spot the duck can watch itself
+      arrive on would need a different offset — or a kick that fires on the
+      ToF rather than on the plan. (3) `refresh_min` with something that
+      stops the re-plan dithering (freeze the FOOT choice once laid, re-plan
+      only the position) — that is the specific failure the first
+      `refresh_min` attempt recorded, and it would keep the placement gain
+      without paying 58% of the touches.
 
 ### 5. Learned role brains — after 3 lands, and only if a learned striker can reach the ball
 

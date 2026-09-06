@@ -491,7 +491,8 @@ class ChaseParams:
     `lineup_lat` (its speed-up) and `search_walk_after` (line-up
     precision), `kick_deflect_*` (the kick
     map in the stance), `kick_cone` (shoot only from close), `predict_s`,
-    `head_yaw_when`, `predict_steer`, `look_aim`, `search_sweep` (what the
+    `head_yaw_when`, `predict_steer`, `look_aim`, `search_sweep`,
+    `gaze_still`/`gaze_neck`/`gaze_yaw` (what the
     head does about the ball), `tof_ball_m` (the ToF seeing a ball at the
     feet), `seek_s` (a ball memory), `push_beyond` (deliberate bumping),
     `search_sided`, `mate_keepout` (teammates' poses as obstacles),
@@ -583,7 +584,27 @@ class ChaseParams:
     # 10% — and costs 58% of the touches: 191 kicks -> 80 (p < 1e-11). The
     # whiff RATE improving while the kick COUNT halves is the `two_stage`
     # shape again (AGENTS.md rule 6): in absolute terms it is 156 effective
-    # kicks against 72. Still 0 of 80 on the sweet spot. Ships at 0.35.
+    # kicks against 72. Still 0 of 80 on the sweet spot.
+    #
+    # CONFIRMED ON 24 FRESH SEEDS, and this is the only arm of the whole
+    # head/blindness investigation that survived one. Pooled over 48 paired
+    # seeds, 150 kicks against the baseline's 360:
+    #     ball ahead of the trunk   0.244 -> 0.182 m   (p = 7e-11)
+    #     spot-to-ball              0.297 -> 0.215 m   (p = 1e-12)
+    #     plan age                  3.32  -> 2.30 s    (p = 2e-19)
+    #     ball drift since the plan 0.224 -> 0.151 m   (p = 7e-8)
+    #     near the sweet spot       1/360 -> 9/150     (p = 0.0001)
+    #     ON the sweet spot         0/360 -> 1/150     (p = 0.29)
+    # and on the play ledger (24 seeds of 2v2) possession 21.6 -> 26.5 s/min
+    # (p = 0.0003, better on 19 of 24 seeds) with goals 39 -> 47 (p = 0.34),
+    # signed `ballProgress` FLAT (-0.050, p = 0.66) and the whiff rate flat
+    # pooled (19.2% -> 17.3%).
+    #
+    # So it is a real fix to the STALENESS and it is not a win: the duck
+    # keeps re-planning instead of swinging, which is possession bought with
+    # touches, and the ball ends up no further forward. Ships at 0.35, with
+    # the numbers, because the next person to reach for the blind radius
+    # should start from here and not from the head.
     refresh_min: float = 0.35
     # The line-up is two stages (traced: with the spot 8 cm behind the
     # ball, the walk-in's last steering steps and the square-up's turn in
@@ -747,6 +768,17 @@ class ChaseParams:
     #    so the deep end is only worth asking for when the ball really is
     #    that close — which is exactly what `_gaze` decides, since the
     #    command it asks for is a function of the range.
+    #
+    #    AND THAT IS WHY RAISING `head_down` DOES NOTHING. Read off the
+    #    brain that is running (3 seeds x 90 s of 2v2, 3656 gaze frames in
+    #    `lineup`/`settle`), the gaze COMMAND is a median 0.259 and the
+    #    camera depression it reaches a median 0.245 rad — 14°, with the
+    #    90th percentile at 0.566. The clamp binds in under a tenth of the
+    #    frames, because `_gaze` aims the axis AT the ball and most of a
+    #    line-up happens at 0.3-0.6 m where that asks for a quarter of a
+    #    radian. Raising the ceiling of a limit that is not being hit is
+    #    not a change; measured, `head_down` 0.6 -> 1.0 moved the median
+    #    depression only 0.245 -> 0.339 rad and no kick metric at all.
     # 3. THE NECK SLOT IS FREE AND THE HEAD SLOT IS NOT. `head_pose_cmd[0]`
     #    is `neck_pitch` and this brain never commanded it: `Chase.step`
     #    emitted `(0.0, gaze, 0.0, 0.0)`. Swept (walking at 0.30, 4 headings,
@@ -766,7 +798,22 @@ class ChaseParams:
     head_range: float = 0.9
     head_gain: float = 0.75        # camera rad per unit of head-pitch command (standing; measured 0.789)
     neck_gain: float = 0.43        # …and per unit of NECK command (measured 0.43, same sweep)
-    gaze_neck: float = 0.0         # fraction of the gaze routed to the neck slot (see 3 above)
+    # Fraction of the gaze routed to the neck slot (see 3 above). Ships at 0
+    # because the gaze itself is off; if `gaze_still` is ever turned on it
+    # must be 1, since the head slot alone raises the whiff rate 19.2% ->
+    # 26.4% (p = 0.027, replicated) and the split does not.
+    #
+    # It also looks DEEPER for less command, because the neck's gain is much
+    # closer to the head's while WALKING (0.78 against 0.93) than standing
+    # (0.43 against 0.79), and the law above is calibrated standing. Read off
+    # the running brain in `lineup`/`settle`: the shipped gaze reaches a
+    # median 0.245 rad with a 90th percentile of 0.566; `head_down` 1.0
+    # through the head slot reaches 0.339 / 0.637; the split at `head_down`
+    # 0.64 reaches 0.309 / **0.812** on a median command of 0.199. The tail
+    # is where a gaze earns its keep (it is the close-in frames), which is
+    # why the split arm went blind for 0.14 s at the swing and the
+    # head-slot arm for 1.20 s.
+    gaze_neck: float = 0.0
     cam_level: float = 0.197
     cam_z: float = 0.21
     # Hold the gaze while the duck is STANDING STILL, instead of dropping it
@@ -784,6 +831,43 @@ class ChaseParams:
     # STILL, NOT SLOW: a turn in place keeps the head level, because the
     # walker cannot turn in place with its head down (0.2 rad in 5 s against
     # 3.1 level — measured in tidy.py, and the reason the old gate existed).
+    #
+    # SHIPS OFF. It does exactly what it says and the kick does not care.
+    # The mechanism, on the same 24 seeds x 300 s of 2v2 as the numbers
+    # above (with `gaze_neck` = 1, `head_down` = 0.64): the run-up is
+    # head-UP 55% -> 37% of the time, the duck has not seen the ball for
+    # 1.48 s / 0.175 m at the swing -> **0.14 s / 0.006 m**, and kicks taken
+    # having never seen the ball in the whole 3.5 s run-up fall from 16 of
+    # 195 to 1 of 189. The blindness is real, it is a choice, and this
+    # un-chooses it.
+    #
+    # And then it buys nothing. Over 48 PAIRED seeds (two blocks of 24, the
+    # second fresh — `scripts/probe_kick_line.py`), against 360 baseline
+    # kicks and 339 with the gaze held:
+    #     on the sweet spot   0/360      ->  4/339 (1.2%, p = 0.055) — and
+    #                                        all four are in the first block,
+    #                                        none in the fresh one
+    #     whiffed             69/360 19.2% ->  64/339 18.9%  (p = 1.00)
+    #     ball ahead / spot-to-ball / plan age / drift: all flat
+    # The play ledger over 24 seeds of 2v2 agrees: goals, falls, possession,
+    # signed progress, spread, crowd and depth all flat, with `ballAdvance`
+    # +0.115 (p = 0.048) while signed `ballProgress` is -0.003 (p = 0.98) —
+    # churn, which is exactly what rule 5 says advance measures on its own.
+    #
+    # WORSE THROUGH THE HEAD SLOT ALONE, and this one replicates: at
+    # `gaze_neck` = 0 the whiff rate goes 19.2% -> **26.4%** (84 of 318,
+    # p = 0.027), in BOTH blocks (27.9%, 25.1%). With the neck carrying the
+    # gaze the cost disappears (18.9%). That is the bench measurement
+    # showing up in play — the head slot costs 12-28% of forward speed at
+    # these depressions and the split costs about nothing — and it is the
+    # reason `gaze_neck` exists at all.
+    #
+    # WHY IT CANNOT WIN, measured: on the kick spot the ball is 37° off the
+    # nose and the camera's horizontal HALF-field is 31°. The last
+    # centimetres of a line-up are unseeable at ANY pitch, and what a held
+    # gaze recovers is the run-in, which the spot has already been planned
+    # from. The lever that does move the placement is `refresh_min` — see
+    # its note.
     gaze_still: bool = False
     # …and yaw the head at it too while standing. The pitch alone cannot
     # reach the endpoint: on the kick spot the ball is 0.08 m ahead and
@@ -792,8 +876,12 @@ class ChaseParams:
     # tracks a head-yaw command to 1.42 rad, and standing there is no forward
     # speed to lose) — but the ToF sits on the HEAD, so a yawed head points
     # the bumper sideways, which is exactly how `look_aim` was measured off
-    # ("the brain stops for what it then sees"). Separate knob, measured
-    # separately.
+    # ("the brain stops for what it then sees"). Separate knob — and the
+    # ONLY one of the three NOT measured in play: it is wired and tested
+    # (`tests/test_team.py`) but no battery has been run with it on, because
+    # the pitch-side knobs came back flat first. It is the only thing that
+    # could reach the 37° endpoint, and the ToF risk is real, so treat the
+    # default as "unknown", not as "measured off".
     gaze_yaw: bool = False
     # After a kick the ball is ahead and low: stand and look down `look_s`
     # before searching (measured: a 9 s search spin with the ball 0.17 m
