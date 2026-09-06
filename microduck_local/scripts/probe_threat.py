@@ -73,8 +73,8 @@ import numpy as np
 from microduck_local.brain import REGISTRY, Senses
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
 from microduck_local.brain.team import brain_kwargs, kickoff_brains
-from microduck_local.world import World, make_pitch
 from microduck_local.contract import CTRL_DT
+from microduck_local.world import World, make_pitch
 
 GOAL_INSET = 0.08          # World._check_goal: the ball crosses at |x| > hx - 0.08
 # The danger clock: seconds a minute the ball spends this near a team's own
@@ -413,7 +413,7 @@ def summarise(all_rows: list[dict], seeds: int, seconds: float, per_side: int) -
     et = np.array([r["eta0"] for r in rows])
     di = np.array([r["dist0"] for r in rows])
     cv = np.array([r["cover0"] for r in rows])
-    print(f"\nat the moment a threat starts (median, IQR):")
+    print("\nat the moment a threat starts (median, IQR):")
     print(f"  ball speed      {np.median(sp):.3f} m/s   {np.percentile(sp, 25):.3f}-{np.percentile(sp, 75):.3f}")
     print(f"  seconds to line {np.median(et):.2f} s     {np.percentile(et, 25):.2f}-{np.percentile(et, 75):.2f}")
     print(f"  ball to line    {np.median(di):.2f} m     {np.percentile(di, 25):.2f}-{np.percentile(di, 75):.2f}")
@@ -540,7 +540,7 @@ def _paired(name: str, per_seed: dict[int, list[float]], other: dict[int, list[f
     t = d.mean() / se if se > 1e-12 else 0.0
     # Student's t, two-sided, via the normal only as a last resort.
     try:
-        from scipy import stats                                    # noqa: PLC0415
+        from scipy import stats  # noqa: PLC0415
         pv = float(2 * stats.t.sf(abs(t), len(d) - 1))
     except Exception:
         pv = float(2 * (1 - NormalDist().cdf(abs(t))))
