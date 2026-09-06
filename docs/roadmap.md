@@ -2453,6 +2453,26 @@ What is left, in the order it is worth doing:
    → **judge the next attempt on** median side offset at the swing (13.3 cm
    today) and on-spot % (1.7%), not on goals. `scripts/probe_kick_line.py`
    prints both, and its rows now carry `seed`, so arms can be paired.
+
+   **And the specific thing to try, which is new.** Every previous attempt
+   tried to REDUCE the offset — put the duck somewhere better. That is the
+   staleness problem and it is already measured out: the duck reaches its
+   planned spot to 1.4 cm, the spot is 0.285 m from the ball because the
+   plan is 3.0 s old and the ball has drifted 0.21 m, and `refresh_min` 0.20
+   fixes the staleness at the cost of 58% of the touches (confirmed on fresh
+   seeds — read its note in `ChaseParams` before re-trying it).
+
+   The coefficient opens a different door: **compensate for the offset
+   instead of removing it.** +1.90° per cm is a calibration, and the brain
+   now has an input it did not have this morning — `predict_s` ships on, so
+   `Chase.predicted` carries where the ball is going. Rotate the intended
+   kick line by −1.90° per cm of PREDICTED side offset at the swing. It
+   needs no extra sighting, no slower approach and no touches given up; it
+   is arithmetic on a number already computed. It fails if the prediction is
+   too poor at 0.35 m to be worth using, which is itself worth knowing and
+   is one probe. Judge it on **mean aim error** (the systematic part, ±0
+   today with a ±7.5° interval) rather than on the scatter, which this
+   cannot touch.
 8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
    and a result, all measured.
 
