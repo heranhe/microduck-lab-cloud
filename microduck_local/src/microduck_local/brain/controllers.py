@@ -490,8 +490,8 @@ class ChaseParams:
     Shipping OFF (0 / False), with their measurements below: `two_stage`,
     `lineup_lat` (its speed-up) and `search_walk_after` (line-up
     precision), `kick_deflect_*` (the kick
-    map in the stance), `kick_cone` (shoot only from close), `predict_s`,
-    `head_yaw_when`, `predict_steer`, `look_aim`, `search_sweep`,
+    map in the stance), `kick_cone` (shoot only from close),
+    `predict_steer` (a walked prediction line), `look_aim`, `search_sweep`,
     `gaze_still`/`gaze_neck`/`gaze_yaw` (what the
     head does about the ball), `tof_ball_m` (the ToF seeing a ball at the
     feet), `seek_s` (a ball memory), `push_beyond` (deliberate bumping),
@@ -1024,19 +1024,62 @@ class ChaseParams:
     # `head_yaw_max`; always, or only while searching / looking), and
     # with `predict_steer` the search opens toward the predicted side and
     # the hunt walks to the predicted point (clamped to the pitch).
-    # Measured OFF (8 seeds x 300 s of 1v1, against 2.25 goals / 9.4 kicks
-    # / 0.38 falls a run with it off): yaw always + steer 1.12 / 10.5 /
-    # 1.62; yaw off + steer 2.12 / 9.1 / 1.12; yaw in search + steer 2.12
-    # / 10.0 / 0.75; yaw in search, no steer 2.12 / 6.5 / 0.75. The head
-    # yaws 34 deg at most and the ball sits 90-120 deg off the nose while
-    # searching, so the gaze cannot reach it; the steering walked blind
-    # lines into things. The prediction is still tracked and drawn on the
-    # /sim page; the defaults below are the best of the variants when on.
+    # The head half SHIPS ON (`predict_s` 1.0 + `head_yaw_when` "always" +
+    # `yaw_clear` 0.45); the STEERING half stays off. That split is measured,
+    # and it reverses an earlier reading taken on 8 seeds of 1v1 judged
+    # mostly on goals - a metric that needs 136 seeds to move (Track 4.1.5),
+    # so the old table below could not have seen this either way. Keep it as
+    # the record of what the steering costs:
+    #   8 seeds x 300 s of 1v1, against 2.25 goals / 9.4 kicks / 0.38 falls
+    #   with everything off - yaw always + steer 1.12 / 10.5 / 1.62; yaw off
+    #   + steer 2.12 / 9.1 / 1.12; yaw in search + steer 2.12 / 10.0 / 0.75;
+    #   yaw in search, no steer 2.12 / 6.5 / 0.75.
+    # Every arm there that walks a predicted line loses falls, and the
+    # steering is what walks blind lines into things, so `predict_steer`
+    # stays off. The head does not walk anywhere. Re-measured properly on
+    # 48 paired seeds of 2v2 (24 discovery + 24 fresh, agreeing): the head
+    # bundle buys +8.0 points of ball-in-view (p<0.0001, 42/48 seeds) and
+    # cuts the median time the ball is lost by 0.27 s (p=0.0002), for no
+    # measured cost in falls, kicks, possession, spread, crowd, depth or
+    # ball progress. The gate is what makes it free - see `yaw_clear`.
     ball_decel: float = 0.04
-    predict_s: float = 0.0         # how long a prediction is worth acting on after the last hit (0: off)
+    predict_s: float = 1.0         # how long a prediction is worth acting on after the last hit (0: off)
     head_yaw_gain: float = 0.9
     head_yaw_max: float = 1.4          # the walker's trained head-yaw range (upstream curriculum: +-1.40 rad)
-    head_yaw_when: str = "search"  # or "always": yaw the head on the ball too, not only searching / looking
+    # Only let the head leave the walking line while the ToF says the line is
+    # empty: a look target is dropped when the forward clearance is inside
+    # this (`hunt_stop` = 0.45 is the natural scale; 0 = off).
+    #
+    # This exists because head-yaw ball tracking was a confirmed TRADE: on 48
+    # paired seeds it bought +7.8 points of ball-in-view and cost +1.54 falls
+    # a run (p<0.0001 both ways). The ToF is ON THE HEAD, so yawing it points
+    # the bumper off the walking line, and since the clearance rule became
+    # bearing-based it reports `+inf` honestly rather than a false wall - so a
+    # yawed duck walks with no forward obstacle sense at all. The brain had
+    # that signal and never consulted it before turning the head.
+    #
+    # Capping the yaw's MAGNITUDE was tried first and removes both halves
+    # together, because the visibility and the falls live in the same frames
+    # by magnitude. Clearance separates them. Measured over all 48 seeds,
+    # counting frames where the head is past 0.35 rad (blind) and the old
+    # column rule - which does not care where the head points - says
+    # something really is ahead:
+    #
+    #                      blind frames   of which, obstacle ahead   per 1000
+    #   head tracking off          0.0%                          -        0.0
+    #   tracking, ungated         16.7%                      13.0%       21.8
+    #   tracking, gated 0.45      14.1%                       8.2%       11.6
+    #
+    # The gate drops total blind frames by only 16% but the DANGEROUS ones by
+    # 47%: it is selective, which is exactly why the cap was not the lever.
+    # Against the same bundle ungated it removes 1.60 falls a run (p<0.0001,
+    # worse on only 8 of 48 seeds) while giving up no visibility at all
+    # (+0.002, p=0.80). Both blocks agree. What is LEFT: 8.2% of blind frames
+    # still have something ahead, because the gate only consults the clearance
+    # the head can currently see - it cannot know about what it has already
+    # turned away from.
+    yaw_clear: float = 0.45
+    head_yaw_when: str = "always"  # or "search": yaw the head only while searching / looking
     predict_steer: bool = False    # the hunt bends and the search opens toward the prediction
     search_dip_every: float = 1.5
     search_dip_s: float = 0.6
@@ -2112,7 +2155,17 @@ class Chase:
             look_at = p.kick_exit_left if self._last_foot == "kick_left" else p.kick_exit_right
         elif look_at is None and self.state == "search" and p.search_sweep > 0 and self._search_t0 is not None:
             look_at = p.search_sweep * math.sin(2.0 * math.pi * (t - self._search_t0) / p.search_sweep_s) / p.head_yaw_gain
-        if look_at is not None and senses.skill is None and (p.head_yaw_when == "always" or self.state in ("search", "look")):
+        if look_at is not None and senses.skill is None and (p.head_yaw_when == "always" or self.state in ("search", "look")) \
+                and not (p.yaw_clear > 0.0 and ahead < p.yaw_clear):
+            # …unless the way ahead is not clear. The ToF is ON THE HEAD, so
+            # yawing it points the bumper off the walking line: since the
+            # clearance rule became bearing-based it reports `+inf` honestly
+            # instead of a false wall, which means a yawed duck walks with no
+            # forward obstacle sense at all (measured: past 0.70 rad it stops
+            # on 0.3% of frames where the old column rule stopped on 13.8%).
+            # That is where head-tracking's falls come from. The brain has the
+            # signal and did not consult it; this consults it, keeping the
+            # head on the line whenever something is inside `yaw_clear`.
             head = (head[0], head[1], float(np.clip(p.head_yaw_gain * look_at, -p.head_yaw_max, p.head_yaw_max)), head[3])
         # The two arms of the same rule, on the SAME gate - a turn in place,
         # beside a body, in a state where that turn is not itself the escape

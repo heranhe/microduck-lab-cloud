@@ -2303,16 +2303,60 @@ place.
       With `predict_s` = 0 the look target is `None` outside search/look, so
       the flag gates nothing. It is broken-not-null and needs `predict_s > 0`
       to mean anything; every arm above was run that way.
-- [ ] **The one thing worth building from this.** Gate the head yaw on
-      FORWARD CLEARANCE rather than capping its magnitude: in `Chase.step`,
-      drop or shrink the look target when `ahead` is inside a margin
-      (`hunt_stop` = 0.45 m is the natural constant), so the head only leaves
-      the walking line while the bumper says the line is empty. The bearing
-      rule already reports `+inf` honestly when the head is turned, so the
-      brain HAS the signal and simply does not consult it before turning the
-      head. → **decide on:** the 2×2 {yaw gated, yaw ungated} × {dip on, dip
-      off}, judged on ball-in-view and falls, both of which resolve at 24
-      seeds. Not measured; do not ship it on a hunch.
+- [x] **The gate works, and head tracking SHIPS ON.** (2026-09-06.) The idea
+      was to gate the head yaw on FORWARD CLEARANCE rather than cap its
+      magnitude: in `Chase.step`, drop the look target when `ahead` is inside
+      a margin, so the head leaves the walking line only while the bumper
+      says the line is empty. That is `ChaseParams.yaw_clear`, shipped at
+      **0.45** with `predict_s` = 1.0 and `head_yaw_when` = "always".
+
+      Six arms, 300 s of 2v2 each: {baseline, tracking ungated, tracking
+      gated} × {discovery seeds 0–23, fresh seeds 100–123}, paired on seed,
+      48 seeds pooled. `scripts/probe_search.py --seeds 24 --seconds 300
+      --per-side 2 --jobs 8`, arms in `runs/yawgate/`.
+
+      | pooled, 48 paired seeds | ball in view | falls a run | median loss | kicks |
+      |---|---|---|---|---|
+      | gated vs baseline | **+8.0 pts** (p<0.0001, 42/48) | −0.06 (p=0.82) | **−0.27 s** (p=0.0002) | −0.44 (p=0.56) |
+      | gated vs ungated | +0.2 pts (p=0.80) | **−1.60** (p<0.0001, 8/48) | −0.06 (p=0.43) | +0.92 (p=0.26) |
+      | ungated vs baseline | +7.8 pts (p<0.0001, 44/48) | **+1.54** (p<0.0001) | −0.21 s (p=0.002) | −1.35 (p=0.07) |
+
+      Read the middle row: the gate gives up **no** visibility and removes
+      **all** of the falls. Possession, spread, crowd, depth, ballProgress,
+      ballAdvance and spinFrac are flat in every contrast. Both blocks agree
+      on every significant line, which is the bar that killed the colour
+      keep-out. This is the second brain-tier change to survive a fresh-seed
+      confirmation, after the aim clamp.
+
+      **Why the cap failed and the gate did not** — the mechanism, from the
+      ToF yaw bins over all 48 seeds. "Blind" is the head past 0.35 rad,
+      where the bearing rule reports `+inf`; "obstacle ahead" is the old
+      column rule, which does not care where the head points, saying
+      something really is there:
+
+      | | blind frames | of which, obstacle ahead | dangerous per 1000 |
+      |---|---|---|---|
+      | tracking off | 0.0% | – | 0.0 |
+      | ungated | 16.7% | 13.0% | 21.8 |
+      | gated 0.45 | 14.1% | 8.2% | **11.6** |
+
+      The gate cuts total blind frames by 16% and the DANGEROUS ones by 47%.
+      It is selective — the visibility lives in the harmless blind frames and
+      the falls in the rest — which is exactly what a magnitude cap cannot
+      do, because by magnitude the two live in the same frames.
+
+      **Caveats, both worth keeping.** (1) The gate fails OPEN: `ahead` is
+      `+inf` with no fresh ToF, so a dead sensor tracks the ball rather than
+      freezing the head, and 8.2% of blind frames still have something ahead
+      because the gate can only consult clearance the head can currently see.
+      (2) `goals` moved +0.58 a run (p=0.019) on the fresh block and −0.21
+      (p=0.51) on the discovery one — pooled p=0.36. That is what an
+      underpowered metric looks like from the inside (4.1.5: 136 seeds), and
+      it is the single most cherry-pickable number in this table. **No goals
+      claim is made.**
+
+      The 2×2 with the dip was not run: the dip re-screened as a clean null
+      two items above, so it is not a factor to cross with.
 
 ### 5. Learned role brains — after 3 lands, and only if a learned striker can reach the ball
 
@@ -2366,26 +2410,34 @@ What is left, in the order it is worth doing:
    in-play exit line (`hunt_exit`, `Team.publish_kick`) only at kick-like
    speed. Locked by `tests/test_team.py` / `test_world.py` / `test_striker.py`.
    Skill: `.claude/skills/pitch-formation/SKILL.md`.
-3. **A striker that can reach the ball** (roadmap 4.4's own note). Every
+3. ~~**Gate the head yaw on forward clearance.**~~ **DONE (2026-09-06).**
+   `yaw_clear` = 0.45 ships on with `predict_s` = 1.0 and `head_yaw_when` =
+   "always". Head tracking buys +8.0 points of ball-in-view (p<0.0001, 42 of
+   48 paired seeds) and 0.27 s off the median time the ball is lost, and the
+   clearance gate removes the +1.54 falls a run it used to cost, giving up no
+   visibility at all. Both seed blocks agree. The gate is SELECTIVE — it cuts
+   blind frames by 16% but blind-with-something-ahead by 47% — which is why
+   capping the yaw's magnitude had failed. Numbers and caveats in 4e.
+4. **A striker that can reach the ball** (roadmap 4.4's own note). Every
    learned item is behind this one, and item 5 says why.
-4. **`Detection.name` stops carrying the sim id** (4.1). Its own battery,
+5. **`Detection.name` stops carrying the sim id** (4.1). Its own battery,
    because the tracker associates on it.
-5. **The clear** (3.1). Deliberately not built: the clamp already aims as
+6. **The clear** (3.1). Deliberately not built: the clamp already aims as
    far up-pitch as the cone allows, and the case a clear would add — the
    walk-round — is the arm that measured worse.
-6. **Line-up precision** (4b). Now that the kick's BIAS is measured and out
+7. **Line-up precision** (4b). Now that the kick's BIAS is measured and out
    of the brain's model, what is left of the kick error is scatter: 33–49°
    of sd about the mean, far wider than the goal subtends from anywhere
    useful. Two arms have tried this and lost (`two_stage`, `lineup_lat`),
    both judged on goals, before the angle could be measured at all.
    `scripts/probe_kick_line.py` prints the sd, so the next attempt can be
    judged on the quantity it actually moves.
-7. **Gate the head yaw on forward clearance** (4e). The only untested idea
-   from the search work, and the one that could buy the visibility without
-   the falls.
 8. **`gaze_yaw`** (4c). Wired, unit-tested, never run in a battery — the only
    thing that can reach a ball 37° off the nose. Its default is UNKNOWN, not
-   measured off.
+   measured off. More interesting now that the yaw gate (4e) has removed the
+   reason head yaw was dangerous: `gaze_yaw`
+   yaws the head on the ball during the APPROACH, which is precisely where
+   `yaw_clear` will be suppressing it, so the two need measuring together.
 9. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
    teammates' frames wander 0.456 m apart over a run, so "the ball is at
    (x, y)" stops being a place the teammate can act on. Everything soccer

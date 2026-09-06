@@ -255,7 +255,7 @@ def _senses(t, ball=None, tof=None, odom=(0.0, 0.0, 0.0), speed=0.3):
 
 
 def test_chase_pitches_the_head_down_walking_at_a_near_ball_and_not_when_turning():
-    b = Chase(ChaseParams(predict_s=3.0, head_yaw_when="always"), goal=(1.5, 0.0))   # the gaze, measured off by default
+    b = Chase(ChaseParams(predict_s=3.0, head_yaw_when="always"), goal=(1.5, 0.0))   # a longer memory than the shipped 1 s
     b.step(_senses(0.0, (0.05, 1.5)))
     out = b.step(_senses(0.1, (0.05, 1.2)))
     assert out.note == "chase" and out.twist[0] > 0 and out.head[1] == 0.0      # still far: level pitch...
@@ -270,6 +270,48 @@ def test_chase_pitches_the_head_down_walking_at_a_near_ball_and_not_when_turning
     c.step(_senses(0.0, (1.2, 0.7), speed=0.0))
     out = c.step(_senses(0.1, (1.2, 0.7), speed=0.0))
     assert out.note == "turn" and out.head[1] == 0.0 and out.head[2] != 0.0   # level pitch, the head yawed to the ball
+
+
+def test_the_head_yaw_is_gated_on_forward_clearance_and_fails_open():
+    """`yaw_clear`: the head only leaves the walking line while the bumper
+    says the line is empty. The ToF is ON THE HEAD, so a yawed head reports
+    `+inf` honestly and the duck walks with no forward obstacle sense —
+    which is where head tracking's falls came from (roadmap 4e: gating this
+    removed 1.60 falls a run over 48 paired seeds while giving up no
+    ball-in-view at all). The gate FAILS OPEN on a dead sensor: no fresh ToF
+    means `ahead` is `+inf`, so the duck tracks the ball rather than freezing
+    its head on a sensor that has stopped reporting."""
+    clear = np.full((8, 8), 2000, np.uint16)
+    near = np.full((8, 8), 2000, np.uint16)
+    near[2:5, 3:5] = 400                                   # 0.40 m ahead, inside yaw_clear = 0.45
+
+    def chasing(p, depth):
+        """A ball 0.5 rad off the nose, walking in — head yaw would be
+        `head_yaw_gain` * 0.5 with nothing in the way."""
+        b = Chase(p, goal=(3.0, 0.0))
+        for k in range(5):
+            t = 0.1 * k
+            tof = None if depth is None else TofFrame(t=t, depth_mm=depth, valid=np.ones((8, 8), bool))
+            out = b.step(_senses(t, (0.5, 1.4 - 0.05 * k), tof))
+        return out
+
+    p = ChaseParams()
+    assert p.yaw_clear == 0.45 and p.head_yaw_when == "always" and p.predict_s > 0
+    wanted = p.head_yaw_gain * 0.5
+    # Clear ahead: the head goes to the ball, and the duck keeps walking.
+    out = chasing(p, clear)
+    assert out.note == "chase" and out.twist[0] > 0 and abs(out.head[2] - wanted) < 0.02
+    # Something inside the margin: the head stays on the walking line. The
+    # duck does NOT stop for this — the gate moves the head, not the gait.
+    out = chasing(p, near)
+    assert out.note == "chase" and out.twist[0] > 0 and out.head[2] == 0.0
+    # No ToF at all: fail open, not closed.
+    out = chasing(p, None)
+    assert abs(out.head[2] - wanted) < 0.02
+    # And with the gate off, the same near reading does not suppress anything
+    # — so the assertion above is measuring the gate and not the state machine.
+    out = chasing(ChaseParams(yaw_clear=0.0), near)
+    assert abs(out.head[2] - wanted) < 0.02
 
 
 def _settling(still: bool, neck: float = 0.0, yaw: bool = False,
