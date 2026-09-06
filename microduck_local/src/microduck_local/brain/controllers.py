@@ -530,6 +530,35 @@ class ChaseParams:
     # either way. The map's lesson that ships: line-up precision is the
     # next lever for goals, and the sweet spot is 6-10 cm ahead, 4-8 cm
     # to the side.
+    #
+    # RE-MEASURED 2026-09-06 on the quantity it moves, because the verdict
+    # above was 8 seeds judged on GOALS (which need 136). It is refuted
+    # again, far more strongly, and now with a mechanism. 24 seeds x 300 s
+    # of 2v2 (`runs/deflect/`), paired, against 178 kicks / 32.0 deg mean
+    # absolute error:
+    #
+    #   compensating by the measured error (+13.7 / -6.0 deg)
+    #       120 kicks (-2.42 a seed, p=0.004)   |err| 44.7 (+13.1, p=0.0005)
+    #   compensating by the in-play map (+23.6 / -28.7 deg)
+    #        80 kicks (-3.82 a seed, p<1e-4)    |err| 43.0 (+11.4, p=0.037)
+    #
+    # It does not halve the error, it DOUBLES it, and it costs a third to a
+    # half of the touches. WHY: the spot is laid out in the rotated heading,
+    # so rotating the stance does not pre-aim the shot - it moves where the
+    # duck stands. Measured: rotating the left stance +23.6 deg shifts the
+    # ball's departure off the body by +24.0 deg, essentially 1:1, and the
+    # ball's SIDE offset grows +8.7 cm (p=0.0006). At the measured
+    # +1.90 deg of aim error per cm of side offset that predicts +16.5 deg
+    # of extra error; +13.1 and +11.4 were observed. The coefficient
+    # predicts its own failure.
+    #
+    # THE GENERAL LESSON, which kills a family of ideas and not just this
+    # knob: you cannot fix this kick by ROTATING anything. The kick spot is
+    # defined relative to the body heading, so every rotation moves the
+    # ball's side offset, and the side offset IS the error. That includes
+    # rotating the intended line by the PREDICTED offset, which this
+    # roadmap proposed earlier the same day and this refutes. The only
+    # levers left are the offset itself, or declining the shot when it is bad.
     kick_deflect_left: float = 0.0
     kick_deflect_right: float = 0.0
     # Plan the kick spot for where the ball WILL be when the duck gets there,

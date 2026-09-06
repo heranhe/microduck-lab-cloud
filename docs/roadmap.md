@@ -1921,12 +1921,20 @@ directly.
       a coin, and a brain that yields to a teammate on a coin is worse than
       one that ignores colour.
 
-      **One part of this item was NOT done, on purpose: `name` still
-      carries the sim id.** Removing it is not a detector change — the
-      `Tracker` associates detections to tracks by name, so dropping it
-      makes every duck track worse and moves every soccer number measured
-      through duck avoidance. It is its own experiment with its own
-      battery, not a line in this one.
+      **One part of this item was NOT done: `name` still carries the sim
+      id.** The reason recorded here was wrong, and is corrected in place
+      (2026-09-06). It said the `Tracker` associates detections to tracks by
+      name, so dropping it would move every soccer number. `_associate`
+      matches on class, a bearing gate and a range gate; the name is only
+      voted onto the track (`Track.names`), and `Chase` never reads it —
+      the only track attribute the soccer brain reads is `color`.
+      **Measured, not read** (`scripts/probe_name.py`, the name stripped
+      between detector and brain): 6 seeds x 120 s of 2v2, named tracks
+      1 278 → 0, and the runs are **bit-for-bit identical** on 6 of 6 —
+      duck tracks kept, kicks and falls all unchanged. Soccer does not
+      depend on the sim id. What DOES is the tidy brain: `Tidy._trusted`
+      is literally `bool(det.name)`, and `memory` / `given_up` are keyed by
+      name. So this is a Track 12 change, not a soccer battery.
 - [x] **4.2 Brains use it — BUILT, MEASURED, SHIPS OFF.** `Chase`
       gains `use_color` and `opp_keepout`: with the sense on, a duck gives a
       STRANGER its own keep-out radius and keeps the standard 0.40 m for a
@@ -2420,8 +2428,16 @@ What is left, in the order it is worth doing:
    capping the yaw's magnitude had failed. Numbers and caveats in 4e.
 4. **A striker that can reach the ball** (roadmap 4.4's own note). Every
    learned item is behind this one, and item 5 says why.
-5. **`Detection.name` stops carrying the sim id** (4.1). Its own battery,
-   because the tracker associates on it.
+5. **`Detection.name` stops carrying the sim id** (4.1) — **re-scoped
+   2026-09-06: it is not a soccer item at all.** It was listed here because
+   4.1 recorded that the tracker associates on the name. It does not: it
+   matches on class, bearing and range, and `Chase` never reads a track's
+   name. Measured with `scripts/probe_name.py` (the name stripped between
+   detector and brain): 6 seeds x 120 s of 2v2, named tracks 1 278 → 0,
+   runs **bit-for-bit identical on 6 of 6**. The real dependency is the
+   TIDY brain, where `_trusted` is `bool(det.name)` and both `memory` and
+   `given_up` are keyed by it — so removing the free id is a Track 12
+   design problem (what earns trust without an id?) and belongs there.
 6. **The clear** (3.1). Deliberately not built: the clamp already aims as
    far up-pitch as the cone allows, and the case a clear would add — the
    walk-round — is the arm that measured worse.
@@ -2462,17 +2478,37 @@ What is left, in the order it is worth doing:
    fixes the staleness at the cost of 58% of the touches (confirmed on fresh
    seeds — read its note in `ChaseParams` before re-trying it).
 
-   The coefficient opens a different door: **compensate for the offset
-   instead of removing it.** +1.90° per cm is a calibration, and the brain
-   now has an input it did not have this morning — `predict_s` ships on, so
-   `Chase.predicted` carries where the ball is going. Rotate the intended
-   kick line by −1.90° per cm of PREDICTED side offset at the swing. It
-   needs no extra sighting, no slower approach and no touches given up; it
-   is arithmetic on a number already computed. It fails if the prediction is
-   too poor at 0.35 m to be worth using, which is itself worth knowing and
-   is one probe. Judge it on **mean aim error** (the systematic part, ±0
-   today with a ±7.5° interval) rather than on the scatter, which this
-   cannot touch.
+   **A door that looked open and is now measured shut — read this before
+   proposing it again.** The obvious use of a calibration is to compensate:
+   rotate the stance (or the intended line) to pre-aim the shot by the
+   expected deflection. `kick_deflect_*` is exactly that mechanism, and its
+   old verdict was 8 seeds judged on goals, so it was re-run properly on
+   24 paired seeds against the quantity it moves (`runs/deflect/`):
+
+   | arm | kicks | mean absolute aim error |
+   |---|---|---|
+   | no compensation | 178 | 32.0° |
+   | by the measured error (+13.7 / −6.0°) | 120 (−2.42/seed, p=0.004) | 44.7° (+13.1, p=0.0005) |
+   | by the in-play map (+23.6 / −28.7°) | 80 (−3.82/seed, p<1e-4) | 43.0° (+11.4, p=0.037) |
+
+   It does not halve the error, it DOUBLES it, and costs a third to a half
+   of the touches. **The mechanism:** the kick spot is laid out in the
+   rotated heading, so a rotation does not pre-aim the shot — it moves where
+   the duck stands. Rotating the left stance +23.6° shifts the ball's
+   departure off the body by +24.0°, essentially 1:1, and grows the side
+   offset by +8.7 cm (p=0.0006). At +1.90°/cm that predicts +16.5° of extra
+   error against +11.4 observed. **The coefficient predicts its own
+   compensation failing.**
+
+   So: **you cannot fix this kick by rotating anything.** Every rotation
+   moves the side offset, and the side offset is the error. That kills the
+   whole family — `kick_deflect_*`, a predicted-offset line rotation (which
+   this roadmap proposed earlier the same day, and this refutes), and any
+   other pre-aim. The two levers left are the offset ITSELF (placement,
+   which is the staleness problem above) and **declining the shot when the
+   offset is bad**, which nothing has tried. The coefficient prices that
+   trade directly: every cm of offset refused is 1.9° of error avoided,
+   against whatever the refusal costs in touches.
 8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
    and a result, all measured.
 
