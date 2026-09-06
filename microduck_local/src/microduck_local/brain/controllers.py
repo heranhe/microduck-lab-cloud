@@ -876,12 +876,27 @@ class ChaseParams:
     # tracks a head-yaw command to 1.42 rad, and standing there is no forward
     # speed to lose) — but the ToF sits on the HEAD, so a yawed head points
     # the bumper sideways, which is exactly how `look_aim` was measured off
-    # ("the brain stops for what it then sees"). Separate knob — and the
-    # ONLY one of the three NOT measured in play: it is wired and tested
-    # (`tests/test_team.py`) but no battery has been run with it on, because
-    # the pitch-side knobs came back flat first. It is the only thing that
-    # could reach the 37° endpoint, and the ToF risk is real, so treat the
-    # default as "unknown", not as "measured off".
+    # ("the brain stops for what it then sees").
+    #
+    # TWO THINGS TO KNOW BEFORE TRYING IT.
+    #
+    # 1. It is a DEAD KNOB ALONE, the same way `head_yaw_when="always"` was
+    #    dead without `predict_s` (roadmap 4e). The yaw is only ever non-zero
+    #    inside the `gaze_still` branch, and `_gaze_range`, the only thing
+    #    this widens, is only called from there. Measured, not read: three
+    #    seeds x 40 s of 2v2, 24 000 duck-ticks, 4 157 of them in
+    #    lineup/settle where it would apply — **0 ticks differ** with it on.
+    #    Turning it on with `gaze_still` off measures nothing. The arm is
+    #    `gaze_still=1, gaze_neck=1, gaze_yaw=1`: held, carried on the neck
+    #    so it does not cost forward speed, and able to reach the endpoint.
+    #
+    # 2. The ToF risk it was parked on now has a fix. `yaw_clear` gates this
+    #    yaw too, on the same signal, and head-yaw tracking measured FREE
+    #    once gated (roadmap 4e). That is what makes the arm worth running:
+    #    `gaze_still` was judged with the hazard still in it.
+    #
+    # Still the only thing that could reach the 37° endpoint. The default is
+    # "unknown", not "measured off".
     gaze_yaw: bool = False
     # After a kick the ball is ahead and low: stand and look down `look_s`
     # before searching (measured: a 9 s search spin with the ball 0.17 m
@@ -2145,10 +2160,17 @@ class Chase:
         if gaze_at is not None and not (p.gaze_still and turning) \
                 and (vx > 0 or self.state in ("look", "search")
                      or (p.gaze_still and wz == 0.0)):
-            head = self._head_pose(self._gaze(gaze_at),
-                                    float(np.clip(p.head_yaw_gain * gaze_yaw,
-                                                  -p.head_yaw_max, p.head_yaw_max))
-                                    if p.gaze_yaw else 0.0)
+            # The gaze YAW is gated on forward clearance exactly like the look
+            # yaw below, and for the same measured reason: the ToF is on the
+            # head, so a yawed head is honestly blind ahead. The gaze PITCH is
+            # not gated — the dip re-screened as a clean null (roadmap 4e) and
+            # gating it would change the shipped brain, which this does not:
+            # with `gaze_yaw` off the yaw is 0.0 either way.
+            gyaw = float(np.clip(p.head_yaw_gain * gaze_yaw,
+                                 -p.head_yaw_max, p.head_yaw_max)) if p.gaze_yaw else 0.0
+            if p.yaw_clear > 0.0 and ahead < p.yaw_clear:
+                gyaw = 0.0
+            head = self._head_pose(self._gaze(gaze_at), gyaw)
         look_at = pred_bearing if pred_bearing is not None else (
             ball.bearing if p.predict_s > 0 and ball is not None and ball.age(t) <= p.predict_s else None)
         if look_at is None and self.state == "look" and p.look_aim and self._last_foot is not None:

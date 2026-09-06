@@ -2432,12 +2432,32 @@ What is left, in the order it is worth doing:
    both judged on goals, before the angle could be measured at all.
    `scripts/probe_kick_line.py` prints the sd, so the next attempt can be
    judged on the quantity it actually moves.
-8. **`gaze_yaw`** (4c). Wired, unit-tested, never run in a battery — the only
-   thing that can reach a ball 37° off the nose. Its default is UNKNOWN, not
-   measured off. More interesting now that the yaw gate (4e) has removed the
-   reason head yaw was dangerous: `gaze_yaw`
-   yaws the head on the ball during the APPROACH, which is precisely where
-   `yaw_clear` will be suppressing it, so the two need measuring together.
+8. **`gaze_yaw`** (4c) — **IN FLIGHT (2026-09-06), and the knob was not what
+   the entry above said it was.** Two corrections, both measured.
+
+   *It is a dead knob alone.* `gaze_yaw` only produces a non-zero yaw inside
+   the `gaze_still` branch, and `_gaze_range` — the only thing it widens — is
+   called from nowhere else. Three seeds x 40 s of 2v2: 24 000 duck-ticks,
+   4 157 of them in lineup/settle where it would apply, **0 differ** with it
+   on. Exactly the shape of the `head_yaw_when="always"` dead knob in 4e, and
+   caught the same way (rule 0, before spending a battery on it). "Never run
+   in a battery" was true; "its default is unknown" was too generous — with
+   `gaze_still` off there is nothing to be unknown about.
+
+   *Its blocker has a fix.* `gaze_still` was measured and parked partly on
+   the ToF hazard — a yawed head is blind ahead. 4e measured that hazard and
+   gated it, so `yaw_clear` now covers the gaze yaw too (same rule, same
+   signal, proven bit-for-bit inert on the shipped brain over 24 000
+   duck-ticks). The arm worth running is therefore the triple
+   `gaze_still=1, gaze_neck=1, gaze_yaw=1` — held, carried on the neck so it
+   costs no forward speed, gated so it costs no falls, and able to reach the
+   37° endpoint that the pitch alone cannot.
+
+   → **running:** three arms x 24 seeds x 300 s of 2v2 on
+   `scripts/probe_kick_line.py` (`runs/gazeyaw/`), judged on whiff rate and
+   on-spot %, the numbers `gaze_neck` already moved by 7 points — separating
+   the held gaze (`gzHeld`) from the held gaze that can SEE the endpoint
+   (`gzYaw`). Falls and ball-in-view are the safety check.
 9. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
    teammates' frames wander 0.456 m apart over a run, so "the ball is at
    (x, y)" stops being a place the teammate can act on. Everything soccer
