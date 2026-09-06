@@ -2504,11 +2504,41 @@ What is left, in the order it is worth doing:
    moves the side offset, and the side offset is the error. That kills the
    whole family — `kick_deflect_*`, a predicted-offset line rotation (which
    this roadmap proposed earlier the same day, and this refutes), and any
-   other pre-aim. The two levers left are the offset ITSELF (placement,
-   which is the staleness problem above) and **declining the shot when the
-   offset is bad**, which nothing has tried. The coefficient prices that
-   trade directly: every cm of offset refused is 1.9° of error avoided,
-   against whatever the refusal costs in touches.
+   other pre-aim. Two levers were left: the offset ITSELF (placement, which
+   is the staleness problem above), and declining the shot.
+
+   **The decline gate was built and it is measured off — but read WHY, it is
+   not the idea that failed.** `ChaseParams.kick_side_max` drops the spot and
+   re-approaches when the ball is too far to the side, refusing only on a
+   fresh estimate so a stale ball still gets its swing. 24 paired seeds
+   (`runs/decline/`), against 178 kicks / 137 effective / 23.0% whiffs:
+
+   | arm | kicks | effective | whiff |
+   |---|---|---|---|
+   | gate off | 178 | 137 | 23.0% |
+   | decline > 12 cm | 152 | 124 | 18.4% (p=0.059) |
+   | decline > 9 cm | 133 (−1.88/seed, p=0.002) | 107 | 19.5% (p=0.11) |
+
+   The per-foot bias LOOKS like it is coming out — left +13.7 → +7.1 → +4.1,
+   right −6.0 → −0.6 → +1.6 — and that is the trap: every one of those
+   intervals spans zero, the baseline's included. Paired per seed nothing
+   improves, mean absolute error moves the wrong way, and touches fall. Rule
+   6 again.
+
+   **The diagnostic that settles it:** the side offset of the kicks that
+   SURVIVED the gate did not change (−0.002 m, p=0.83; +0.004 m, p=0.75). A
+   selector that refuses 15% of swings and leaves the distribution of the
+   thing it selects on untouched is refusing at random. The mechanism is
+   sound; the ESTIMATE is missing. `Chase.predicted` is the only fresh fix
+   the brain has at the swing and it cannot price the shot —
+   `scripts/probe_shot_gate.py` measures exactly that signal, so the next
+   person can check it in one run rather than rebuilding the gate.
+
+   → **which leaves ONE lever, and it is 4c's:** the duck cannot see the ball
+   inside 0.35 m. Placement, aim compensation and shot selection have each
+   now been measured out, and all three failed for the same underlying
+   reason. The kick does not need a better rule. It needs the ball to still
+   be visible when the swing is decided.
 8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
    and a result, all measured.
 

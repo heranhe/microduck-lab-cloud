@@ -272,6 +272,37 @@ def test_chase_pitches_the_head_down_walking_at_a_near_ball_and_not_when_turning
     assert out.note == "turn" and out.head[1] == 0.0 and out.head[2] != 0.0   # level pitch, the head yawed to the ball
 
 
+def test_a_shot_is_declined_when_the_ball_is_too_far_to_the_side():
+    """`kick_side_max`: the side offset IS the aim error (+1.90 deg per cm,
+    measured over 462 kicks) and no rotation removes it, because the spot is
+    laid out in the body heading so every rotation moves the offset. The one
+    lever left is declining the swing. It refuses only on a FRESH estimate —
+    with none, the plan's own assumed ball sits ON the sweet spot by
+    construction, so gating on it would refuse nothing and gating on nothing
+    would be a duck that never kicks."""
+    b = Chase(ChaseParams(kick_side_max=0.10), goal=(1.5, 0.0))
+    odom = (0.0, 0.0, 0.0)                       # at the origin, facing +x
+    # No estimate at all: never refuses.
+    b.predicted = None
+    assert b._too_wide(odom) is False
+    # A ball 6 cm to the side — inside the sweet spot — is a shot worth taking.
+    b.predicted = (0.30, 0.06)
+    assert b._too_wide(odom) is False
+    # 15 cm out is 28 degrees of aim error by the coefficient: refuse it.
+    b.predicted = (0.30, 0.15)
+    assert b._too_wide(odom) is True
+    assert Chase(ChaseParams(kick_side_max=0.10), goal=(1.5, 0.0)).declines == 0
+    # Symmetric, and measured in the BODY frame rather than the world's:
+    # the same ball, with the duck turned to face it, is straight ahead.
+    b.predicted = (0.30, -0.15)
+    assert b._too_wide(odom) is True
+    assert b._too_wide((0.0, 0.0, math.atan2(-0.15, 0.30))) is False
+    # Off by default, so the shipped brain declines nothing.
+    off = Chase(ChaseParams(), goal=(1.5, 0.0))
+    off.predicted = (0.30, 0.90)
+    assert off.p.kick_side_max == 0.0 and off._too_wide(odom) is False
+
+
 def test_the_head_yaw_is_gated_on_forward_clearance_and_fails_open():
     """`yaw_clear`: the head only leaves the walking line while the bumper
     says the line is empty. The ToF is ON THE HEAD, so a yawed head reports

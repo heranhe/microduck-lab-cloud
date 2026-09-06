@@ -561,6 +561,44 @@ class ChaseParams:
     # levers left are the offset itself, or declining the shot when it is bad.
     kick_deflect_left: float = 0.0
     kick_deflect_right: float = 0.0
+    # DECLINE the shot when the ball is too far to the side to be worth
+    # swinging at. This is the only lever the coefficient leaves open: the
+    # side offset IS the aim error (+1.90 deg/cm) and no rotation can remove
+    # it, because every rotation moves the offset (see `kick_deflect_*`).
+    # What is left is not to swing. Metres of |side| offset at the swing
+    # above which the duck drops its spot and re-approaches; 0 = off.
+    # The sweet spot is 0.04-0.08 m and the observed median is 0.133 m.
+    #
+    # It refuses only on a FRESH estimate (`Chase.predicted`, which needs
+    # `predict_s` > 0 — on since 2026-09-06). A stale ball gets its swing:
+    # that is what stops the gate turning into a duck that never kicks.
+    #
+    # MEASURED OFF the day it was built. 24 paired seeds x 300 s of 2v2
+    # (`runs/decline/`), against 178 kicks / 137 effective / 23.0% whiffs:
+    #
+    #   decline > 0.12 m   152 kicks, 124 effective, 18.4% whiff
+    #   decline > 0.09 m   133 kicks, 107 effective, 19.5% whiff
+    #
+    # The per-foot bias LOOKS like it is coming out (left +13.7 -> +7.1 ->
+    # +4.1, right -6.0 -> -0.6 -> +1.6), and that is the trap: every one of
+    # those intervals spans zero, the baseline's included. Paired per seed
+    # nothing improves — whiff rate -4.8 points at 0.12 is p = 0.059, mean
+    # absolute error moves the WRONG way (+2.7, +5.3), and kicks fall 1.88 a
+    # seed at 0.09 (p = 0.002). Rule 6 again: a better rate on fewer touches.
+    #
+    # THE DIAGNOSTIC that settles it, and the reason not to rebuild this with
+    # a different threshold: **the side offset of the kicks that survived did
+    # not change** (-0.002 m, p = 0.83; +0.004 m, p = 0.75). A selector that
+    # refuses 15% of swings and leaves the distribution of what it was
+    # selecting ON untouched is refusing at random. `Chase.predicted` is the
+    # only fresh estimate the brain has at the swing, and it does not know
+    # where the ball is well enough to price the shot — see
+    # `scripts/probe_shot_gate.py`, which measures exactly that signal.
+    #
+    # Kept, off, with the numbers: the mechanism is sound and the ESTIMATE is
+    # what is missing, so this becomes worth re-running the day the brain can
+    # see the ball inside 0.35 m. That is 4c's geometry problem, not this.
+    kick_side_max: float = 0.0
     # Plan the kick spot for where the ball WILL be when the duck gets there,
     # not where it was last seen: at most this many seconds of lead, from the
     # track's own velocity and `ball_decel`. 0 = off.
@@ -1563,6 +1601,7 @@ class Chase:
     def reset(self) -> None:
         self.kicks = 0
         self.pushes = 0
+        self.declines = 0          # swings refused by `kick_side_max`
         self.attack: float | None = None                            # heading of the goal it attacks (first odom yaw)
         self.kickoff()
 
@@ -1661,6 +1700,7 @@ class Chase:
             "since": round(self._senses.t - self.last_seen_t, 2)}
         out["tracks"] = self.tracker.payload(self._senses.t)
         out["chase"] = {"kicks": self.kicks, "pushes": self.pushes, "role": self.role,
+                        **({"declines": self.declines} if self.declines else {}),
                         **({"job": self.job} if self.job else {}),
                         "bumped": round(max(0.0, self._senses.t - self._bump_t), 2) if self._bump_t > -1e8 else None,
                         "tofBall": None if getattr(self, "tof_ball", None) is None else
@@ -2058,6 +2098,14 @@ class Chase:
                         self.state = "push"
                         self.t_state = t
                         vx, wz = p.push_speed, 0.0
+                    elif self._too_wide(odom):
+                        # The geometry says this one misses. Drop the spot
+                        # and walk it again rather than spend a touch on a
+                        # shot already 20-plus degrees wide.
+                        self.declines += 1
+                        self.spot = None
+                        self.state = "chase"
+                        self.t_state = t
                     else:
                         skill = foot
                         self._last_foot = foot
@@ -2264,6 +2312,27 @@ class Chase:
     def _from_attack_x(self, a: float) -> float:
         sign = 1.0 if (self.goal is None or self.goal[0] >= 0) else -1.0
         return sign * a * (self.bounds[0] if self.bounds else 0.0)
+
+    def _too_wide(self, odom) -> bool:
+        """Is the ball too far to the SIDE for this swing to be worth a
+        touch? (`kick_side_max`; False when the knob is off.)
+
+        The side offset is the kick error — +1.90 deg of aim error per cm,
+        measured over 462 kicks — and it cannot be aimed out, because the
+        spot is laid out in the body heading so every rotation moves the
+        offset itself. Declining is the only remaining lever.
+
+        The estimate is `self.predicted`, the track's position propagated by
+        its own velocity, which exists only while the sighting is inside
+        `predict_s`. With no fresh estimate this returns False and the duck
+        swings: the plan's own assumed ball position sits ON the sweet spot
+        by construction, so gating on it would refuse nothing, and gating on
+        nothing at all would be a duck that never kicks."""
+        if self.p.kick_side_max <= 0.0 or self.predicted is None:
+            return False
+        dx, dy = self.predicted[0] - odom[0], self.predicted[1] - odom[1]
+        side = -dx * math.sin(odom[2]) + dy * math.cos(odom[2])
+        return abs(side) > self.p.kick_side_max
 
     def _kick_heading(self, foot: str, u: float) -> float:
         """The line the ball actually leaves on: aim heading plus the in-play
