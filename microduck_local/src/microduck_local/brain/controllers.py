@@ -955,6 +955,29 @@ class ChaseParams:
     kick_speed: float = 1.4
     # A searching head sweeps +-`search_sweep` rad (period `search_sweep_s`)
     # while the body circles, when it has no track to look at.
+    #
+    # RE-SCREENED 2026-09-05 AND ITS OLD VERDICT WAS STALE. It shipped off on
+    # "a searching head sweep makes the body turn MORE, 5/5 seeds", and the
+    # mechanism recorded beside that was the ToF: the sensor is on the HEAD,
+    # so a turned head reported walls that were not ahead and the brain
+    # stopped for them. The clearance rule has since moved from sensor
+    # COLUMNS to BEARINGS ("Chase: clearance by bearing, not by sensor
+    # column"), and that coupling is now dead - measured by recomputing both
+    # rules on the same 1 439 904 frames and binning by head yaw: past
+    # 0.70 rad the old rule stops on 13.8% of frames and the shipped one on
+    # 0.3%.
+    #
+    # So the arm was re-run on 24 seeds x 300 s of 2v2, and every field is
+    # inside the noise: spinFrac +0.007 (p = 0.55), falls 57 -> 56
+    # (p = 0.93), blocked seconds -0.18 (p = 0.78), possession +0.93
+    # (p = 0.45), ball-in-view -0.005 (p = 0.71). It is a CLEAN NULL now,
+    # not a knob with a reason - free to leave off, and free to turn on if
+    # something else wants a swept head.
+    #
+    # (The bearing rule did not remove the coupling so much as make it
+    # honest: past 0.70 rad the duck now has essentially no forward obstacle
+    # sense at all rather than a wrong one. That is where the head-tracking
+    # arm's falls come from - see `head_yaw_when`.)
     search_sweep: float = 0.0
     search_sweep_s: float = 4.0
     # Hunt: a ball lost right after a kick, or after being walked into
@@ -2010,7 +2033,30 @@ class Chase:
                 self.state = "search"
                 since = t - self._search_t0
                 if since % p.search_dip_every < p.search_dip_s:
-                    vx, wz = 0.0, 0.0                           # a standing look down: a near ball is below the level camera
+                    # A standing pause with the gaze down. The comment here
+                    # used to say it was for seeing a near ball below the
+                    # level camera; MEASURED, it does not do that. Over 24
+                    # seeds x 300 s of 2v2, detector frames binned by the
+                    # state that COMMANDED the head pose: frozen in the dip,
+                    # 11 balls found in 15 646 frames (0.07%); walking the
+                    # same search circle, 505 in 11 116 (4.54%). The dip
+                    # takes 58% of search frames and returns 2.1% of the
+                    # search's sightings - 65x worse than simply walking on
+                    # with the head level (z = 26.2).
+                    #
+                    # It stays because REMOVING it is much worse, and that
+                    # confirmed on fresh seeds: `search_dip_s` = 0 gives back
+                    # 19 s a run of standing still and costs falls 121 -> 195
+                    # over 48 seeds (+61%) and 30% of the kicks, for no
+                    # visibility gain at all (+0.008, p = 0.60). `_search_t0`
+                    # resets on every ENTRY, so this is not a duty cycle in a
+                    # long hunt: the median search is 0.60 s, exactly the
+                    # dip, and 48% of searches are nothing but this pause. It
+                    # is a flinch every time the ball leaves view (~33 a run
+                    # a duck) - and standing is the one thing this walker
+                    # does safely against another body, which is why taking
+                    # it away costs falls. Mis-commented, not mis-designed.
+                    vx, wz = 0.0, 0.0
                     gaze_at = p.dip_range
                 elif p.search_walk_after and since > p.search_walk_after and (since - p.search_walk_after) % (p.search_walk_after) < p.search_walk_s:
                     vx, wz = p.speed, 0.0                       # a cold standing turn is exactly 0 rad/s: move to see from elsewhere

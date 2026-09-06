@@ -2241,6 +2241,79 @@ reporting nothing. Every one of the owner's three observations, as a number.
       `refresh_min` attempt recorded, and it would keep the placement gain
       without paying 58% of the touches.
 
+#### 4e. The search — the freeze is a flinch, and it is load-bearing (MEASURED, 2026-09-05)
+
+Watching the ducks, the repo owner said they hunt for the ball by stopping and
+looking down instead of keeping their momentum, and asked why the head cannot
+sweep while walking. `scripts/probe_search.py` measures all of it.
+
+**The stop is bigger and stranger than the constants suggest.** Search is
+27.4 s of a 300 s run per duck (9.1%), and **61% of that is frozen** — zero
+twist, gaze down at 0.22 m. The `0.6 / 1.5` duty cycle predicts 40%, and the
+gap is the finding: `_search_t0` resets on every ENTRY into search, so **every
+search opens with the 0.6 s freeze**. The median search is 0.60 s — exactly
+the dip — **48% of searches are nothing but the opening freeze**, and 78%
+never reach a second one. It is a flinch each time the ball leaves view
+(~33 a run a duck), not a pause in a long hunt.
+
+**And the dip does not look.** Detector frames binned by the state that
+COMMANDED the head pose (read before the step, so the test is not circular):
+
+| frames captured while | n | ball in frame | rate |
+|---|---:|---:|---:|
+| search, frozen in the dip | 15 646 | **11** | **0.07%** |
+| search, walking the circle | 11 116 | 505 | 4.54% |
+| not searching | 261 277 | 63 904 | 24.46% |
+
+The dip takes 58% of search frames and returns 2.1% of the search's sightings
+— **65× worse than simply walking on with the head level** (z = 26.2). The
+comment beside it did not describe what it does; it has been corrected in
+place.
+
+- [x] **Removing the freeze is much worse, confirmed on fresh seeds.**
+      `search_dip_s` = 0 gives back 19 s a run of standing still and costs
+      **falls 121 → 195 over 48 seeds (+61%)**, kicks −30%, blocked seconds
+      +5.9, for **no visibility gain at all** (+0.008 / +0.011, both
+      p > 0.35). Standing is the one thing this walker does safely against
+      another body, and the flinch fires exactly when the crowd is densest.
+      Mis-commented, not mis-designed. (Dipping while WALKING is not
+      available either: head-down the walker turns 0.2 rad in 5 s against
+      3.1 level, measured twice in this repo.)
+- [x] **The head sweep's old verdict was STALE, and it re-screens as a clean
+      null.** It shipped off on "makes the body turn MORE, 5/5 seeds", whose
+      recorded mechanism was the ToF being in the head. The clearance rule
+      has since moved from sensor columns to bearings, and that coupling is
+      dead: recomputing both rules on the same 1 439 904 frames, past
+      0.70 rad of head yaw the old rule stops on **13.8%** of frames and the
+      shipped one on **0.3%**. Re-run on 24 seeds, every field is inside the
+      noise (spinFrac +0.007 p = 0.55, falls 57 → 56, possession +0.93).
+      Free to leave off, free to turn on — not a knob with a reason any more.
+- [x] **Head-yaw ball tracking is the one real effect and it is a trade.**
+      `predict_s=1, head_yaw_when=always`: ball in view **+7.8 points on 44
+      of 48 seeds** (p < 0.001, twice) against **falls +61%** (p < 0.001,
+      p = 0.011), everything else flat. The cause is the flip side of the
+      bearing fix — the sensor is still in the head, so a yawed head is now
+      honestly blind rather than confidently wrong. `head_yaw_max` = 0.5 does
+      not rescue it: the cap removes the falls and the visibility together.
+      **And it does not touch the kick**: plan age 3.26 → 3.20 s, on-spot
+      0% → 1%. The extra sight is at RANGE; the staleness is in the last
+      0.35 m, which is 4c's geometry problem.
+- [x] **A dead knob, caught by rule 0.** `head_yaw_when=always` ALONE changes
+      nothing — three seeds came back bit-for-bit identical in every field.
+      With `predict_s` = 0 the look target is `None` outside search/look, so
+      the flag gates nothing. It is broken-not-null and needs `predict_s > 0`
+      to mean anything; every arm above was run that way.
+- [ ] **The one thing worth building from this.** Gate the head yaw on
+      FORWARD CLEARANCE rather than capping its magnitude: in `Chase.step`,
+      drop or shrink the look target when `ahead` is inside a margin
+      (`hunt_stop` = 0.45 m is the natural constant), so the head only leaves
+      the walking line while the bumper says the line is empty. The bearing
+      rule already reports `+inf` honestly when the head is turned, so the
+      brain HAS the signal and simply does not consult it before turning the
+      head. → **decide on:** the 2×2 {yaw gated, yaw ungated} × {dip on, dip
+      off}, judged on ball-in-view and falls, both of which resolve at 24
+      seeds. Not measured; do not ship it on a hunch.
+
 ### 5. Learned role brains — after 3 lands, and only if a learned striker can reach the ball
 
 **Still gated, and item 3 landing does not open the gate.** The condition in
@@ -2307,7 +2380,13 @@ What is left, in the order it is worth doing:
    both judged on goals, before the angle could be measured at all.
    `scripts/probe_kick_line.py` prints the sd, so the next attempt can be
    judged on the quantity it actually moves.
-7. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
+7. **Gate the head yaw on forward clearance** (4e). The only untested idea
+   from the search work, and the one that could buy the visibility without
+   the falls.
+8. **`gaze_yaw`** (4c). Wired, unit-tested, never run in a battery — the only
+   thing that can reach a ball 37° off the nose. Its default is UNKNOWN, not
+   measured off.
+9. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
    teammates' frames wander 0.456 m apart over a run, so "the ball is at
    (x, y)" stops being a place the teammate can act on. Everything soccer
    here runs at `ideal`, where the frames agree exactly — so nothing measured
