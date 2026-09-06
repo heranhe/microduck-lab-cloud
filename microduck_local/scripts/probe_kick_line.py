@@ -58,6 +58,11 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
     out: list[dict] = []
     plan: dict[str, tuple[float, tuple[float, float]] | None] = {}
     prev_spot: dict[str, object] = {}
+    # The head yaw the duck was HOLDING on the tick before the swing. The
+    # kick tick itself is not it: the skill takes the head over. A held yaw
+    # is a mass off the centre line, so this is the column to correlate an
+    # aim bias against when one appears.
+    prev_yaw: dict[str, float] = {}
     goal_seq = 0
     while w.t < seconds:
         for d in w.ducks.values():
@@ -99,13 +104,16 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
                                 "moved": None if plan.get(d.id) is None else
                                 round(math.dist((bx, by), plan[d.id][1]), 3),
                                 "plan_age": None if plan.get(d.id) is None else
-                                round(w.t - plan[d.id][0], 2)})
+                                round(w.t - plan[d.id][0], 2),
+                                "head_yaw": round(prev_yaw.get(d.id, 0.0), 4)})
             # Remember when this duck last laid a spot, and where the ball was
             # then: the plan's age and the ball's drift since are the two ways
             # a line-up goes wrong that aiming cannot fix.
             if b.spot is not None and b.state == "lineup" and prev_spot.get(d.id) != b.spot:
                 plan[d.id] = (w.t, w.ball_xy())
             prev_spot[d.id] = b.spot
+            if intent.skill is None:
+                prev_yaw[d.id] = float(intent.head[2])
             w.apply_intent(d, intent)
             if d.skill is None:
                 d.set_cmd(w.data, intent.twist, intent.head)
@@ -122,9 +130,9 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             bx, by = w.ball_xy()
             dx, dy = bx - k["ball0"][0], by - k["ball0"][1]
             dist = math.hypot(dx, dy)
-            rec = {"t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
+            rec = {"seed": seed, "t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
                    "dist": round(dist, 3), "ahead": k["ahead"], "side": k["side"],
-                   "moved": k["moved"], "plan_age": k["plan_age"],
+                   "moved": k["moved"], "plan_age": k["plan_age"], "head_yaw": k["head_yaw"],
                    "spot_dist": k["spot_dist"], "spot_ball": k["spot_ball"]}
             if dist < 0.10:                    # the swing missed: no line to speak of
                 out.append({**rec, "err": None, "off_heading": None})

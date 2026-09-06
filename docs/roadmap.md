@@ -2425,40 +2425,74 @@ What is left, in the order it is worth doing:
 6. **The clear** (3.1). Deliberately not built: the clamp already aims as
    far up-pitch as the cone allows, and the case a clear would add — the
    walk-round — is the arm that measured worse.
-7. **Line-up precision** (4b). Now that the kick's BIAS is measured and out
-   of the brain's model, what is left of the kick error is scatter: 33–49°
-   of sd about the mean, far wider than the goal subtends from anywhere
-   useful. Two arms have tried this and lost (`two_stage`, `lineup_lat`),
-   both judged on goals, before the angle could be measured at all.
-   `scripts/probe_kick_line.py` prints the sd, so the next attempt can be
-   judged on the quantity it actually moves.
-8. **`gaze_yaw`** (4c) — **IN FLIGHT (2026-09-06), and the knob was not what
-   the entry above said it was.** Two corrections, both measured.
+7. **Line-up precision** (4b) — **now the top open item, and it finally has
+   a coefficient.** Two arms tried this and lost (`two_stage`, `lineup_lat`),
+   both judged on goals, before the angle could be measured at all. It is
+   measurable now. Regressing aim error on where the ball actually was, over
+   462 kicks pooled from the 2026-09-06 gaze arms:
 
-   *It is a dead knob alone.* `gaze_yaw` only produces a non-zero yaw inside
-   the `gaze_still` branch, and `_gaze_range` — the only thing it widens — is
-   called from nowhere else. Three seeds x 40 s of 2v2: 24 000 duck-ticks,
-   4 157 of them in lineup/settle where it would apply, **0 differ** with it
-   on. Exactly the shape of the `head_yaw_when="always"` dead knob in 4e, and
-   caught the same way (rule 0, before spending a battery on it). "Never run
-   in a battery" was true; "its default is unknown" was too generous — with
-   `gaze_still` off there is nothing to be unknown about.
+   | term | coefficient | p |
+   |---|---|---|
+   | **ball side offset** | **+1.90° per cm** | 1e-98 |
+   | ball ahead offset | −0.13° per cm | 0.072 |
+   | foot (left) | −16.2° | 2e-17 |
+   | head yaw held at the swing | +0.03° per ° | 0.66 |
 
-   *Its blocker has a fix.* `gaze_still` was measured and parked partly on
-   the ToF hazard — a yawed head is blind ahead. 4e measured that hazard and
-   gated it, so `yaw_clear` now covers the gaze yaw too (same rule, same
-   signal, proven bit-for-bit inert on the shipped brain over 24 000
-   duck-ticks). The arm worth running is therefore the triple
-   `gaze_still=1, gaze_neck=1, gaze_yaw=1` — held, carried on the neck so it
-   costs no forward speed, gated so it costs no falls, and able to reach the
-   37° endpoint that the pitch alone cannot.
+   R² = 0.56. **The sideways placement of the ball IS the kick error.** The
+   sweet spot is 4–8 cm to the side; the observed median is 13.3 cm, so
+   5–9 cm of avoidable offset is 10–17° of avoidable systematic error —
+   comparable to the whole aim-clamp win, and available without touching aim.
+   The residual scatter (33–49° of sd) is what is left after that.
 
-   → **running:** three arms x 24 seeds x 300 s of 2v2 on
-   `scripts/probe_kick_line.py` (`runs/gazeyaw/`), judged on whiff rate and
-   on-spot %, the numbers `gaze_neck` already moved by 7 points — separating
-   the held gaze (`gzHeld`) from the held gaze that can SEE the endpoint
-   (`gzYaw`). Falls and ball-in-view are the safety check.
-9. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
+   The head-yaw row is there because it is the trap: the raw correlation
+   between head yaw at the swing and aim error is r = +0.34, p = 5e-15, and
+   past 0.40 rad the mean error is +40.7°. It looks mechanical and it is
+   entirely a proxy for the ball being off to the side. Control for the ball
+   and it vanishes. Do not chase the head here.
+
+   → **judge the next attempt on** median side offset at the swing (13.3 cm
+   today) and on-spot % (1.7%), not on goals. `scripts/probe_kick_line.py`
+   prints both, and its rows now carry `seed`, so arms can be paired.
+8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
+   and a result, all measured.
+
+   *It was a dead knob alone.* `gaze_yaw` only produces a non-zero yaw
+   inside the `gaze_still` branch, and `_gaze_range` — the only thing it
+   widens — is called from nowhere else. 24 000 duck-ticks over three seeds,
+   4 157 in lineup/settle where it would apply: **0 differ** with it on. The
+   same shape as the `head_yaw_when="always"` dead knob in 4e, caught the
+   same way, before a battery was spent on it. "Default unknown" was too
+   generous — with `gaze_still` off there was nothing to be unknown about.
+
+   *Its blocker had a fix.* `gaze_still` was parked partly on the ToF hazard
+   that 4e has since measured and gated, so `yaw_clear` now covers the gaze
+   yaw too (proven bit-for-bit inert on the shipped brain). That made the
+   real arm runnable: `gaze_still=1, gaze_neck=1, gaze_yaw=1`.
+
+   *And it does not help.* Three arms x 24 seeds x 300 s of 2v2 on
+   `scripts/probe_kick_line.py`, against the shipped 178 kicks / 23.0%
+   whiffs / 1.7% on-spot:
+
+   | arm | kicks | whiff | on-spot | spot-to-ball | plan age |
+   |---|---|---|---|---|---|
+   | shipped | 178 | 23.0% | 1.7% | 0.285 m | 3.03 s |
+   | held gaze on the neck | 204 | 23.5% (p=0.91) | 0.5% | 0.315 m | 3.05 s |
+   | + gaze yaw | 211 | 19.9% (p=0.45) | 0.5% | 0.307 m | 2.96 s |
+
+   It reaches the 37° endpoint and nothing it was meant to fix moves.
+   Paired per seed the absolute aim error is flat as well (p=0.93). What it
+   DOES move is the systematic aim: **+12.4°, 95% CI [+6.2, +18.6]**,
+   against a shipped brain whose interval spans zero. A systematic bias
+   lands on every kick the same way, so that is a real cost for nothing.
+
+9. **Head tracking does not bias the kick** — settled 2026-09-06 because it
+   was a risk to what 4e shipped, and it is closed, not open. Median head
+   yaw at the swing is 0.000 on the shipped brain (the duck is back on the
+   line by then), mean aim error −0.1° with an interval spanning zero,
+   against +2.4° with tracking off. Paired per seed every kick metric is
+   flat: kicks p=0.68, whiffs p=0.64, |error| p=0.73, ball-ahead p=0.21.
+
+10. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
    teammates' frames wander 0.456 m apart over a run, so "the ball is at
    (x, y)" stops being a place the teammate can act on. Everything soccer
    here runs at `ideal`, where the frames agree exactly — so nothing measured

@@ -895,8 +895,30 @@ class ChaseParams:
     #    once gated (roadmap 4e). That is what makes the arm worth running:
     #    `gaze_still` was judged with the hazard still in it.
     #
-    # Still the only thing that could reach the 37° endpoint. The default is
-    # "unknown", not "measured off".
+    # MEASURED OFF, 2026-09-06 — no longer "unknown". Three arms x 24 seeds
+    # x 300 s of 2v2 on `scripts/probe_kick_line.py` (`runs/gazeyaw/`),
+    # against the shipped brain's 178 kicks / 23.0% whiffs / 1.7% on-spot:
+    #
+    #   gaze_still+gaze_neck      204 kicks  23.5% whiff (p=0.91)  0.5% on-spot
+    #   +gaze_yaw                 211 kicks  19.9% whiff (p=0.45)  0.5% on-spot
+    #
+    # It reaches the endpoint and it does not help. Nothing it was meant to
+    # fix moves: on-spot does not rise, spot-to-ball gets WORSE (0.285 ->
+    # 0.307 m), plan age is flat (3.03 -> 2.96 s), and paired per seed the
+    # absolute aim error is flat too (p=0.93). What it does move is the
+    # SYSTEMATIC aim: +12.4 deg, 95% CI [+6.2, +18.6], against a shipped
+    # brain whose interval spans zero.
+    #
+    # WHY, and this is the useful part. The bias looks mechanical — pooled
+    # over 462 kicks the aim error tracks the head yaw held at the swing
+    # (r = +0.34, p = 5e-15; past +0.40 rad the mean error is +40.7 deg).
+    # It is not. Control for where the ball actually was and the head-yaw
+    # term collapses to +0.03 deg per deg (p = 0.66) while the ball's SIDE
+    # offset carries everything: **+1.90 deg of aim error per cm**, t = 21,
+    # R^2 = 0.56. The head yaw was a proxy for a ball off to the side.
+    # `gaze_yaw` widens the bearing the gaze will accept, so it lets a duck
+    # swing at balls it should not have swung at. Seeing the endpoint was
+    # never the problem; standing in the right place is.
     gaze_yaw: bool = False
     # After a kick the ball is ahead and low: stand and look down `look_s`
     # before searching (measured: a 9 s search spin with the ball 0.17 m
