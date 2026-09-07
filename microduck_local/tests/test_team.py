@@ -303,6 +303,48 @@ def test_a_shot_is_declined_when_the_ball_is_too_far_to_the_side():
     assert off.p.kick_side_max == 0.0 and off._too_wide(odom) is False
 
 
+def test_a_keeper_owns_the_box_holds_the_line_inside_the_posts_and_never_goes_up_the_pitch():
+    """The keeper (roadmap Track 4 s6 B.2): its zone is the last fifth in
+    front of its own mouth and the field players share the rest as they
+    would without one; the board never sends it after a loose ball, not
+    even as the fallback; its post is `keeper_depth` out on the ball-to-goal
+    line, clamped inside the posts; and it blocks by default."""
+    from microduck_local.brain.team import zones_for
+    assert zones_for({"a": "keeper", "b": "striker"}) == {"striker": (-0.8, 1.0), "keeper": (-1.0, -0.8)}
+    assert zones_for({"a": "keeper", "b": "defender", "c": "striker"}) == {
+        "defender": (-0.8, 0.0), "striker": (0.0, 1.0), "keeper": (-1.0, -0.8)}
+    assert zones_for({"a": "defender", "b": "striker"}) == {"defender": (-1.0, 0.0), "striker": (0.0, 1.0)}
+    # A loose ball nobody's zone covers: the board falls back to the FIELD, never the keeper.
+    tm = Team("cream")
+    tm.half_x, tm.attack_sign = 1.5, 1.0
+    tm.jobs = {"k": "keeper", "d": "defender"}                     # thirds off the box: nobody owns a = 0.8
+    tm.claim("k", 0.0, 0.3, (1.2, 0.0), (-1.3, 0.0, 0.0))          # the keeper even claims to be nearer
+    tm.claim("d", 0.0, 2.0, (1.2, 0.0), (-0.5, 0.0, 0.0))
+    assert tm.candidates(0.0) == ["d"]
+    # …and inside its box the keeper is the one allowed, as any owner is.
+    tm.claim("k", 0.1, 0.3, (-1.4, 0.0), (-1.3, 0.0, 0.0))
+    tm.claim("d", 0.1, 1.0, (-1.4, 0.0), (-0.5, 0.0, 0.0))
+    assert tm.candidates(0.1) == ["k"]
+    # The post.
+    tm.jobs = {"k": "keeper", "s": "striker"}
+    b = Chase(ChaseParams(), goal=(1.5, 0.0), team=tm, duck_id="k", bounds=(1.5, 1.25), goal_w=0.7, role="keeper")
+    b._senses = Senses(t=0.0)
+    here = (-1.3, 0.0, 0.0)
+    t1 = b._hold_target((0.0, 0.0), here)                              # ball dead centre: on the centre line
+    assert abs(t1[0] - (-1.5 + b.p.keeper_depth)) < 1e-9 and abs(t1[1]) < 1e-9
+    t2 = b._hold_target((0.0, 1.2), here)                              # ball wide: where its line crosses the depth
+    assert abs(t2[0] - (-1.25)) < 1e-9 and 0.15 < t2[1] < 0.25
+    t3 = b._hold_target((-1.3, 1.2), here)                             # ball beside the goal: pinned to the near post
+    assert abs(t3[1] - 0.30) < 1e-9
+    assert b.p.intercept_eta == b.p.keeper_intercept_eta > 0             # a keeper blocks by default
+    assert Chase(ChaseParams(), goal=(1.5, 0.0), role="striker").p.intercept_eta == 0.0
+    os.environ["MICRODUCK_CHASE"] = "intercept_eta=0"
+    try:
+        assert Chase(ChaseParams.from_env(), goal=(1.5, 0.0), role="keeper").p.intercept_eta == 0.0   # a battery wins
+    finally:
+        del os.environ["MICRODUCK_CHASE"]
+
+
 def test_a_drifting_odometry_turns_the_localiser_on_and_ideal_leaves_it_off():
     """`brain_kwargs`: a duck whose odometry preset is not `ideal` gets the
     goal-post particle filter (roadmap Track 4 s6 C.2); at `ideal` the

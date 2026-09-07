@@ -1358,6 +1358,34 @@ class ChaseParams:
     # (roadmap Track 4.4.2): with it on, a duck gives a STRANGER
     # `opp_keepout` of room and keeps the standard `duck_keepout` for a
     # teammate, since the team board already coordinates teammates and
+    # THE KEEPER (roadmap Track 4 s6 B.2): a static role that holds the line
+    # `keeper_depth` in front of its own mouth, on the ball-to-goal line and
+    # never outside the posts, takes the ball only inside its own fifth of
+    # the pitch (Team.ROLE_ZONES) and never covers for a field player. The
+    # interception work (4d) found the lever was "earlier than the block":
+    # 40 of 70 threats start with the ball already inside 0.3 m of the line,
+    # where a field player cannot arrive in time - a keeper is already
+    # there. So a keeper turns `intercept_eta` on at `keeper_intercept_eta`
+    # unless a battery speaks, and otherwise uses the shipped block geometry.
+    #
+    # MEASURED IN 2v2 AND IT DOES NOT PAY THERE (2026-09-07, rolling-
+    # resistance floor, scripts/probe_threat.py --roles, 24 seeds, both arms
+    # forked on one tree state; keeper+striker against defender+striker):
+    #   conceded threats        10/30 = 33%  ->  11/32 = 34%     p = 0.93
+    #   danger clock < 0.9 m    9.09 -> 17.5 s/min   +8.4 +/- 3.9  p = 0.031, worse on 17 of 24 seeds
+    #   danger clock < 0.45 m   1.11 -> 5.68 s/min   +4.6 +/- 2.8  p = 0.10
+    #   nearest the ball got to the mouth   0.416 -> 0.403 m       p = 0.84
+    # The keeper does exactly what it was built to do - on the sheet it holds
+    # its post for the whole run while the striker plays the field - and that
+    # is the cost: a side of TWO cannot spare a duck to stand in goal, so the
+    # ball lives in the keeper's box twice as long, and a keeper's clearing
+    # kick on this floor travels too little to get it out (the 4b/item-7
+    # kick). Same shape as the interception result: works, does not pay.
+    # Ships as a role a scenario may declare (the editor lists it), NOT in
+    # `formation_roles`. Unmeasured: 3v3 with a defender in front of it,
+    # which is where a keeper would earn its place.
+    keeper_depth: float = 0.25
+    keeper_intercept_eta: float = 3.0
     # nothing coordinates an opponent.
     #
     # SHIPS OFF, MEASURED. At 0.55 m on 3v3 it looked like the crowding fix
@@ -1711,6 +1739,9 @@ class Chase:
         self.reset()
 
     def reset(self) -> None:
+        if role == "keeper" and self.p.intercept_eta <= 0 and "intercept_eta" not in ChaseParams.env_names():
+            from dataclasses import replace  # noqa: PLC0415
+            self.p = replace(self.p, intercept_eta=self.p.keeper_intercept_eta)   # a keeper blocks by default
         self.kicks = 0
         self.pushes = 0
         self.declines = 0          # swings refused by `kick_side_max`
@@ -2496,6 +2527,17 @@ class Chase:
             gn = math.hypot(gx, gy)
             ux, uy = (gx / gn, gy / gn) if gn > 1e-6 else (-math.cos(odom[2]), -math.sin(odom[2]))
             rank = self.team.rank(self.duck_id, t) if self.team is not None else 0
+        elif self.job == "keeper":
+            # On the ball-to-goal line, `keeper_depth` in front of the mouth's
+            # centre, never outside the posts: the shot it has to be in the
+            # way of runs from the ball to the mouth, and the mouth is where
+            # it is. A ball beside the goal pins it to the near post.
+            sgn = 1.0 if (self.goal is None or self.goal[0] >= 0) else -1.0    # from OUR mouth toward the pitch
+            dx = bxy[0] - og[0]
+            frac = p.keeper_depth / max(abs(dx), p.keeper_depth)
+            span = max(self.goal_w / 2.0 - 0.05, 0.05)
+            target = (og[0] + sgn * p.keeper_depth,
+                      float(np.clip(og[1] + (bxy[1] - og[1]) * frac, og[1] - span, og[1] + span)))
             side = p.support_side * ((rank + 1) // 2) * (1 if rank % 2 == 0 else -1)
             return (bxy[0] + p.support_back * ux - side * uy, bxy[1] + p.support_back * uy + side * ux)
         # Holding a post and being allowed to take the ball are the same

@@ -47,7 +47,7 @@ export const TEAM_NAMES = Object.keys(TEAM_COLORWAYS) as TeamName[];
  *  60 px tall, moving, and lit from one side. Their trims differ too (orange
  *  against yellow), so a duck that is a few pixels of leg still reads. */
 export const PITCH_TEAMS: readonly [TeamName, TeamName] = ["cream", "graphite"];
-export const ROLE_NAMES = ["defender", "midfielder", "striker"] as const;
+export const ROLE_NAMES = ["defender", "midfielder", "striker", "keeper"] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 
 /** MJCF material names a colorway repaints (world/compose.py — keep the two

@@ -2880,42 +2880,6 @@ this stack has none of them.
       for `settle_s` and swings at a plan that is 3.0 s old and 0.21 m stale**
       (4b). An in-walk kick has no settle and no separate kick policy; the
       decision is made on the last step, with the freshest sighting there is.
-      dribbling keeps the ball in continuous contact inside the walk, so
-      there is never a 3 s blind approach to a stale spot. Our `push` mode
-      (`push_beyond`, a "push spot squarely behind the ball") is a crude
-      dribble that nothing has ever measured against the kick. → **what
-      settles it:** signed `ballProgress` and `possession`, push-only vs
-      kick-only vs shipped, 24 seeds. If push moves the ball as far forward
-      with fewer falls, the kick is not the right primitive for this robot.
-
-#### B. Things that are simply not modelled
-
-- [ ] **B.1 A get-up.** Every RoboCup humanoid must recover from a fall
-      unaided; the KidSize rules require it. DeepMind's OP3 soccer agent
-      (Science Robotics 2024) trained a get-up as one of its two stage-1
-      skills and distilled it in with KL regularisation gated on "is the
-      agent upright"; the classical teams use keyframe sequences (B-Human
-      "Fall Motions", 95% success rates reported). **Ours respawns.**
-      `arena.py` teleports a fallen duck and increments `falls`; the shipped
-      policies have no floor-to-stand (`alpha_sitstand` is sit↔stand). So
-      every falls number in this track is a count of events that, on a
-      robot, each cost ~10–20 s of a duck lying down. The `behaviors/` track
-      has the pieces (poses, a physics ladder, `train-behavior`). → **what
-      settles it:** a `getup` behaviour that stands from the two common fall
-      poses (`open-loop-holds-topple` says which: the level squat, not the
-      spawn fold), then an eval-pitch flag that replaces respawn with the
-      get-up so falls cost time instead of nothing. Then `possession` moves
-      for the right reason.
-- [ ] **B.2 A goalkeeper.** The review "RoboCupSoccer Review: The Goalkeeper,
-      a Distinctive Player" (2023) lists the role: hold the ball–goal line,
-      track the ball continuously, block or dive on a shot, clear when in
-      possession, decide when to leave the goal, return. We have three roles
-      and none is this. Most of the pieces exist: `block` state, the threat
-      geometry in `brain/intercept.py` (4d, 18 tests), the ledger's
-      `goalsAgainst`. → **what settles it:** `ownGoals` and `goalsAgainst`
-      need 347/136 seeds, so do NOT judge it on those. Judge it on the
-      deflection-agent's measures: shots on target reaching the line, and
-      the keeper's time-on-line.
       Ours cannot do this today: the two shipped kicks are separate ONNX
       skills that run from standing. **What it would take:** a walking policy
       with a kick command channel — the 61-obs contract has zero-padded
@@ -2988,6 +2952,66 @@ this stack has none of them.
       brain that wants to know.
 - [ ] **C.3 A shared world model, not a shared point.** SPL teams fuse
       teammates' ball estimates weighted by their covariances into a team
+      dribbling keeps the ball in continuous contact inside the walk, so
+      there is never a 3 s blind approach to a stale spot. Our `push` mode
+      (`push_beyond`, a "push spot squarely behind the ball") is a crude
+      dribble that nothing has ever measured against the kick. → **what
+      settles it:** signed `ballProgress` and `possession`, push-only vs
+      kick-only vs shipped, 24 seeds. If push moves the ball as far forward
+      with fewer falls, the kick is not the right primitive for this robot.
+
+#### B. Things that are simply not modelled
+
+- [ ] **B.1 A get-up.** Every RoboCup humanoid must recover from a fall
+      unaided; the KidSize rules require it. DeepMind's OP3 soccer agent
+      (Science Robotics 2024) trained a get-up as one of its two stage-1
+      skills and distilled it in with KL regularisation gated on "is the
+      agent upright"; the classical teams use keyframe sequences (B-Human
+      "Fall Motions", 95% success rates reported). **Ours respawns.**
+      `arena.py` teleports a fallen duck and increments `falls`; the shipped
+      policies have no floor-to-stand (`alpha_sitstand` is sit↔stand). So
+      every falls number in this track is a count of events that, on a
+      robot, each cost ~10–20 s of a duck lying down. The `behaviors/` track
+      has the pieces (poses, a physics ladder, `train-behavior`). → **what
+      settles it:** a `getup` behaviour that stands from the two common fall
+      poses (`open-loop-holds-topple` says which: the level squat, not the
+      spawn fold), then an eval-pitch flag that replaces respawn with the
+      get-up so falls cost time instead of nothing. Then `possession` moves
+      for the right reason.
+- [x] **B.2 A goalkeeper — BUILT, and measured off in 2v2 (2026-09-07).**
+      A fourth static role, `keeper`: its zone is the last fifth in front of
+      its own mouth (`Team.ROLE_ZONES`, the field players share the rest as
+      they would without one), the board never sends it after a loose ball
+      — not as cover, not as the "everybody may" fallback — its post is
+      `keeper_depth` (0.25 m) out on the ball-to-goal line clamped inside the
+      posts (`Chase._hold_target`), and it blocks by default
+      (`keeper_intercept_eta`, the 4d machinery, which the field players
+      ship without). Declared per duck in a scenario; the editor's role menu
+      lists it; not in `formation_roles`. Locked by `tests/test_team.py`.
+      Rendered (`render_pitch.py`, keeper+striker v defender+striker, 20 s):
+      the keeper holds its post the whole run while the striker plays.
+
+      Measured with the threat probe (`scripts/probe_threat.py --roles`,
+      which now stamps static jobs per side), 24 seeds × 300 s of 2v2, both
+      arms forked on one tree state, keeper+striker against the formation
+      control defender+striker:
+
+      | | defender + striker | keeper + striker | |
+      |---|---|---|---|
+      | conceded threats | 10/30 = 33% | 11/32 = 34% | p = 0.93 |
+      | danger clock, ball within 0.9 m of a mouth | 9.09 s/min | 17.5 s/min | **p = 0.031**, worse on 17 of 24 seeds |
+      | danger clock, within 0.45 m | 1.11 s/min | 5.68 s/min | p = 0.10 |
+      | nearest the ball got to the mouth | 0.416 m | 0.403 m | p = 0.84 |
+
+      It does what it was built to do, and that is the cost: **a side of two
+      cannot spare a duck to stand in goal.** With the striker alone on the
+      field the ball lives in the keeper's box twice as long, and a keeper's
+      clearing kick on this floor travels too little to get it out (item 7's
+      kick). Same shape as the interception result: works, does not pay.
+      What was NOT measured, and is where a keeper would earn its place: 3v3
+      with a defender in front of it. The numbers above are on the parallel
+      session's uncommitted floor, forked together, so they are paired but
+      provisional like everything after item 7's baseline note.
       ball; B-Human 2022 ("More Team Play with Less Communication") rebuilt
       the behaviour to play pass-oriented soccer while *sending fewer
       messages*, because the league capped team traffic. Our blackboard

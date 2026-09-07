@@ -107,7 +107,7 @@ LEGACY_TEAMS = dict(zip(("left", "right"), PITCH_TEAMS))
 # What a duck is for on a pitch (roadmap Track 4.3). None keeps today's
 # behaviour: the team blackboard picks one attacker by predicted time to the
 # ball and the rest support it.
-ROLES = ("defender", "midfielder", "striker")
+ROLES = ("defender", "midfielder", "striker", "keeper")   # keeper: roadmap Track 4 s6 B.2 (brain/team.py ROLE_ZONES)
 
 
 def formation_roles(n: int) -> list[str | None]:

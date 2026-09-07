@@ -75,6 +75,11 @@ ROLE_ZONES: dict[str, tuple[float, float]] = {
     "defender": (-1.0, -1.0 / 3.0),
     "midfielder": (-1.0 / 3.0, 1.0 / 3.0),
     "striker": (1.0 / 3.0, 1.0),
+    # THE KEEPER (roadmap Track 4 s6 B.2): the last fifth in front of its own
+    # mouth. It takes the ball only there, and - unlike every other job - it
+    # never covers for a teammate and is never the "everybody may" fallback:
+    # a keeper up the pitch is an open goal.
+    "keeper": (-1.0, -0.8),
 }
 
 
@@ -85,6 +90,18 @@ def zones_for(jobs: dict[str, str]) -> dict[str, tuple[float, float]]:
     splits at halfway so a ball at midfield is inside someone's zone and
     `candidates` does not fall back to "everybody may"."""
     present = {j for j in jobs.values() if j in ROLE_ZONES}
+    if "keeper" in present:
+        # The keeper owns the box; the field players share the rest exactly
+        # as they would without one, lifted off the box.
+        field = present - {"keeper"}
+        if field == {"striker"}:
+            out = {"striker": (-0.8, 1.0)}
+        elif field == {"defender", "striker"}:
+            out = {"defender": (-0.8, 0.0), "striker": (0.0, 1.0)}
+        else:
+            out = {j: (max(lo, -0.8), hi) for j, (lo, hi) in ROLE_ZONES.items() if j != "keeper"}
+        out["keeper"] = ROLE_ZONES["keeper"]
+        return out
     if present == {"defender", "striker"}:
         return {"defender": (-1.0, 0.0), "striker": (0.0, 1.0)}
     return dict(ROLE_ZONES)
@@ -304,6 +321,7 @@ class Team:
         way, or the ball just skipped past). Static jobs do not change."""
         live = self.members(t)
         ball = self.ball(t)
+        field = [k for k in live if self.jobs.get(k) != "keeper"]     # a keeper never leaves its box for a loose ball
         allowed = [k for k in live if self.zone_ok(k, ball)]
         if not allowed:
             return live

@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from collections import Counter
 
 import numpy as np
@@ -146,8 +147,15 @@ class Threat:
 
 
 def run(seed: int, seconds: float, per_side: int, v_min: float, eta_max: float,
-        hold: float, arm: float = 0.4, zone: float = 1.0) -> list[dict]:
+        hold: float, arm: float = 0.4, zone: float = 1.0, roles: str | None = None) -> list[dict]:
     sc = make_pitch(per_side=per_side)
+    if roles:
+        # Static jobs, the same on both sides, in spawn order: `--roles
+        # keeper,striker` makes d0/d2 keepers and d1/d3 strikers.
+        names = [r.strip() for r in roles.split(",")]
+        assert len(names) == per_side, f"--roles needs {per_side} names, got {names}"
+        for i, d in enumerate(sc.ducks):
+            d.role = names[i % per_side]
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
     w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed)
     teams: dict = {}
@@ -630,6 +638,9 @@ def main() -> None:
     ap.add_argument("--arm", type=float, default=0.4,
                     help="the path must hold on the mouth this long before it counts as a threat at all")
     ap.add_argument("--out", default=None, help="write every event as a JSON line")
+    ap.add_argument("--roles", default=None,
+                    help="static jobs per side in spawn order, both sides alike, e.g. 'keeper,striker' "
+                         "or 'defender,striker'; default: none (the role-free chase-vs-chase control)")
     ap.add_argument("--vs", nargs=2, metavar=("BASE", "ARM"),
                     help="do not measure: read two --out files and compare them, paired on the "
                          "seeds they share")
@@ -638,7 +649,8 @@ def main() -> None:
         compare(*args.vs)
         return
     todo = [(args.seed0 + k, args.seconds, args.per_side, args.v_min, args.eta, args.hold,
-             args.arm, args.zone) for k in range(args.seeds)]
+             args.arm, args.zone, args.roles) for k in range(args.seeds)]
+    print(f"roles={args.roles!r}  MICRODUCK_CHASE={os.environ.get('MICRODUCK_CHASE', '')!r}")
     rows: list[dict] = []
     if args.jobs > 1 and len(todo) > 1:
         import multiprocessing as mp
