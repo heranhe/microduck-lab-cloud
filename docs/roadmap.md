@@ -2441,11 +2441,16 @@ What is left, in the order it is worth doing:
 6. **The clear** (3.1). Deliberately not built: the clamp already aims as
    far up-pitch as the cone allows, and the case a clear would add — the
    walk-round — is the arm that measured worse.
-7. **Line-up precision** (4b) — **now the top open item, and it finally has
-   a coefficient.** Two arms tried this and lost (`two_stage`, `lineup_lat`),
-   both judged on goals, before the angle could be measured at all. It is
-   measurable now. Regressing aim error on where the ball actually was, over
-   462 kicks pooled from the 2026-09-06 gaze arms:
+7. ~~**Line-up precision**~~ (4b) — **CLOSED AS A CONTROL PROBLEM
+   (2026-09-06). It got a coefficient, then every rule the coefficient
+   allows was built and measured, and the answer is that the kick is a
+   SENSING limit.** Read the closed list at the end before proposing
+   anything here.
+
+   Two arms had tried this and lost (`two_stage`, `lineup_lat`), both judged
+   on goals, before the angle could be measured at all. It became measurable
+   with `probe_kick_line.py`. Regressing aim error on where the ball
+   actually was, over 462 kicks pooled from the 2026-09-06 gaze arms:
 
    | term | coefficient | p |
    |---|---|---|
