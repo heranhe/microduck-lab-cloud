@@ -36,6 +36,7 @@ FIELDS = ("title", "description", "group")
 GROUPS = {
     "shipped-followers": "Followers (shipped)",
     "trainer-ab": "Trainer defect A/B (seed 7)",
+    "local-kicks": "Kicks trained here, head-down starts (behaviors/kick.py)",
     "early-stop": "Early stop",
     "paired-sweeps": "Paired-seed sweeps (seeds 11-14)",
     "capacity": "Network capacity (seeds 31-36)",
