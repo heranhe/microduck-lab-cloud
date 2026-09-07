@@ -18,6 +18,7 @@ duck's measured yaw, the way the robot runtime would.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import time
@@ -743,11 +744,8 @@ class World:
         if name not in SKILLS or d.skill is not None:
             return False
         if name not in self.skills:
-            from ..brain.brain_env import POLICIES_DIR, onnx_infer
-            # A local export in place of the shipped skill (behaviors/kick.py):
-            # MICRODUCK_SKILL_KICK_RIGHT=runs/<run>/policy.onnx
-            override = os.environ.get(f"MICRODUCK_SKILL_{name.upper()}")
-            path = Path(override) if override else POLICIES_DIR / SKILLS[name]
+            from ..brain.brain_env import onnx_infer
+            path = self.skill_path(name)                 # env override, local export, or the shipped file
             if not path.exists():
                 return False
             self.skills[name] = onnx_infer(path)
@@ -759,6 +757,49 @@ class World:
         if d.holding is None:
             d.beak_closed = False          # a cycle starts with an open, empty beak
         return True
+    # Skills trained HERE, vendored under microduck_local/policies/<skill>/,
+    # preferred over the shipped Hub file when present (the kicks: roadmap
+    # item 7, behaviors/kick.py - 0% whiff from every gaze pose on the bench,
+    # whiff 61 -> 40% in play). A sidecar .json beside the ONNX carries what
+    # the brain must know about it (`exit_rad`: the kick's exit angle off the
+    # body). MICRODUCK_SKILL_<NAME>=path still wins over both.
+    LOCAL_SKILLS = {"kick_left": "kick/kick_left.onnx", "kick_right": "kick/kick_right.onnx"}
+
+    @staticmethod
+    def skill_path(name: str) -> Path | None:
+        """The policy file a skill runs from: the env override, else a local
+        export under policies/, else the shipped file. None for no skill."""
+        if name not in SKILLS:
+            return None
+        from ..brain.brain_env import POLICIES_DIR  # noqa: PLC0415
+        override = os.environ.get(f"MICRODUCK_SKILL_{name.upper()}")
+        if override:
+            return Path(override)
+        local = World.LOCAL_SKILLS.get(name)
+        if local:
+            p = Path(__file__).resolve().parents[3] / "policies" / local
+            if p.exists():
+                return p
+        return POLICIES_DIR / SKILLS[name]
+
+    @staticmethod
+    def kick_exits() -> tuple[float, float] | None:
+        """(left, right) exit angles (rad, off the body) of the kicks this
+        world will run, from the sidecars beside local exports; None when
+        either kick is the shipped one (the brain keeps its measured
+        defaults)."""
+        out = []
+        for name in ("kick_left", "kick_right"):
+            p = World.skill_path(name)
+            side = p.with_suffix(".json") if p is not None else None
+            if side is None or not side.exists():
+                return None
+            try:
+                out.append(float(json.loads(side.read_text())["exit_rad"]))
+            except (ValueError, KeyError, OSError):
+                return None
+        return out[0], out[1]
+
 
     def in_basket(self, toy: str) -> bool:
         if self.basket is None:

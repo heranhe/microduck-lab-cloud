@@ -359,7 +359,7 @@ def test_a_drifting_odometry_turns_the_localiser_on_and_ideal_leaves_it_off():
     teams: dict = {}
     drift = brain_kwargs(sc.ducks[0], w, teams)
     ideal = brain_kwargs(sc.ducks[1], w, teams)
-    assert drift["p"].localize is True and "p" not in ideal            # 1v1 at ideal: not even a params object
+    assert drift["p"].localize is True and ideal.get("p", ChaseParams()).localize is False   # 1v1 at ideal: off
     b = Chase(**drift)
     assert b.loc is not None and len(b.loc.posts) == 4
     assert Chase(**ideal).loc is None
@@ -369,7 +369,7 @@ def test_a_drifting_odometry_turns_the_localiser_on_and_ideal_leaves_it_off():
     os.environ["MICRODUCK_CHASE"] = "localize=0"
     try:
         kw = brain_kwargs(sc.ducks[0], w, {})
-        assert "p" not in kw
+        assert kw.get("p", ChaseParams()).localize is False        # the local kicks add only their exit angles
         c = Chase(**kw)
         assert c.p.localize is False and c.loc is None
     finally:
@@ -571,7 +571,8 @@ def test_pitch_with_teams_and_brain_kwargs():
     assert set(teams) == set(PITCH_TEAMS)
     assert kw["d0"]["p"].bump_stand_s == ChaseParams().team_bump_stand_s   # a roster with teammates: the bump sense on
     solo = make_pitch(per_side=1)
-    assert "p" not in brain_kwargs(solo.ducks[0], World(solo), {})   # a lone attacker keeps the default
+    solo_p = brain_kwargs(solo.ducks[0], World(solo), {}).get("p", ChaseParams())
+    assert solo_p.bump_stand_s == ChaseParams().bump_stand_s      # a lone attacker keeps the default (the local kicks add only their exits)
     from microduck_local.world import Duck, Scenario
     plain = Scenario(name="x", floor=(4, 4), ducks=[Duck("d0", (0, 0, 0), None, None, None, "chase")])
     assert brain_kwargs(plain.ducks[0], World(plain), {}) == {}

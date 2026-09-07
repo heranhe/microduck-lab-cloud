@@ -80,3 +80,35 @@ def test_the_arena_runs_a_local_export_in_place_of_a_shipped_skill(monkeypatch, 
     monkeypatch.setenv("MICRODUCK_SKILL_KICK_LEFT", str(tmp_path / "missing.onnx"))
     w2 = World(sc, seed=1)
     assert not w2.start_skill(w2.ducks[sc.ducks[0].id], "kick_left")     # a missing override is refused, not a crash
+
+
+def test_the_local_kicks_are_the_default_and_their_exits_reach_the_brain(monkeypatch):
+    """A kick trained here, vendored under policies/kick, is what the arena
+    runs unless MICRODUCK_SKILL_<NAME> says otherwise; the brain's exit
+    angles follow the sidecar, unless the command line names them."""
+    import json
+
+    from microduck_local.brain.controllers import ChaseParams
+    from microduck_local.brain.team import brain_kwargs
+    from microduck_local.world import World, make_pitch
+    monkeypatch.delenv("MICRODUCK_SKILL_KICK_RIGHT", raising=False)
+    monkeypatch.delenv("MICRODUCK_SKILL_KICK_LEFT", raising=False)
+    monkeypatch.delenv("MICRODUCK_CHASE", raising=False)
+    p = World.skill_path("kick_right")
+    assert p is not None and p.name == "kick_right.onnx" and "policies/kick" in str(p) and p.exists()
+    assert World.skill_path("ground_pick").name == "alpha_ground_pick.onnx"        # no local one: the shipped file
+    assert World.skill_path("not_a_skill") is None
+    side = json.loads(p.with_suffix(".json").read_text())
+    assert World.kick_exits() == (json.loads(World.skill_path("kick_left").with_suffix(".json").read_text())["exit_rad"], side["exit_rad"])
+    sc = make_pitch()
+    w = World(sc, seed=1)
+    kw = brain_kwargs(sc.ducks[0], w, {})
+    assert kw["p"].kick_exit_right == side["exit_rad"] and kw["p"].kick_exit_left == -0.16
+    assert w.start_skill(w.ducks[sc.ducks[0].id], "kick_right")                     # and it loads
+    monkeypatch.setenv("MICRODUCK_CHASE", "kick_exit_left=0.5")                     # the command line is the caller's
+    assert Chase(**brain_kwargs(sc.ducks[0], w, {})).p.kick_exit_left == 0.5    # named on the command line: the brain reads it itself
+    monkeypatch.delenv("MICRODUCK_CHASE")
+    monkeypatch.setenv("MICRODUCK_SKILL_KICK_RIGHT", str(POLICIES_DIR / "ball_kick_right.onnx"))   # an override wins
+    assert World.skill_path("kick_right").name == "ball_kick_right.onnx"
+    assert World.kick_exits() is None                                               # no sidecar: the brain's defaults
+    assert brain_kwargs(sc.ducks[0], w, {}).get("p", ChaseParams()).kick_exit_right == ChaseParams().kick_exit_right

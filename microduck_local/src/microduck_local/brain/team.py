@@ -573,7 +573,13 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
         p = out.get("p") or ChaseParams.from_env()
         out["p"] = replace(p, support_field=True,
                            field_mid_ahead=(p.field_mid_ahead if "field_mid_ahead" in ChaseParams.env_names() else -0.5))
-    if duck_spec.odom != "ideal" and "localize" not in ChaseParams.env_names():
+    # The kicks the world will run may not be the shipped ones (a local
+    # export under policies/kick, roadmap item 7): their exit angles come
+    # from the sidecar beside the file, unless the command line names them.
+    exits = getattr(world, "kick_exits", lambda: None)()
+    if exits is not None and "kick_exit_left" not in ChaseParams.env_names() \
+            and "kick_exit_right" not in ChaseParams.env_names():
+        out["p"] = replace(out.get("p") or ChaseParams.from_env(), kick_exit_left=exits[0], kick_exit_right=exits[1])
     # The shared ball (roadmap C.3): the board fuses sightings when the
     # brain's knob says so - every teammate writes the same value.
     if team is not None:

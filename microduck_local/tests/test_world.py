@@ -347,7 +347,11 @@ def test_a_goal_restarts_play_from_a_kickoff():
 
 
 @pytest.mark.skipif(not (POLICIES_DIR / "ball_kick_left.onnx").exists(), reason="upstream policies not checked out")
-def test_shipped_kick_skill_sends_the_ball_flying():
+def test_shipped_kick_skill_sends_the_ball_flying(monkeypatch):
+    # The SHIPPED kick: the arena now prefers the kicks trained here (policies/kick) unless told otherwise.
+    from microduck_local.brain.brain_env import POLICIES_DIR as _PD
+    monkeypatch.setenv("MICRODUCK_SKILL_KICK_LEFT", str(_PD / "ball_kick_left.onnx"))
+    monkeypatch.setenv("MICRODUCK_SKILL_KICK_RIGHT", str(_PD / "ball_kick_right.onnx"))
     """The kicks run as a 0.5 s window with an all-zero command, like robotd.
     Measured: a ball 8 cm ahead and 6 cm to the foot's side flies over a
     metre; on the wrong side it is not touched."""
