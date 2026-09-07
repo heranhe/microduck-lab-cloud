@@ -65,8 +65,15 @@ def _ahead_columns(frame) -> float:
     return float(cols[3:5].min())
 
 
-def run(seed: int, seconds: float, per_side: int) -> dict:
+def run(seed: int, seconds: float, per_side: int, roles: str | None = None) -> dict:
     sc = make_pitch(per_side=per_side)
+    if roles:
+        # Static jobs, the same on both sides, in spawn order (as probe_threat):
+        # `--roles defender,midfielder,striker` for 3v3.
+        names = [r.strip() for r in roles.split(",")]
+        assert len(names) == per_side, f"--roles needs {per_side} names, got {names}"
+        for i, d in enumerate(sc.ducks):
+            d.role = names[i % per_side]
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
     w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed)
     teams: dict = {}
@@ -256,11 +263,13 @@ def main() -> None:
     ap.add_argument("--seconds", type=float, default=300.0)
     ap.add_argument("--per-side", type=int, default=2)
     ap.add_argument("--jobs", type=int, default=8)
+    ap.add_argument("--roles", default=None,
+                    help="static jobs per side in spawn order, both sides alike, e.g. 'defender,midfielder,striker'")
     ap.add_argument("--out", default=None, help="write each run as a JSON line")
     ap.add_argument("--label", default=None)
     args = ap.parse_args()
     label = args.label or (os.environ.get("MICRODUCK_CHASE", "") or "baseline")
-    todo = [(s, args.seconds, args.per_side) for s in range(args.seed0, args.seed0 + args.seeds)]
+    todo = [(s, args.seconds, args.per_side, args.roles) for s in range(args.seed0, args.seed0 + args.seeds)]
     rows: list[dict] = []
     if args.jobs > 1 and len(todo) > 1:
         import multiprocessing as mp

@@ -3042,6 +3042,18 @@ this stack has none of them.
       by the filter but not gone — five extra events over 48 seeds on a
       metric that needs 347 (4.1.5).
 
+      **Replicated a third time, in 3v3 with roles** (defender, midfielder,
+      striker; `probe_search.py --roles`, 24 seeds, one tree state):
+      possession **+3.68 s/min (p<0.001, 18/24)**, signed progress **+0.074
+      (p=0.002, 19/24)**, advance +0.051 (p=0.051), falls flat, own goals
+      0 → 1. And the cost that only a formation can show: **crowd 0.19 →
+      0.30, spread 1.51 → 1.23 m, depth 0.57 → 0.77 m, all p<0.001.** Part
+      of the crowd is the metric counting the pusher, who is within 0.5 m
+      of the ball by definition; the depth and spread are real — a
+      defender that gets the ball under push-first walks it up the pitch
+      and leaves its post, because nothing tells a pusher to clear. That
+      is D.2's problem, named below.
+
       **Not shipped tonight, for a physical reason.** Every number above is
       the push's roll on the parallel session's UNCOMMITTED floor; on the
       old floor a walked ball rolled to the boards exactly as a kick did,
@@ -3049,8 +3061,9 @@ this stack has none of them.
       `kick_select_p_whiff` ship off with these numbers beside them. When
       that floor is committed: one fresh block on it, and if it agrees,
       flip both on — that is the strongest single candidate the new floor
-      has produced, and it answers the original ask ("kick it up the pitch,
-      or carry it") with a measurement rather than a rule.
+      has produced, three blocks in agreement, and it answers the original
+      ask ("kick it up the pitch, or carry it") with a measurement rather
+      than a rule.
 #### B. Things that are simply not modelled
 
 - [ ] **B.1 A get-up.** Every RoboCup humanoid must recover from a fall
@@ -3199,15 +3212,37 @@ this stack has none of them.
       of it by design (`strike_ahead`), so a defender+striker pair can pass
       only when the defender has the ball; a mid that holds ahead of the
       ball would be the receiver (D.2). Then re-run the push+pass arm.
-- [ ] **D.2 Positioning by potential field or Voronoi.** RoboCup supporters
-      stand where a potential field over the pitch (ball, teammates,
-      opponents, goals) has a minimum; MSL teams tile the field with a
-      weighted Voronoi tessellation and assign robots to cells. Our roles
-      stand at fixed posts (`defend_depth`, `strike_ahead`, `strike_side`)
-      that do not see opponents at all. The measured win of item 3 (crowd
-      13% → 1.8%, spread +0.95 m) came from posts; a field would let the
-      posts move. → `crowd`, `spread`, `depth` resolve at 11 seeds.
 
+      **Re-run in the formation that offers a receiver** (3v3 with roles, a
+      striker 0.8 m ahead of the ball whenever the mid or defender has it;
+      push-first with and without the bonus, 24 seeds, one tree state):
+      possession −0.07 s/min (p=0.94), progress −0.005 (p=0.88), goals
+      +0.08 (p=0.48) — **nothing on the ball**; spread +0.11 m (p=0.011)
+      and depth −0.11 m (p=0.004), a little shape. So even with a receiver
+      available, a bonus for arriving at a teammate's feet moves no ball
+      measure: on this pitch the push-first selector already carries the
+      ball up-pitch reliably, and "passing" as a distinct thing has no
+      value left to add to it. Closed: `kick_select_pass` stays off, and
+      the push IS the pass.
+- [ ] **D.2 Positioning by potential field or Voronoi — the shape cost is
+      now measured, and it says what the field must do.** RoboCup
+      supporters stand where a potential field over the pitch (ball,
+      teammates, opponents, goals) has a minimum; MSL teams tile the field
+      with a weighted Voronoi tessellation. Our roles stand at fixed posts
+      (`defend_depth`, `strike_ahead`, `strike_side`, `mid_side`) that do
+      not see opponents. The measured win of item 3 (crowd 13% → 1.8%,
+      spread +0.95 m) came from posts. What the 3v3 push-first measurement
+      (A.4) adds is the specific failure a field has to fix: **a defender
+      that gets the ball under push-first dribbles it up the pitch and
+      leaves its post** (depth 0.57 → 0.77 m, spread 1.51 → 1.23 m, both
+      p<0.001), because a post says where to stand WITHOUT the ball and
+      nothing says what a defender does WITH it. The field's first job is
+      not opponents; it is a defender-with-ball rule — push to the
+      nearest up-pitch teammate (the receiver D.1 found nobody offered) or
+      clear, then return to depth — and only then a supporter position
+      that reacts to the ball's carrier. → judge on `depth`, `spread`,
+      `crowd` (resolve at 11 seeds) with push-first on, against the
+      3v3 numbers above. Not built tonight.
 #### E. Learning — where the field found it pays, and where it did not
 
 - [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**

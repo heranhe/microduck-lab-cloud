@@ -898,11 +898,17 @@ class ChaseParams:
     #     (p_whiff 0.5, push 1, shoot 0.3)   possession +1.97 s/min p=0.020 (31/48), falls / crowd /
     #                                        spread flat, own goals +0.10 a run p=0.13 (2 -> 7; push-
     #                                        only was 2 -> 12), kicks 2.8 -> 0.5 a run
-    # Same direction on both blocks, no significant cost. NOT SHIPPED for a
-    # physical reason: the push's whole worth is the 0.64 m a walked ball
-    # rolls on the parallel session's uncommitted floor - on the old floor
-    # it rolled to the boards like a kick. When that floor is committed, one
-    # fresh block on it; if it agrees, flip p_whiff to 0.5 and push to True.
+    #   3v3 with roles (defender/mid/striker)  possession +3.68 p<0.001 (18/24), progress +0.074
+    #                                        p=0.002 (19/24), own goals 0 -> 1; and the cost a
+    #                                        formation shows: crowd 0.19 -> 0.30, spread 1.51 ->
+    #                                        1.23 m, depth 0.57 -> 0.77 m, all p<0.001 - a defender
+    #                                        that gets the ball walks it up-pitch (roadmap D.2)
+    # Three blocks in agreement on the ball, no significant cost in 2v2, a
+    # shape cost in 3v3. NOT SHIPPED for a physical reason: the push's whole
+    # worth is the 0.64 m a walked ball rolls on the parallel session's
+    # uncommitted floor - on the old floor it rolled to the boards like a
+    # kick. When that floor is committed, one fresh block on it; if it
+    # agrees, flip p_whiff to 0.5 and push to True.
     kick_select_p_whiff: float = 0.0
     kick_select_push: bool = False
     # With the push on offer: prefer a SAFE push unless some kick scores in
@@ -935,7 +941,11 @@ class ChaseParams:
     # scatter rolls 3.3 m to the boards - it cannot deliver to a point a
     # metre away; only 6 of 61 verdicts had any received sample. The
     # passing instrument on this pitch is the PUSH (0.64 m, 30 deg), which
-    # is waiting on the floor with kick_select_push.
+    # is waiting on the floor with kick_select_push. Re-run WITH a receiver
+    # (3v3 with roles, push-first with and without this): possession -0.07
+    # (p=0.94), progress -0.005 (p=0.88), spread +0.11 (p=0.011) - nothing
+    # on the ball. The push-first selector already carries it; the push IS
+    # the pass. Stays off.
     kick_select_pass: bool = False
     pass_min_ahead: float = 0.3
     pass_reach: float = 0.4
