@@ -88,7 +88,7 @@ def test_the_local_kicks_are_the_default_and_their_exits_reach_the_brain(monkeyp
     angles follow the sidecar, unless the command line names them."""
     import json
 
-    from microduck_local.brain.controllers import ChaseParams
+    from microduck_local.brain.controllers import Chase, ChaseParams
     from microduck_local.brain.team import brain_kwargs
     from microduck_local.world import World, make_pitch
     monkeypatch.delenv("MICRODUCK_SKILL_KICK_RIGHT", raising=False)

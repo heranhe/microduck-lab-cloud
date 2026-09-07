@@ -2880,12 +2880,26 @@ What is left, in the order it is worth doing:
    aim worse (43–69° against 29–30°) — the head-down line-up puts the
    ball somewhere the plan did not expect. So the kicks are worth
    having and the held gaze is still not, which is the same verdict item
-   7 reached with one fewer reason. A fresh block (seeds 100–123) of the
-   kick probe is running before the local kicks become the sim's
-   default; `support_gaze` — the supporter looking at the ball, which is
-   most of what the eye sees on /sim — is measured beside it. These are
-   local policies for the SIM; the robot's kick still ships from upstream
-   (the patch), as AGENTS.md's sim2real rule requires.
+   7 reached with one fewer reason.
+
+   **Fresh block (seeds 100–123):** whiff 55% → 38%, on the sweet spot
+   2% → 12%, drift 0.167 → 0.068 m, aim error 45° → 35°; **pooled over
+   48 seeds, whiff 61% → 40% (p=0.0025).** The local kicks are the sim's
+   default (13:05): vendored under `microduck_local/policies/kick/` with
+   sidecars (`exit_rad`, the bench and in-play numbers), resolved by
+   `World.skill_path` before the shipped Hub file, their exit angles
+   reaching the brain through `brain_kwargs` (`World.kick_exits`) unless
+   the command line names them; `MICRODUCK_SKILL_<NAME>` still wins. The
+   /sim lab was restarted on this code the same minute — until then it had
+   been a 00:49 process on `c9d1d43` with none of tonight's changes in it,
+   which is why the owner saw nothing new. **`support_gaze` — the
+   supporter looking at the ball, which is most of what the eye sees on
+   /sim — measured a null** (3v3, local kicks, 24 seeds: ball in view
+   24.1 → 24.2%, possession −1.6 s/min p=0.15, everything else flat) and
+   stays off: a supporter stands 0.7–1.0 m off the ball, at the edge of
+   `head_range`, so there is little for the gaze to add. These are local
+   policies for the SIM; the robot's kick still ships from upstream (the
+   patch), as AGENTS.md's sim2real rule requires.
 
    *The note as it stood before that, kept because its premise is what
    was measured wrong:* The local `train-behavior`
