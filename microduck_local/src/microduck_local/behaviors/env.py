@@ -32,6 +32,8 @@ class BehaviorEnv(MicroduckWalkEnv):
                 pass
         if self.behavior.scene == "all":
             kwargs.setdefault("scene_xml", str(C.SCENE_ALL_XML))
+        elif self.behavior.scene == "ball":
+            kwargs.setdefault("scene_xml", str(C.scene_walk_ball_xml()))   # the walk scene + the kick ball
         kwargs.setdefault("terminate_on_fall", self.behavior.terminate_on_fall)
         # Per recipe, like terminate_on_fall: locomotion turns it off (the GPU
         # stack has no z-kill; a bouncing stride dips through 0.07 m without

@@ -19,8 +19,10 @@ duck's measured yaw, the way the robot runtime would.
 from __future__ import annotations
 
 import math
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 import mujoco
@@ -742,7 +744,10 @@ class World:
             return False
         if name not in self.skills:
             from ..brain.brain_env import POLICIES_DIR, onnx_infer
-            path = POLICIES_DIR / SKILLS[name]
+            # A local export in place of the shipped skill (behaviors/kick.py):
+            # MICRODUCK_SKILL_KICK_RIGHT=runs/<run>/policy.onnx
+            override = os.environ.get(f"MICRODUCK_SKILL_{name.upper()}")
+            path = Path(override) if override else POLICIES_DIR / SKILLS[name]
             if not path.exists():
                 return False
             self.skills[name] = onnx_infer(path)

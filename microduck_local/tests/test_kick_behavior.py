@@ -1,0 +1,82 @@
+"""The kick trained here (behaviors/kick.py, roadmap item 7 / 4c revisit):
+the walk scene grows the kick ball without losing its keyframes, the
+recipe spawns the ball on the kicking foot's sweet spot and the head across
+the gaze range, a real kick moves the ball under its pay, and the arena
+can run a local export in place of the shipped skill."""
+
+
+import mujoco
+
+from microduck_local import contract as C
+from microduck_local.behaviors import BEHAVIORS
+from microduck_local.behaviors.env import BehaviorEnv
+from microduck_local.behaviors.kick import (
+    BALL_NOISE,
+    BALL_OFFSET,
+    HEAD_DOWN,
+    NECK_DOWN,
+    _kick_ball_ids,
+    ball_speed_along,
+)
+from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
+
+
+def test_the_walk_scene_takes_the_ball_and_keeps_its_keyframes():
+    p = C.scene_walk_ball_xml()
+    assert p.exists() and (p.parent / "ball.xml").exists() and (p.parent / "scene_walk.xml").is_symlink()
+    m = mujoco.MjModel.from_xml_path(str(p))
+    assert m.nq == 21 + 7 and m.key("STAND").id >= 0 and m.body("ball").id > 0
+
+
+def test_the_kick_recipe_spawns_the_ball_on_the_foot_and_the_head_across_the_gaze_range():
+    for side, sgn in (("right", -1.0), ("left", 1.0)):
+        assert f"kick_{side}" in BEHAVIORS and BEHAVIORS[f"kick_{side}"].scene == "ball"
+        env = BehaviorEnv(f"kick_{side}", seed=7, max_episode_s=2.0, domain_rand=False, random_yaw=False)
+        necks, heads = [], []
+        for k in range(12):
+            env.reset(seed=20 + k)
+            _, qadr, _ = _kick_ball_ids(env)
+            ahead = env.data.qpos[qadr] - env.data.qpos[0]
+            beside = env.data.qpos[qadr + 1] - env.data.qpos[1]
+            assert abs(ahead - BALL_OFFSET[0]) <= BALL_NOISE + 1e-6 and abs(beside - sgn * BALL_OFFSET[1]) <= BALL_NOISE + 1e-6
+            necks.append(env.data.qpos[env.joint_qpos_adr[5]] - C.DEFAULT_POSE[5])
+            heads.append(env.data.qpos[env.joint_qpos_adr[6]] - C.DEFAULT_POSE[6])
+        assert min(necks) >= NECK_DOWN[0] - 1e-6 and max(necks) <= NECK_DOWN[1] + 1e-6
+        assert min(heads) >= HEAD_DOWN[0] - 1e-6 and max(heads) <= HEAD_DOWN[1] + 1e-6
+        assert max(heads) > 0.3 and min(necks) < -0.1                     # the gaze poses are really sampled
+
+
+def test_a_real_kick_moves_the_ball_under_the_recipes_pay():
+    env = BehaviorEnv("kick_right", seed=3, max_episode_s=2.0, domain_rand=False, random_yaw=False)
+    obs, _ = env.reset(seed=3)
+    # The shipped right kick from a LEVEL head (it whiffs head-down - measured, item 7).
+    for j in (5, 6):
+        env.data.qpos[env.joint_qpos_adr[j]] = C.DEFAULT_POSE[j]
+    env.data.ctrl[:] = env.data.qpos[env.joint_qpos_adr]
+    mujoco.mj_forward(env.model, env.data)
+    obs = env._get_obs()
+    kick = onnx_infer(POLICIES_DIR / "ball_kick_right.onnx")
+    _, qadr, _ = _kick_ball_ids(env)
+    x0 = float(env.data.qpos[qadr])
+    vmax, total = 0.0, 0.0
+    for k in range(60):
+        obs, r, term, trunc, info = env.step(kick(obs))
+        total += r
+        vmax = max(vmax, ball_speed_along(env))
+        if term or trunc:
+            break
+    assert vmax > 0.4 and float(env.data.qpos[qadr]) - x0 > 0.3      # measured: 0.65 m/s, +0.68 m
+    assert total > 100.0 and not term                                  # paid for it, still standing
+
+
+def test_the_arena_runs_a_local_export_in_place_of_a_shipped_skill(monkeypatch, tmp_path):
+    from microduck_local.world import World, make_pitch
+    sc = make_pitch()
+    w = World(sc, seed=1)
+    d = w.ducks[sc.ducks[0].id]
+    monkeypatch.setenv("MICRODUCK_SKILL_KICK_RIGHT", str(POLICIES_DIR / "ball_kick_left.onnx"))   # any 61-obs policy stands in
+    assert w.start_skill(d, "kick_right")
+    assert d.skill == "kick_right"
+    monkeypatch.setenv("MICRODUCK_SKILL_KICK_LEFT", str(tmp_path / "missing.onnx"))
+    w2 = World(sc, seed=1)
+    assert not w2.start_skill(w2.ducks[sc.ducks[0].id], "kick_left")     # a missing override is refused, not a crash

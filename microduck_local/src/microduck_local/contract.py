@@ -93,3 +93,36 @@ def quat_rotate_inverse(quat_wxyz: np.ndarray, vec: np.ndarray) -> np.ndarray:
     return np.array((v0 - w * t0 + (y * t2 - z * t1),
                      v1 - w * t1 + (z * t0 - x * t2),
                      v2 - w * t2 + (x * t1 - y * t0)), dtype=np.float32)
+
+
+def scene_walk_ball_xml() -> Path:
+    """The walk scene with upstream's 70 mm / 15 g kick ball (roadmap item 7,
+    4c revisit): `scene_walk.xml` rewritten beside SYMLINKS to every file of
+    the robot directory - MuJoCo resolves meshes relative to the main file -
+    with `ball.xml` included last and every keyframe padded by the ball's
+    seven qpos, since a free joint changes nq and upstream's own
+    scene_ball.xml drops its keyframes for exactly that reason. Generated on
+    demand under microduck_local/.cache; the pinned upstream checkout is
+    never written to. The walk env indexes joints by address, so nothing
+    else in it changes: measured, the shipped walker walks this scene
+    without a fall."""
+    import re
+    src, d = SCENE_WALK_XML, SCENE_WALK_XML.parent
+    out = Path(__file__).resolve().parents[2] / ".cache" / "scene"
+    out.mkdir(parents=True, exist_ok=True)
+    for entry in d.iterdir():
+        link = out / entry.name
+        target = entry.resolve()
+        if link.is_symlink():
+            if os.readlink(link) == str(target):
+                continue
+            link.unlink()
+        elif link.exists():
+            link.unlink()
+        link.symlink_to(target)
+    xml = src.read_text().replace("</mujoco>", '    <include file="ball.xml"/>\n</mujoco>')
+    xml = re.sub(r'qpos="([^"]+)"', lambda m: f'qpos="{" ".join(m.group(1).split())} 0.3 0 0.035 1 0 0 0"', xml)
+    p = out / "scene_walk_ball.xml"
+    if not p.exists() or p.read_text() != xml:
+        p.write_text(xml)
+    return p
