@@ -1907,7 +1907,7 @@ class Chase:
 
     def __init__(self, p: ChaseParams | None = None, goal: tuple[float, float] | None = None,
                  team=None, duck_id: str = "", bounds: tuple[float, float] | None = None,
-                 goal_w: float = 0.0, role: str | None = None):
+                 goal_w: float = 0.0, role: str | None = None, det_noise: str | None = "datasheet"):
         # No params given (the lab, the benchmark, the /sim page): the
         # shipped defaults, with `MICRODUCK_CHASE` applied so a battery can
         # name its variant on the command line. A caller that passes `p`
@@ -1931,7 +1931,13 @@ class Chase:
             self.loc = Localizer(pitch_posts(self.bounds, self.goal_w))
         # stands when it does not have it; that one says whether it has it now.
         self.job = role
-        self.tracker = Tracker()
+        if role == "keeper" and self.p.intercept_eta <= 0 and "intercept_eta" not in ChaseParams.env_names():
+            from dataclasses import replace  # noqa: PLC0415
+            self.p = replace(self.p, intercept_eta=self.p.keeper_intercept_eta)   # a keeper blocks by default
+        # The tracker's uncertainty model is the detector's datasheet
+        # (roadmap C.1): `det_noise` is the duck's detector preset, which
+        # brain_kwargs passes from the scenario.
+        self.tracker = Tracker(TrackerParams.for_detector(det_noise))
         self.gait = GaitWatch()
         self.blocker = Interceptor()
         self.reset()
@@ -2225,9 +2231,11 @@ class Chase:
         self.tracker.update(det_in, t, odom[2], (odom[0], odom[1]) if senses.odom is not None else None)
         ball = self.tracker.best(p.target_cls, t, min_hits=1)
         fresh = ball is not None and ball.age(t) <= self.DET_MAX_AGE
+        self.predicted_sigma: float | None = None            # its 1-sigma error (roadmap C.1)
         seen = ball is not None and ball.age(t) < p.lost_s
         # Where the ball is going: its predicted position, and the bearing
         # to it from here (the head looks there; the search opens there).
+            self.predicted_sigma = ball.sigma(t, self.tracker.p.vel_prior)
         self.predicted: tuple[float, float] | None = None
         pred_bearing: float | None = None
         if ball is not None and ball.xy is not None and ball.age(t) <= p.predict_s:

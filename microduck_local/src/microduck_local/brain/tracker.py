@@ -53,6 +53,26 @@ class Track:
     xy_t: float = 0.0
     vel: tuple[float, float] = (0.0, 0.0)
     vel_hits: int = 0                            # hits the velocity rests on (2+ before trusting it)
+    # THE BALL'S UNCERTAINTY (roadmap Track 4 s6 C.1). A point estimate
+    # with no covariance is why nothing downstream could say how much to
+    # trust it: `sig_meas` is the position sigma of the last hit, built
+    # from the detector's DECLARED noise at that range (`TrackerParams.
+    # meas_*`, the datasheet numbers a real robot would be configured
+    # with), and `vel_sig` the scatter of the velocity samples about the
+    # smoothed velocity. `sigma(t)` grows them by the time since the hit:
+    # a ball not seen for a while may have rolled. Calibrated against the
+    # truth by scripts/probe_shot_gate.py.
+    sig_meas: float = 0.0
+    vel_sig: float = 0.0
+
+    def sigma(self, t: float, vel_prior: float = 0.15) -> float:
+        """The 1-sigma position uncertainty (m) of `predict(t)`: the last
+        hit's own error, plus how far an uncertain velocity may have
+        carried the ball since - the measured scatter of the velocity when
+        the track has one, `vel_prior` when it does not."""
+        dt = max(0.0, t - self.xy_t) if self.xy is not None else 0.0
+        sv = self.vel_sig if self.vel_hits >= 2 else vel_prior
+        return math.hypot(self.sig_meas, sv * dt)
 
     def age(self, t: float) -> float:
         return t - self.last_t
@@ -109,11 +129,32 @@ class TrackerParams:
     vel_smooth: float = 0.5        # weight of a new velocity sample (hits 0.05-1 s apart)
     vel_min_dt: float = 0.05
     vel_max_dt: float = 1.0
+    # The detector's declared noise (a `DetectorNoise` preset; `for_detector`
+    # reads one), which is what a track's `sig_meas` is built from: bearing
+    # sigma x range, and the width-ranged distance's own fraction (range
+    # is radius / tan(width / 2), so a 10% width error is a 10% range
+    # error). `meas_floor` is what a perfect detector still carries - the
+    # frame's age and the body's motion between frame and pose, measured
+    # 1.8 cm in `_place`'s note. `vel_prior` is how fast a ball with no
+    # measured velocity may be moving: most sightings are of a still one.
+    meas_bearing_sigma: float = math.radians(1.0)
+    meas_range_frac: float = 0.10
+    meas_floor: float = 0.02
+    vel_prior: float = 0.15
     # Detection classes the tracker never turns into tracks: landmarks. The
     # goal posts (`post`) are for the localiser (brain/localize.py), which
     # reads them off the frame; as tracks they would only cost association
     # time and shift every other track's id.
     ignore: tuple[str, ...] = ("post",)
+
+    @classmethod
+    def for_detector(cls, preset: str | None, **kw) -> "TrackerParams":
+        """The tracker a duck with this detector preset should run: its
+        uncertainty model is the detector's datasheet, nothing else moves."""
+        from ..sensors.detector import DetectorNoise  # noqa: PLC0415
+        nz = DetectorNoise.preset(preset or "ideal")
+        return cls(meas_bearing_sigma=float(nz.bearing_sigma_rad),
+                   meas_range_frac=float(nz.width_sigma_frac), **kw)
 
 
 class Tracker:
@@ -203,9 +244,19 @@ class Tracker:
                 k = p.vel_smooth if tr.vel_hits else 1.0
                 tr.vel = (tr.vel[0] + k * (sample[0] - tr.vel[0]), tr.vel[1] + k * (sample[1] - tr.vel[1]))
                 tr.vel_hits += 1
+                # How much the samples disagree with the smoothed velocity:
+                # the velocity's own uncertainty (roadmap C.1).
+                dev = math.hypot(sample[0] - tr.vel[0], sample[1] - tr.vel[1])
+                tr.vel_sig = dev if tr.vel_hits <= 1 else tr.vel_sig + 0.5 * (dev - tr.vel_sig)
             elif dt > p.vel_max_dt:
-                tr.vel, tr.vel_hits = (0.0, 0.0), 0        # too long ago to say
+                tr.vel, tr.vel_hits, tr.vel_sig = (0.0, 0.0), 0, 0.0        # too long ago to say
         tr.xy, tr.xy_t = xy, t
+        # This placement's own error (roadmap C.1): the detector's bearing
+        # and range noise at this range, less what the polar smoothing
+        # averages out once the track has settled, never under the floor.
+        shrink = math.sqrt(p.smooth / (2.0 - p.smooth)) if tr.hits >= 3 else 1.0
+        tr.sig_meas = max(p.meas_floor, math.hypot(p.meas_bearing_sigma * tr.range,
+                                                   p.meas_range_frac * tr.range) * shrink)
 
     def _associate(self, dets: list[Detection], t: float, cam_yaw: float = 0.0) -> list[Track]:
         """Detections come in the CAMERA's frame; tracks are kept in the

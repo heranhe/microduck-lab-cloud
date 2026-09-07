@@ -33,13 +33,19 @@ from microduck_local.brain.team import brain_kwargs, kickoff_brains
 from microduck_local.world import World, make_pitch
 
 
-def run(seed: int, seconds: float = 300.0, per_side: int = 2) -> list[tuple[float | None, float]]:
+def run(seed: int, seconds: float = 300.0, per_side: int = 2) -> dict:
+    """Per swing: (predicted side, true side, sigma). Per sampled tick with
+    a live estimate (every 25th, a duck): (age of the hit, sigma, error of
+    the prediction against the true ball) - the calibration set for
+    `Track.sigma` (roadmap C.1)."""
     sc = make_pitch(per_side=per_side)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
     w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed)
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
     goal_seq, out = 0, []
+    ticks: list[tuple[float, float, float]] = []
+    n_tick = 0
     while w.t < seconds:
         for d in w.ducks.values():
             tof, det = d.tof.last, d.detector.last
@@ -49,6 +55,12 @@ def run(seed: int, seconds: float = 300.0, per_side: int = 2) -> list[tuple[floa
                        bumped=w.bumped(d))
             b = brains[d.id]
             it = b.step(s)
+            n_tick += 1
+            if b.predicted is not None and n_tick % 25 == 0:
+                bx, by = w.ball_xy()
+                tr = b.tracker.best(b.p.target_cls, w.t, min_hits=1)
+                age = (w.t - tr.xy_t) if tr is not None and tr.xy is not None else 0.0
+                ticks.append((age, b.predicted_sigma or 0.0, math.hypot(b.predicted[0] - bx, b.predicted[1] - by)))
             if it.skill in ("kick_left", "kick_right"):
                 ox, oy, oyaw = w.odom(d)
                 bx, by = w.ball_xy()
@@ -57,40 +69,76 @@ def run(seed: int, seconds: float = 300.0, per_side: int = 2) -> list[tuple[floa
                 if b.predicted is not None:
                     px, py = b.predicted
                     pred = -(px - ox) * math.sin(oyaw) + (py - oy) * math.cos(oyaw)
-                out.append((pred, true))
+                out.append((pred, true, b.predicted_sigma))
             w.apply_intent(d, it)
             if d.skill is None:
                 d.set_cmd(w.data, it.twist, it.head)
         w.step()
         if w.goal_seq != goal_seq:
             goal_seq = w.goal_seq
-            kickoff_brains(brains, teams)
-    return out
+            kickoff_brains(brains, teams, w)
+    return {"swings": out, "ticks": ticks}
+
+
+def calibration(ticks: list, swings: list) -> None:
+    """Does `Track.sigma` predict the estimate's error? (roadmap C.1) Per
+    age of the last hit: the median sigma and error, and the share of
+    errors inside 1 and 2 sigma (a calibrated Gaussian: 68% / 95%)."""
+    if not ticks:
+        print("no live estimates sampled\n")
+        return
+    a = np.array(ticks, float)
+    print(f"THE BALL'S UNCERTAINTY: {len(a)} sampled estimates (every 25th tick a duck with one)")
+    print(f"  {'hit age':<14}{'n':>7}{'median sigma':>14}{'median err':>12}{'in 1s':>8}{'in 2s':>8}{'r(sig,err)':>12}")
+    edges = [(0.0, 0.1), (0.1, 0.3), (0.3, 0.6), (0.6, 1.01)]
+    for lo, hi in edges:
+        m = (a[:, 0] >= lo) & (a[:, 0] < hi)
+        if m.sum() < 5:
+            continue
+        sg, er = a[m, 1], a[m, 2]
+        r = float(np.corrcoef(sg, er)[0, 1]) if sg.std() > 1e-9 else float("nan")
+        print(f"  {f'{lo:.1f}-{hi:.1f} s':<14}{int(m.sum()):>7}{np.median(sg):>14.3f}{np.median(er):>12.3f}"
+              f"{(er <= sg).mean():>8.0%}{(er <= 2 * sg).mean():>8.0%}{r:>12.2f}")
+    sg, er = a[:, 1], a[:, 2]
+    print(f"  {'all':<14}{len(a):>7}{np.median(sg):>14.3f}{np.median(er):>12.3f}"
+          f"{(er <= sg).mean():>8.0%}{(er <= 2 * sg).mean():>8.0%}{float(np.corrcoef(sg, er)[0, 1]):>12.2f}")
+    if swings:
+        s = np.array([[x[2], abs(x[0] - x[1])] for x in swings], float)
+        print(f"  at the swing ({len(s)}): median sigma {np.median(s[:, 0]):.3f}, median |side err| "
+              f"{np.median(s[:, 1]):.3f}, in 1s {(s[:, 1] <= s[:, 0]).mean():.0%}, in 2s "
+              f"{(s[:, 1] <= 2 * s[:, 0]).mean():.0%}")
+    print()
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seeds", type=int, default=24)
+    ap.add_argument("--seed0", type=int, default=0)
     ap.add_argument("--seconds", type=float, default=300.0)
     ap.add_argument("--per-side", type=int, default=2)
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--thresholds", default="0.09,0.12")
     args = ap.parse_args()
 
-    todo = [(s, args.seconds, args.per_side) for s in range(args.seeds)]
+    todo = [(s, args.seconds, args.per_side) for s in range(args.seed0, args.seed0 + args.seeds)]
     got: list = []
+    ticks: list = []
     if args.jobs > 1 and len(todo) > 1:
         import multiprocessing as mp
         ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "spawn")
         with ctx.Pool(min(args.jobs, len(todo))) as pool:
             for r in pool.starmap(run, todo):
-                got += r
+                got += r["swings"]
+                ticks += r["ticks"]
     else:
         for a in todo:
-            got += run(*a)
+            r = run(*a)
+            got += r["swings"]
+            ticks += r["ticks"]
 
-    have = [(p, t) for p, t in got if p is not None]
+    calibration(ticks, [(p, t, s) for p, t, s in got if p is not None and s is not None])
+    have = [(p, t) for p, t, _ in got if p is not None]
     print(f"{len(got)} kicks over {args.seeds} seeds x {args.seconds:g} s of "
           f"{args.per_side}v{args.per_side}; the brain had a fresh estimate on "
           f"{len(have)} of them ({len(have) / max(1, len(got)):.0%}).\n")

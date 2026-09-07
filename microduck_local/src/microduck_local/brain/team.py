@@ -477,7 +477,8 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
             if x.team == duck_spec.team and x.role:
                 team.jobs[x.id] = x.role
     out = {"goal": goal, "team": team, "duck_id": duck_spec.id, "bounds": (hx, hy),
-           "goal_w": world.goal_width, "role": duck_spec.role}
+           "goal_w": world.goal_width, "role": duck_spec.role,
+           "det_noise": duck_spec.detector}                  # the tracker's uncertainty model (C.1)
     # A roster with teammates plays in a crowd, so it gets the bump sense
     # (`ChaseParams.team_bump_stand_s`) where a lone attacker does not - in
     # 1v1 the rule measured worse on both goals and falls.
