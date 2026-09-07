@@ -2972,19 +2972,85 @@ this stack has none of them.
       levels are on the parallel session's uncommitted floor; both arms of
       every block share it. Goals remain unjudgeable at this seed count
       (4.1.5), as always.
-- [ ] **A.4 Dribbling — carry the ball rather than stop and strike it.**
-      B-Human ships a `Dribble` behaviour beside kicks; Dribble Master (2025)
-      learns dribbling with RL using **a virtual camera in the simulator that
-      models the field of view**, plus rewards for *active sensing* — keeping
-      the ball in view — and transfers to hardware. The point for us:
-      dribbling keeps the ball in continuous contact inside the walk, so
-      there is never a 3 s blind approach to a stale spot. Our `push` mode
-      (`push_beyond`, a "push spot squarely behind the ball") is a crude
-      dribble that nothing has ever measured against the kick. → **what
-      settles it:** signed `ballProgress` and `possession`, push-only vs
-      kick-only vs shipped, 24 seeds. If push moves the ball as far forward
-      with fewer falls, the kick is not the right primitive for this robot.
+- [x] **A.4 Dribbling — MEASURED (2026-09-07): walking the ball beats
+      kicking it on every ball measure, and it has one cost that the
+      selector should own.** The brain's `push` mode (`push_beyond` = 0 makes
+      every approach a walk through the ball, `push_behind` behind it) had
+      never been measured against the kick. `probe_search.py`, 24 discovery
+      + 24 fresh seeds of 2v2, each block's arms forked on one tree state,
+      the shipped brain (kicks, with the selector on) against push-only:
 
+      | paired per seed | discovery | fresh | pooled 48 |
+      |---|---|---|---|
+      | possession, s/min | +4.18 (p=0.001) | +2.12 (p=0.006) | **+3.15, p<0.001**, better on 38/48 |
+      | ball advance | +0.063 | +0.097 (p=0.010) | **+0.080, p=0.003** |
+      | signed ball progress | +0.079 (p=0.068) | +0.068 (p=0.086) | **+0.073, p=0.011** |
+      | falls | −0.04 | 0.00 | −0.02 (p=0.81) |
+      | goals for, a run | +0.13 | +0.42 (p=0.036) | +0.27 (p=0.079) |
+      | **own goals, a run** | 0.00 | **+0.42 (p<0.001; 0 → 10)** | **+0.21, p=0.008** |
+      | crowd | +0.07 (p=0.005) | +0.05 (p=0.058) | **+0.06, p=0.001** |
+
+      Why it wins: a push has no settle, no 3 s stale plan, no head-down
+      pose and no exit angle — the whole chain items 4b/4c/7 spent the
+      session on — and on this floor a walked ball rolls 0.72 m, enough to
+      matter. Why it cannot ship as it is: **a push has no aim.** The duck
+      walks through the ball wherever it stands, and near its own mouth
+      that is into its own net — ten own goals on the fresh block against
+      none, an effect the discovery block happened not to show (2 v 2),
+      which is exactly what the power table warned own goals would do. The
+      kick's aim — the clamp, now the selector — is worth its whiffs only
+      near our own goal. Ducks also bunch around a pushed ball (crowd +0.06).
+
+      **Built the same night: the push as a selector action.** Benched
+      first (10 walks at 0.45 m/s per side offset, deterministic per
+      offset): a walked ball rolls 0.56–0.71 m and leaves at +17° dead
+      ahead, ±12° at 4 cm off, ±45° at 8 cm off — a 30° spread across
+      offsets, a fifth of a kick's reach, every walk touching. That is
+      `kickselect.push_model`; the kick model also gained the kick's own
+      whiff rate (`kick_select_p_whiff`, 50–61% on this floor), since a
+      roll-out that assumes every swing connects rates the kick against a
+      push that always does. Three findings, each measured on 24 seeds
+      forked with shipped on one tree state:
+
+      1. *Mellmann's rule chooses the push almost never.* "Most likely to
+         score first" — and on a 3 m pitch a kick has SOME scoring chance
+         nearly everywhere — so the arm came back as the shipped brain
+         (kicks 2.79 → 2.12 a run, possession 14.2 → 14.0, progress 0.046
+         → 0.024). A one-shot roll-out cannot see what the push is worth,
+         which is tempo: a reliable 0.64 m every approach, no settle, no
+         whiff.
+      2. *The whiff term alone helps nothing* (possession 14.2 → 12.9,
+         progress +0.016, goals 11 → 7): the ranking among kicks barely
+         moves.
+      3. *Push first unless a kick can shoot* (`kick_select_shoot` = 0.3:
+         prefer a safe push unless some kick scores in ≥30% of its samples;
+         a push that itself reaches the mouth scores too and wins outright)
+         keeps most of push-only's gain and the selector's aim:
+
+      | push-first vs shipped, paired | discovery | fresh | pooled 48 |
+      |---|---|---|---|
+      | signed ball progress | +0.077 (p=0.072) | +0.060 (p=0.095) | **+0.068, p=0.013**, better on 30/48 |
+      | possession, s/min | +1.89 (p=0.15) | +2.05 (p=0.062) | **+1.97, p=0.020**, better on 31/48 |
+      | ball advance | +0.030 | +0.076 (p=0.077) | +0.053 (p=0.091) |
+      | falls / crowd / spread | flat | flat | flat (p=0.78 / 0.45 / 0.12) |
+      | goals for, a run | 0.00 | +0.25 | +0.13 (p=0.46) |
+      | own goals, a run | +0.04 (2 → 3) | +0.17 (0 → 4) | +0.10 (p=0.13; 2 → 7, was 2 → 12 push-only) |
+      | kicks a run | 2.79 → 0.50 | 2.46 → 0.54 | it shoots only near their mouth |
+
+      Same direction on both blocks for the two ball measures, both
+      resolving pooled, no significant cost, and the own-goal cost halved
+      by the filter but not gone — five extra events over 48 seeds on a
+      metric that needs 347 (4.1.5).
+
+      **Not shipped tonight, for a physical reason.** Every number above is
+      the push's roll on the parallel session's UNCOMMITTED floor; on the
+      old floor a walked ball rolled to the boards exactly as a kick did,
+      and the whole trade-off is that difference. `kick_select_push` and
+      `kick_select_p_whiff` ship off with these numbers beside them. When
+      that floor is committed: one fresh block on it, and if it agrees,
+      flip both on — that is the strongest single candidate the new floor
+      has produced, and it answers the original ask ("kick it up the pitch,
+      or carry it") with a measurement rather than a rule.
 #### B. Things that are simply not modelled
 
 - [ ] **B.1 A get-up.** Every RoboCup humanoid must recover from a fall

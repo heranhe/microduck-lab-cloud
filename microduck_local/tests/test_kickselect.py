@@ -86,6 +86,65 @@ def test_evaluate_applies_the_foot_exit_angle_to_the_intended_line():
     assert v.p_goal == 0.0 and v.p_own == 0.0
 
 
+def test_whiffs_stay_put_and_the_push_is_an_action_with_the_aim_the_kick_gives_it():
+    """A whiffed sample leaves the ball where it is (measured 50-61% of
+    swings on this floor). The push (A.4) rolls 0.64 m along the walk with
+    no exit angle. With both in the model: mid-pitch, facing their goal, a
+    push that always connects beats a kick that whiffs half the time on the
+    potential of where the ball ends up; near their mouth the kick that can
+    score is chosen; and facing our own mouth from close the push is
+    refused for walking the ball in, and a kick sideways is chosen."""
+    from microduck_local.brain.kickselect import PUSH, push_model
+    rng = np.random.default_rng(3)
+    # Whiffs: with p_whiff = 1 every sample stops at the ball.
+    whiffy = KickModel(speed=1.4, speed_sd=0.0, dir_sd=0.0, decel=0.3, p_whiff=1.0)
+    assert all(label == INFIELD and end == (0.5, 0.0) for label, end in roll_out((0.5, 0.0), 0.0, whiffy, PITCH, rng, 8))
+    # The push model: rolls `roll` under `decel`, no exit angle.
+    from dataclasses import replace
+    pm = push_model(roll=0.64, dir_sd=0.0, decel=0.3)
+    (label, end), = roll_out((0.0, 0.0), 0.0, replace(pm, speed_sd=0.0), PITCH, rng, 1)
+    assert label == INFIELD and abs(end[0] - 0.64) < 1e-6 and pm.exit(PUSH) == 0.0
+    assert 0.0 < pm.speed_sd < 0.1                                    # a little spread in play, not none
+    kick = KickModel(speed=1.4, speed_sd=0.3, dir_sd=0.6, decel=0.3, p_whiff=0.5)
+    models = {PUSH: push_model(0.64, 0.5, 0.3)}
+    # Mid-pitch, facing their goal, under Mellmann's rule (shoot = 0): the
+    # kick's few scoring samples outrank the push - which is why that rule
+    # measured as the shipped brain (the push was never chosen).
+    cands = [(0.0 - kick.exit_left, "kick_left"), (0.0, PUSH)]
+    v = select((-0.3, 0.0), cands, kick, PITCH, rng, n=60, t_own=0.1, models=models)
+    assert v is not None and v.foot == "kick_left" and 0 < v.p_goal < 0.3
+    # With a shooting threshold the safe push is preferred there…
+    v = select((-0.3, 0.0), cands, kick, PITCH, rng, n=60, t_own=0.1, models=models, shoot=0.3)
+    assert v is not None and v.foot == PUSH
+    # …and 0.5 m from their mouth something that SCORES is chosen - here the
+    # push itself, which walks the ball in (0.64 m of roll, 0.5 m to the
+    # line: 60% of samples), outscoring the kick that clears the threshold.
+    v = select((1.0, 0.0), cands, kick, PITCH, rng, n=60, t_own=0.1, models=models, shoot=0.3)
+    assert v is not None and v.p_goal >= 0.3
+    # From 1.0 m out the push cannot reach and no kick clears 0.3: the push.
+    v = select((0.5, 0.0), cands, kick, PITCH, rng, n=60, t_own=0.1, models=models, shoot=0.3)
+    assert v is not None and v.foot == PUSH
+    # 0.4 m in front of OUR mouth facing it: a push along the line of sight
+    # walks the ball into our net and is refused; a kick sideways survives.
+    v = select((-1.1, 0.0), [(math.pi, PUSH), (math.pi - 1.05, "kick_right")], kick, PITCH, rng, n=60, t_own=0.1, models=models, shoot=0.3)
+    assert v is not None and v.foot == "kick_right"
+    v_push_only = select((-1.1, 0.0), [(math.pi, PUSH)], kick, PITCH, rng, n=60, t_own=0.1, models=models, shoot=0.3)
+    assert v_push_only is None
+
+
+def test_the_planner_walks_the_ball_when_the_selector_chooses_the_push():
+    on = ChaseParams(kick_select=True, kick_select_push=True, kick_select_p_whiff=0.5)   # this floor's whiff rate; shoot 0.3
+    b = Chase(on, goal=(1.5, 0.0), duck_id="d0", bounds=(1.5, 1.25), goal_w=0.7)
+    odom = (-0.5, 0.0, 0.0)                                             # mid-pitch, facing their goal
+    b.step(_senses(0.0, (0.0, 0.5), odom))
+    b.step(_senses(0.1, (0.0, 0.5), odom))
+    ball = b.tracker.best("ball", 0.1, min_hits=1)
+    sx, sy, foot, h, mode = b._plan(odom, ball)
+    assert b.last_select is not None and b.last_select.foot == "push"
+    assert mode == "push" and foot is None                              # the spot is a push spot behind the ball
+    assert abs(sx - (0.0 - on.push_behind)) < 0.05 and abs(sy) < 0.05
+
+
 def _senses(t, ball, odom):
     det = DetectionFrame(t, [Detection("ball", "ball0", ball[0], -0.3, 0.12, ball[1], 0.9)])
     return Senses(t=t, det=det, det_age=0.0, speed=0.3, odom=odom)

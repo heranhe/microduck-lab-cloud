@@ -880,6 +880,43 @@ class ChaseParams:
     # 0.10 admits the edge lines the clamp itself would take and refuses
     # everything that puts a fifth or more of kicks in our own net.
     kick_select_t_own: float = 0.10
+    # The kick's own WHIFF rate in the model (a whiffed sample leaves the
+    # ball where it is): 50-61% measured on this floor, 18-23% on the old
+    # one. Without it the roll-out assumes every swing connects and rates
+    # the kick against a push that always does. And the PUSH as a selector
+    # action (A.4): a walk through the ball, no settle, no exit angle, a
+    # 0.6-0.7 m roll with a 30 deg spread (benched; kickselect.push_model).
+    # Push-only measured +3.2 s/min possession and +0.07 progress against
+    # the kick, and +0.21 own goals a run because it has no aim; offering
+    # it to the selector gives it the aim.
+    #
+    # MEASURED 2026-09-07 (probe_search, 24 discovery + 24 fresh seeds,
+    # every arm forked with shipped on one tree state; roadmap A.4):
+    #   whiff term alone (p_whiff 0.5)      possession 14.2 -> 12.9, progress +0.016: nothing
+    #   push under Mellmann's rule           the shipped brain again (the push is never chosen)
+    #   push FIRST unless a kick can shoot   pooled 48: progress +0.068 p=0.013 (30/48 better),
+    #     (p_whiff 0.5, push 1, shoot 0.3)   possession +1.97 s/min p=0.020 (31/48), falls / crowd /
+    #                                        spread flat, own goals +0.10 a run p=0.13 (2 -> 7; push-
+    #                                        only was 2 -> 12), kicks 2.8 -> 0.5 a run
+    # Same direction on both blocks, no significant cost. NOT SHIPPED for a
+    # physical reason: the push's whole worth is the 0.64 m a walked ball
+    # rolls on the parallel session's uncommitted floor - on the old floor
+    # it rolled to the boards like a kick. When that floor is committed, one
+    # fresh block on it; if it agrees, flip p_whiff to 0.5 and push to True.
+    kick_select_p_whiff: float = 0.0
+    kick_select_push: bool = False
+    # With the push on offer: prefer a SAFE push unless some kick scores in
+    # at least this share of its samples (0 = Mellmann's rule, scoring
+    # first - measured to choose the push almost never, because on a 3 m
+    # pitch a kick has some scoring chance nearly everywhere, and the arm
+    # came back as the shipped brain: kicks 2.79 -> 2.12 a run, possession
+    # 14.2 -> 14.0, progress 0.046 -> 0.024). What the push is worth is
+    # tempo, which a one-shot roll-out cannot see; this is the knob that
+    # lets the measured push-only result (+3.2 s/min possession, +0.07
+    # progress) keep its aim.
+    kick_select_shoot: float = 0.3
+    push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
+    push_dir_sd: float = 0.5         # rad of spread across the side offsets the walk meets the ball at
     # THE HEAD. `_gaze` is a law that puts a floor ball at range `rng` on the
     # camera's axis; `head_down` clamps the command it may ask for, and the
     # gaze is applied while WALKING at a ball inside `head_range`.
@@ -1347,6 +1384,17 @@ class ChaseParams:
     push_s: float = 0.5
     # The other duck's BODY (measured over 4 traced runs: 5 of 7 falls had the
     # other duck 3–9 cm away and this one turning in place — search, blocked
+    # MEASURED 2026-09-07, push-only (0) against the shipped brain, 24
+    # discovery + 24 fresh seeds of 2v2 (roadmap Track 4 s6 A.4): pooled and
+    # paired, possession +3.15 s/min (p<0.001, better on 38 of 48 seeds),
+    # ball advance +0.080 (p=0.003), signed progress +0.073 (p=0.011), falls
+    # flat, goals for +0.27 a run (p=0.079) - and OWN GOALS +0.21 a run
+    # (p=0.008; 0 -> 10 on the fresh block), crowd +0.06 (p=0.001). A walk
+    # through the ball has none of the kick's problems (no settle, no stale
+    # plan, no head-down pose, no exit angle) and no aim either: near our
+    # own mouth it walks the ball in. Stays inf (always kick) until the
+    # selector (kick_select) can choose the push as an action with the same
+    # own-goal filter it applies to the kicks.
     # or lining up — the walker tips over when it turns against a body it
     # cannot see below its ToF rows). A tracked duck inside `duck_keepout`
     # and ahead: nothing walks or turns toward it; inside `duck_touch` it is
@@ -1962,6 +2010,13 @@ class Chase:
         foot = "kick_left" if rel >= 0 else "kick_right"
         if self.spot is not None and self.spot[2] in ("kick_left", "kick_right") and abs(rel) < 0.3:
             foot = self.spot[2]                                   # hysteresis: nearly on the line, keep the foot
+        foot_sel: str | None = None
+        if p.kick_select and not far and self.goal is not None and self.bounds is not None and self.goal_w > 0:
+            chosen = self._select_kick_line(odom, (bx, by), los, u)
+            if chosen is not None:
+                u, foot_sel = chosen
+                if foot_sel == "push":
+                    far = True                                    # the selector chose to walk the ball
         foot_sel: str | None = None
         if p.kick_select and not far and self.goal is not None and self.bounds is not None and self.goal_w > 0:
             chosen = self._select_kick_line(odom, (bx, by), los, u)
@@ -2675,15 +2730,22 @@ class Chase:
         lines: list[tuple[float, str]] = []
         k = max(1, int(round(p.aim_max / max(p.kick_select_fan, 1e-3))))
         for i in range(-k, k + 1):
+        models = None
+        if p.kick_select_push:
+            from .kickselect import push_model  # noqa: PLC0415
+            lines += [(u_, "push") for u_, act in lines if act == "kick_left"]   # one push per line
+            models = {"push": push_model(p.push_roll, p.push_dir_sd, max(p.ball_decel, 0.02))}
             u = _wrap(los + i * p.kick_select_fan)
             if abs(_wrap(u - los)) > p.aim_max + 1e-9:
                 continue
             lines += [(u, "kick_left"), (u, "kick_right")]
         lines += [(u_clamp, "kick_left"), (u_clamp, "kick_right")]   # the clamp's own line is always a candidate
         model = KickModel(speed=p.kick_speed, speed_sd=p.kick_select_v_sd, dir_sd=p.kick_select_dir_sd,
-                          decel=max(p.ball_decel, 0.02), exit_left=p.kick_exit_left, exit_right=p.kick_exit_right)
+                          decel=max(p.ball_decel, 0.02), exit_left=p.kick_exit_left, exit_right=p.kick_exit_right,
+                          p_whiff=p.kick_select_p_whiff)
         pitch = Pitch(self.bounds[0], self.bounds[1], self.goal_w, 1.0 if self.goal[0] >= 0 else -1.0)
-        v = select((bx, by), lines, model, pitch, self._kick_rng, n=p.kick_select_n, t_own=p.kick_select_t_own)
+        v = select((bx, by), lines, model, pitch, self._kick_rng, n=p.kick_select_n, t_own=p.kick_select_t_own,
+                   models=models, shoot=p.kick_select_shoot if p.kick_select_push else 0.0)
         self.last_select = v
         return None if v is None else (v.heading, v.foot)
 

@@ -33,6 +33,7 @@ from dataclasses import dataclass
 import numpy as np
 
 GOALOPP, GOALOWN, INFIELD = "GOALOPP", "GOALOWN", "INFIELD"
+PUSH = "push"                                    # the third action beside kick_left / kick_right
 
 
 @dataclass(frozen=True)
@@ -44,9 +45,31 @@ class KickModel:
     exit_left: float = math.radians(23.6)        # where the ball really leaves, off the body heading
     exit_right: float = math.radians(-28.7)
     max_roll: float = 10.0                       # m: a cap so a wild speed sample cannot cross the world
+    # The share of swings that move the ball less than 10 cm - a WHIFF - in
+    # which case the ball stays where it is. Measured 50-61% on the
+    # rolling-resistance floor (18-23% on the old one). A model that assumes
+    # every kick connects overrates the kick against a push that always
+    # does (benched: 50 of 50 walks touched the ball).
+    p_whiff: float = 0.0
 
-    def exit(self, foot: str) -> float:
-        return self.exit_left if foot == "kick_left" else self.exit_right
+    def exit(self, action: str) -> float:
+        if action == "kick_left":
+            return self.exit_left
+        if action == "kick_right":
+            return self.exit_right
+        return 0.0                               # a push leaves along the walk (the body's offset is in dir_sd)
+
+
+def push_model(roll: float = 0.64, dir_sd: float = 0.5, decel: float = 0.3) -> KickModel:
+    """The PUSH as an action: a walk through the ball. Benched on this floor
+    (10 walks at 0.45 m/s per side offset, deterministic per offset): the
+    ball rolls 0.56-0.71 m and leaves at +17 deg dead ahead, +-12 deg at
+    4 cm off, +-45 deg at 8 cm off - a 30 deg spread across offsets, a
+    fifth of a kick's reach, and every walk touched. The speed is whatever
+    rolls `roll` under `decel`; the spread is the side offset the line-up
+    happens to leave, which nothing measures at the moment of the walk."""
+    return KickModel(speed=math.sqrt(2.0 * decel * roll), speed_sd=0.05, dir_sd=dir_sd, decel=decel,
+                     exit_left=0.0, exit_right=0.0, p_whiff=0.0)
 
 
 @dataclass(frozen=True)
@@ -73,8 +96,12 @@ def roll_out(ball: tuple[float, float], heading: float, model: KickModel, pitch:
     v = np.clip(rng.normal(model.speed, model.speed_sd, n), 0.05, None)
     a = rng.normal(heading, model.dir_sd, n)
     d = np.minimum(v * v / (2.0 * max(model.decel, 1e-6)), model.max_roll)
+    whiff = rng.random(n) < model.p_whiff if model.p_whiff > 0 else np.zeros(n, bool)
     hw = pitch.goal_w / 2.0
     for k in range(n):
+        if whiff[k]:
+            out.append((INFIELD, (ball[0], ball[1])))          # the swing missed: the ball stays put
+            continue
         dx, dy = float(d[k] * math.cos(a[k])), float(d[k] * math.sin(a[k]))
         # First board this segment reaches, as a fraction of its length.
         hit, label = 1.0, INFIELD
@@ -114,28 +141,44 @@ class Verdict:
     n: int
 
 
-def evaluate(ball, u: float, foot: str, model: KickModel, pitch: Pitch,
+def evaluate(ball, u: float, action: str, model: KickModel, pitch: Pitch,
              rng: np.random.Generator, n: int) -> Verdict:
-    samples = roll_out(ball, u + model.exit(foot), model, pitch, rng, n)
+    """`action` is kick_left / kick_right / push; `model` is that action's."""
+    samples = roll_out(ball, u + model.exit(action), model, pitch, rng, n)
     labels = [s[0] for s in samples]
     infield = [s[1] for s in samples if s[0] == INFIELD]
     value = float(np.mean([potential(px, py, pitch) for px, py in infield])) if infield else 0.0
-    return Verdict(u, foot, labels.count(GOALOPP) / n, labels.count(GOALOWN) / n, value, n)
+    return Verdict(u, action, labels.count(GOALOPP) / n, labels.count(GOALOWN) / n, value, n)
 
 
 def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: Pitch,
-           rng: np.random.Generator, n: int = 30, t_own: float = 0.0) -> Verdict | None:
-    """The best of `candidates` (kick line, foot), Mellmann's two-step rule:
+           rng: np.random.Generator, n: int = 30, t_own: float = 0.0,
+           models: dict[str, KickModel] | None = None, shoot: float = 0.0) -> Verdict | None:
+    """The best of `candidates` (line, action). Mellmann's two-step rule:
     discard anything with more than `t_own` of its samples in our own net,
     then take the most likely to score, ties (within one sample) broken by
-    the potential of where the rest of the samples stop. None when every
-    candidate is too risky — the caller keeps whatever it had."""
+    the potential of where the rest of the samples stop. `model` is the
+    kicks'; `models` may override per action (a `push` needs its own).
+
+    `shoot` > 0 changes the priority where a push is on offer: a SAFE push
+    is preferred unless some kick scores in at least that share of its
+    samples. A one-shot roll-out cannot see what the push is for — tempo:
+    a reliable 0.64 m every approach with no settle and no whiff, which
+    measured +3.2 s/min of possession against the kick (roadmap A.4) —
+    so with `shoot` = 0 a kick with ANY scoring chance outranks it, and on
+    a 3 m pitch that is nearly everywhere. None when every candidate is
+    too risky — the caller keeps what it had."""
     if not candidates:
         return None
-    verdicts = [evaluate(ball, u, foot, model, pitch, rng, n) for u, foot in candidates]
+    per = dict(models or {})
+    verdicts = [evaluate(ball, u, act, per.get(act, model), pitch, rng, n) for u, act in candidates]
     safe = [v for v in verdicts if v.p_own <= t_own]
     if not safe:
         return None
+    pushes = [v for v in safe if v.foot == PUSH]
+    kicks = [v for v in safe if v.foot != PUSH]
+    if shoot > 0 and pushes and not any(v.p_goal >= shoot for v in kicks):
+        return max(pushes, key=lambda v: (v.value, -abs(v.heading)))
     best_goal = max(v.p_goal for v in safe)
     top = [v for v in safe if v.p_goal >= best_goal - 1.0 / n - 1e-12]
     return max(top, key=lambda v: (v.value, -abs(v.heading)))
