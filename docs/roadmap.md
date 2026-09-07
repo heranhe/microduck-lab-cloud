@@ -2285,6 +2285,52 @@ reporting nothing. Every one of the owner's three observations, as a number.
       `refresh_min` attempt recorded, and it would keep the placement gain
       without paying 58% of the touches.
 
+**Revisited 2026-09-07 (the owner, watching: "they still miss the ball a
+lot, they don't look fully down at their feet, maybe a scanning head").
+All measured, 3v3 with roles, 24 seeds × 300 s, every arm forked with its
+control on one package copy; the whiff line from `probe_kick_line.py`
+(2v2, 24 seeds).** The joints were never the limit (84° down with neck +
+head); the shipped brain looks 37° down through the head slot alone and
+never commands the neck. Looking down THROUGH THE NECK while walking in
+(`gaze_neck=1`, the split that costs no walking speed), level again for
+the swing because the gaze drops when the duck stops:
+
+| | shipped | neck gaze 0.64 | neck gaze 0.45 | neck gaze 0.64, bearing to 1.4 | + 0.8 rad sweep | sweep 0.6 alone |
+|---|---|---|---|---|---|---|
+| ball in view | 25.4% | 26.5% | 26.6% | **27.3%** (p=0.084) | 26.4% | 25.9% |
+| losses over 2 s | 29% | 27% (t=−1.9) | **26%** (t=−3.0) | 26% (t=−2.2) | 28% | 27% |
+| whiffs at the swing (2v2) | 66% | **47%** (p=0.043) | — | — | — | — |
+| possession s/min | 16.9 | 15.5 (p=0.15) | 14.7 (p=0.059) | 16.1 (p=0.45) | 16.4 | **13.4 (p=0.009)** |
+| ball progress | 0.084 | 0.046 | 0.080 | 0.082 | 0.118 | 0.046 |
+| goals in 24 runs | 6 | 1 | 6 | 5 | 7 | 2 |
+| falls in 24 runs | 1 | 2 | **7 (p=0.044)** | 7 (p=0.097) | 6 | 4 |
+
+Three things in it. **Sight improves every time** — two points of view,
+the long losses down by a tenth, whiffs at the swing cut by a third with
+the head level at the swing in both arms (head +0.40 / neck +0.21, the
+kick's requirement) and the plan 0.6 s fresher. **The ball does not
+follow.** The 0.64 gaze trades the far view for the near one (losses per
+run +5 to +12%, shorter ones); the widest-bearing arm is the best of them
+and ledger-neutral. **And walking head-down falls**: 1 fall in 24 runs
+shipped against 7, 7, 6 and 2 in the head-down arms — a walker trained
+with the head near HOME is a walker that stumbles with it pitched, which
+is the same limit item 7 found in the kick, one policy over. The search
+SWEEP (0.6 rad, under the obstacle-sense threshold) costs possession
+outright (−3.6 s/min, p=0.009): a duck that sweeps its head while
+searching walks less. Also found: `gaze_bearing_max` never reached the
+walking gaze (a hard-coded 0.6 rad) — fixed, default unchanged.
+
+**What would actually improve their ability to look at the ball**, in the
+order it pays: (1) the head-down kick retrain (the patch, a GPU run) —
+then the gaze can be HELD through the swing, which is where 81% of the
+blind close-ball steps are; (2) a walker retrained with the gaze poses in
+its head-command range, so walking head-down stops costing falls; (3) the
+replacement camera module the detector spec records (60° vertical
+against the assumed 48°), which widens the near/far trade every arm above
+ran into. Nothing here ships as a default; `gaze_neck=1, head_down=0.64,
+gaze_bearing_max=1.4` is the configuration to re-run the day (1) or (2)
+lands.
+
 #### 4e. The search — the freeze is a flinch, and it is load-bearing (MEASURED, 2026-09-05)
 
 Watching the ducks, the repo owner said they hunt for the ball by stopping and
