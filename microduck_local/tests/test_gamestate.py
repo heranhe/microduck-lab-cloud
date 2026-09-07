@@ -92,7 +92,7 @@ def _see(t, odom, ball_xy):
 
 
 def test_a_waiting_duck_supports_in_its_own_half_and_plays_once_the_ball_leaves_the_spot():
-    assert ChaseParams().kickoff_wait is False                      # ships off until measured
+    assert ChaseParams().kickoff_wait is True                       # measured: fires, costs nothing
     tm = Team("cream", half_x=1.75)
     tm.jobs = {"d0": "defender", "d2": "striker"}
     b = Chase(ChaseParams(kickoff_wait=True), goal=(1.75, 0.0), team=tm, duck_id="d2",
@@ -109,7 +109,7 @@ def test_a_waiting_duck_supports_in_its_own_half_and_plays_once_the_ball_leaves_
         b.step(_see(5.1 + 0.02 * k, odom, (0.4, 0.0)))
     assert not b._kickoff_wait and b.role == "attack" and b.state != "wait"
     # The knob off: the same board message changes nothing.
-    off = Chase(ChaseParams(), goal=(1.75, 0.0), team=Team("cream", half_x=1.75), duck_id="d2",
+    off = Chase(ChaseParams(kickoff_wait=False), goal=(1.75, 0.0), team=Team("cream", half_x=1.75), duck_id="d2",
                 bounds=(1.75, 1.25), goal_w=0.7, role="striker")
     off.team.kickoff(ours=False, until=20.0, ball=(0.0, 0.0))
     for k in range(3):

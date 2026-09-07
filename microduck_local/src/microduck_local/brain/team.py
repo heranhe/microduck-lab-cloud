@@ -181,7 +181,8 @@ class Team:
     # the SPL team-ball. Off until the odometry probe says it is closer.
     fuse: bool = False
     sigma_default: float = 0.10
-    vel_prior: float = 0.15
+    vel_prior: float = 0.06                  # the tracker's calibrated prior (TrackerParams.vel_prior)
+    claims: dict[str, Claim] = field(default_factory=dict)
     _attacker: str | None = None
 
     # --- the game state (roadmap Track 4 s6 B.3) ------------------------------

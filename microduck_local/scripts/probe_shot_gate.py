@@ -83,12 +83,15 @@ def run(seed: int, seconds: float = 300.0, per_side: int = 2) -> dict:
 def calibration(ticks: list, swings: list) -> None:
     """Does `Track.sigma` predict the estimate's error? (roadmap C.1) Per
     age of the last hit: the median sigma and error, and the share of
-    errors inside 1 and 2 sigma (a calibrated Gaussian: 68% / 95%)."""
+    errors inside 1 and 2 sigma. The error is RADIAL in 2-D, so a
+    calibrated per-axis sigma holds 39% inside 1 sigma and 86% inside 2
+    (1 - e^-1/2, 1 - e^-2), not the 68 / 95 of one axis."""
     if not ticks:
         print("no live estimates sampled\n")
         return
     a = np.array(ticks, float)
-    print(f"THE BALL'S UNCERTAINTY: {len(a)} sampled estimates (every 25th tick a duck with one)")
+    print(f"THE BALL'S UNCERTAINTY: {len(a)} sampled estimates (every 25th tick a duck with one); "
+          f"calibrated = 39% inside 1 sigma, 86% inside 2 (a radial error)")
     print(f"  {'hit age':<14}{'n':>7}{'median sigma':>14}{'median err':>12}{'in 1s':>8}{'in 2s':>8}{'r(sig,err)':>12}")
     edges = [(0.0, 0.1), (0.1, 0.3), (0.3, 0.6), (0.6, 1.01)]
     for lo, hi in edges:

@@ -27,14 +27,14 @@ def test_the_tracker_is_built_for_the_detectors_datasheet():
     assert TrackerParams.for_detector("hostile").ignore == ("post",)   # nothing else moves
 
 
-def test_a_hit_carries_the_datasheets_error_at_its_range_and_settles_with_the_smoothing():
+def test_a_hit_carries_the_datasheets_error_at_its_range_however_many_hits_it_has():
     tk = Tracker(TrackerParams.for_detector("datasheet"))
     tr = tk.update(_frame(0.0, 0.0, 0.6), 0.0, 0.0, (0.0, 0.0))[0]
     assert abs(tr.sig_meas - math.hypot(math.radians(1.0) * 0.6, 0.06)) < 1e-6   # 6.1 cm, range-dominated
     for k in range(1, 4):
         tk.update(_frame(0.1 * k, 0.0, 0.6), 0.1 * k, 0.0, (0.0, 0.0))
-    settled = math.sqrt(0.6 / 1.4)
-    assert abs(tr.sig_meas - math.hypot(math.radians(1.0) * 0.6, 0.06) * settled) < 1e-6
+    # Not shrunk by the smoothing (calibrated: it does not reduce the error).
+    assert abs(tr.sig_meas - math.hypot(math.radians(1.0) * 0.6, 0.06)) < 1e-6
     # A perfect detector still carries the floor.
     tk0 = Tracker(TrackerParams.for_detector("ideal"))
     tr0 = tk0.update(_frame(0.0, 0.0, 0.6), 0.0, 0.0, (0.0, 0.0))[0]
@@ -46,6 +46,7 @@ def test_sigma_grows_with_the_age_of_the_hit_by_the_velocitys_scatter_or_a_prior
                born_t=0.0, last_t=0.0, xy=(0.6, 0.0), xy_t=0.0, sig_meas=0.05)
     assert tr.sigma(0.0) == 0.05
     assert abs(tr.sigma(1.0, vel_prior=0.15) - math.hypot(0.05, 0.15)) < 1e-9     # no velocity: the prior
+    assert abs(tr.sigma(1.0) - math.hypot(0.05, 0.06)) < 1e-9                     # the calibrated default
     tr.vel, tr.vel_hits, tr.vel_sig = (0.5, 0.0), 3, 0.04
     assert abs(tr.sigma(1.0) - math.hypot(0.05, 0.04)) < 1e-9                     # a measured scatter instead
     # A rolling ball seen three times: the velocity's scatter is measured,

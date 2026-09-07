@@ -3116,15 +3116,43 @@ this stack has none of them.
       with a defender in front of it. The numbers above are on the parallel
       session's uncommitted floor, forked together, so they are paired but
       provisional like everything after item 7's baseline note.
-- [ ] **B.3 Game state and set plays.** Every league runs a GameController
-      with `initial / ready / set / playing / penalized`: in *ready* the
-      robots walk to legal kickoff positions, in *set* they stand still, and
-      teams script set plays off it. We have `kickoff_brains` (a reset) and
-      nothing else; there is no notion of a duck being penalised, a
-      kick-in, or a formation to return to. Small, and it makes 3v3 look
-      like a game: a `GameState` on the World that the roles read. → **what
-      settles it:** it is a correctness feature, so tests, plus `depth` and
-      `spread` at t=0 after each goal.
+- [x] **B.3 Game state — BUILT, measured, shipped on (2026-09-07).** Every
+      league runs a GameController with `initial / ready / set / playing /
+      penalized`; we had `kickoff_brains` (a reset) and a 1 s hold. Now the
+      World is the controller: after a goal the side that CONCEDED kicks
+      off (`World.kickoff_team`, from which mouth the ball crossed and who
+      defends it), `game_state` runs set → kickoff → playing (the hold;
+      then until the ball has left the spot by 0.1 m or 10 s have passed),
+      `soccer_score` carries both and the /sim banner shows them.
+      `kickoff_brains(brains, teams, world)` hands the message to the
+      boards (`Team.kickoff` / `Team.waits`); a chase brain with
+      `ChaseParams.kickoff_wait` stands off the other side's restart —
+      every duck of the scoring side is a supporter with its post clipped
+      into its own half and out of a 0.3 m centre circle (state "wait")
+      until it, or the board, sees the ball leave the spot. The first
+      kickoff is contested as before; nothing penalises a duck that
+      crosses early. Locked by `tests/test_gamestate.py`; the search probe
+      keeps a restart ledger. Not built: a *ready* walk to kickoff
+      positions (the World teleports, so `depth` and `spread` at the
+      restart are the spawn layout in every arm), penalties, kick-ins (the
+      pitch is walled).
+
+      Measured, 24 seeds × 300 s, rule off and on forked on one package
+      copy:
+
+      | | 1v1 off | 1v1 on | 3v3 roles off | 3v3 roles on |
+      |---|---|---|---|---|
+      | restarts | 12 | 12 | 3 | 2 |
+      | wait, s a duck a run | 0 | 1.7 | 0 | 0.3 |
+      | possession s/min | 8.62 | 8.58 (p=0.94) | 13.83 | 13.64 (p=0.28) |
+      | goals / own goals | 12 / 3 | 12 / 2 | 3 / 0 | 2 / 0 |
+      | back-kicks a run | 1.17 | 0.96 (p=0.16) | 0.71 | 0.75 |
+      | everything else | flat | | 22 of 24 seeds bit-identical | |
+
+      It fires and it costs nothing: the ball leaves the spot within a few
+      seconds of a restart, so the wait is short, and no ledger number
+      moves. What it buys is a game whose restart belongs to the side that
+      conceded, as every league's does. `kickoff_wait` ships on.
 
 #### C. The world model — what "tracking is working" leaves out
 

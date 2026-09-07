@@ -951,7 +951,16 @@ class ChaseParams:
     # the side that conceded plays. The World is the GameController
     # (`World.kickoff_team`, `game_state`); the board carries its message
     # (`Team.waits`). The first kickoff is contested, as it always was.
-    kickoff_wait: bool = False
+    # MEASURED (2026-09-07, 24 seeds x 300 s, rule off and on forked on one
+    # package copy): it fires and it costs nothing. 1v1: 12 restarts a
+    # side, the scorer waits 1.7 s a duck a run, possession 8.62 -> 8.58
+    # s/min (p=0.94), goals 12 -> 12, own goals 3 -> 2, back-kicks 1.17 ->
+    # 0.96 a run (p=0.16). 3v3 with roles: 3 -> 2 restarts in 24 runs,
+    # 0.3 s of waiting, 22 of 24 seeds bit-identical, every ledger number
+    # flat (p > 0.24). The ball leaves the spot within a few seconds of
+    # the restart, so the wait is short; what it buys is a game whose
+    # restart is the conceding side's, as every league's is. Ships ON.
+    kickoff_wait: bool = True
     kickoff_circle: float = 0.3
     # PASSING (roadmap Track 4 s6 D.1). With this on, every live teammate
     # the board places at least `pass_min_ahead` metres UP-PITCH of the
