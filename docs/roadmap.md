@@ -3226,13 +3226,55 @@ this stack has none of them.
       stretch is on dead reckoning until a post comes back into the 62°
       lens — the cloud reports its own spread (`Localizer.spread`) for a
       brain that wants to know.
-- [ ] **C.3 A shared world model, not a shared point.** SPL teams fuse
+- [x] **C.3 A shared world model, not a shared point — BUILT, closer in
+      the probe, worse in play, ships off (2026-09-07).** SPL teams fuse
       teammates' ball estimates weighted by their covariances into a team
       ball; B-Human 2022 ("More Team Play with Less Communication") rebuilt
       the behaviour to play pass-oriented soccer while *sending fewer
-      messages*, because the league capped team traffic. Our blackboard
-      sends one point estimate a second with no confidence and no frame
-      correction. After C.1 and C.2 it can carry covariance and a frame.
+      messages*. Our blackboard sent one point estimate a second with no
+      confidence. Now every claim carries its sender's sigma (C.1), the
+      frame is the localised one (C.2), and with `Team.fuse` /
+      `ChaseParams.fuse_ball` the board's ball is the inverse-variance
+      mean of every live sighting, each weighed by that sigma grown by
+      the claim's age at the calibrated 0.06 m/s; `Team.ball_sigma` is the
+      fused ball's own sigma. Locked by `tests/test_team_ball.py`.
+
+      **Against the truth** (`scripts/probe_odom_goal.py`, 2v2, 8 seeds ×
+      300 s, the board's ball sampled once a second):
+
+      | odometry | n | freshest, median / 95th | fused, median / 95th | two saw it | fused closer, when two saw it | in 1σ / 2σ |
+      |---|---|---|---|---|---|---|
+      | ideal | 2377 | 0.043 / 0.253 m | 0.040 / 0.236 m | 23% | **70%** | 72% / 94% |
+      | datasheet (localised) | 2323 | 0.098 / 0.883 m | 0.097 / 0.685 m | 27% | **61%** | 37% / 65% |
+
+      Closer when two ducks see the ball (which is one sample in four),
+      the same point otherwise; the 95th percentile is where it shows.
+
+      **In play** (3v3 with roles, shipped kicks, 24 seeds × 300 s,
+      freshest against fused, forked together on one package copy):
+
+      | | freshest | fused | |
+      |---|---|---|---|
+      | goals, both mouths | 2 | 10 | p=0.004, more on 7 seeds, fewer on 0 |
+      | own goals | 0 | 6 | **p=0.006**, 6 seeds / 0 |
+      | ball advance / progress | 0.172 / 0.028 | 0.234 / 0.076 | p=0.025 / 0.16 |
+      | crowd / spread | 0.177 / 1.514 | 0.220 / 1.420 | p=0.053 / 0.06 |
+      | falls | 3 | 8 | p=0.16 |
+      | possession | 13.64 | 14.65 | p=0.37 |
+      | ball in view | 25.6% | 27.4% | p=0.10, better 19/24 |
+
+      A more accurate point makes a worse game: the ball reaches both
+      mouths more — six own goals against none — and the team compresses.
+      The mechanism the numbers point at: the fusion keeps every claim
+      inside 3 × `stale_s` (3 s), so when the ball MOVES the board's ball
+      is pulled toward where teammates last saw it (a 3 s-old claim still
+      carries ~10% of the weight), and a supporter or a defender walks to
+      a point the ball has left; the freshest-sighting rule has no such
+      lag. The probe cannot see this because it samples a mostly still
+      ball. What would fix it — fuse only claims within `stale_s` of the
+      freshest, or drop the fusion once the board's velocity is kick-like
+      — is one more arm; `fuse_ball` ships off, and the sigma each claim
+      now carries is there for whoever runs it.
 - [ ] **C.4 An opponent model and a duel — the first half BUILT and
       measured (2026-09-07).** B-Human has a `Zweikampf` (one-on-one)
       behaviour; every stack tracks opponents as first-class objects. Ours

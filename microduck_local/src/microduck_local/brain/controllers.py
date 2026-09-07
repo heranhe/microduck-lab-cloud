@@ -1009,8 +1009,13 @@ class ChaseParams:
     # when two ducks saw the ball the fused one was nearer the truth 70%
     # of the time at ideal odometry, 61% at datasheet; 95th percentile
     # 0.253 -> 0.236 m and 0.883 -> 0.685 m; the median unchanged, since
-    # three samples in four have one sighting). Off until the ledger says
-    # the play does not mind.
+    # three samples in four have one sighting). THE PLAY MINDS (3v3 with
+    # roles, 24 seeds, freshest v fused forked together): goals at both
+    # mouths 2 -> 10 (p=0.004), own goals 0 -> 6 (p=0.006, six seeds to
+    # none), crowd +0.04, spread -0.09, falls 3 -> 8. A more accurate
+    # point, a worse game: the fusion keeps claims up to 3 x stale_s, so
+    # when the ball MOVES the board's ball lags toward where teammates
+    # last saw it, and a supporter walks to a point it has left. Off.
     fuse_ball: bool = False
     push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
     push_dir_sd: float = 0.5         # rad of spread across the side offsets the walk meets the ball at
