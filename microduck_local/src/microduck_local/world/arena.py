@@ -351,6 +351,20 @@ class World:
         self.last_kick_t = -1e9            # when a kick skill last started (attribution, KICK_GOAL_S)
         self.last_kick_duck: str | None = None    # …and which duck took it
         # Who the World says put the last goal in: the duck whose kick was
+        # THE GAME STATE (roadmap Track 4 s6 B.3). Every league runs a
+        # GameController: after a goal the team that CONCEDED kicks off and
+        # the other side stands off until the ball is in play. The World is
+        # that controller here: `kickoff_team` (None for the first kickoff,
+        # which is contested, as it always was), the ball's spot, and a
+        # window; `game_state` is "set" during the hold, "kickoff" until the
+        # ball has left the spot by `kickoff_moved_m` or `kickoff_free_s`
+        # have passed, then "playing". Nothing here penalises a duck that
+        # crosses early - the brains obey it (brain/team.py `Team.waits`,
+        # `ChaseParams.kickoff_wait`).
+        self.kickoff_team: str | None = None
+        self.kickoff_free_s = 10.0
+        self.kickoff_moved_m = 0.1
+        self.kickoff_ball: tuple[float, float] | None = None
         # inside KICK_GOAL_S at the moment the ball crossed, else None (it
         # was walked in). Exactly the test `goals_kicked` / `goals_bumped`
         # splits on, recorded per goal so a caller that knows the ROSTER —
@@ -434,6 +448,8 @@ class World:
         self.last_kick_t = -1e9
         self.last_kick_duck = None
         self.goal_credit_duck = None
+        self.kickoff_team = None
+        self.kickoff_ball = None
         self.goals_kicked = self.goals_bumped = 0
         for p in self.persons.values():
             p.reset(self.data)
@@ -513,6 +529,7 @@ class World:
         q, v = int(self.model.jnt_qposadr[j]), int(self.model.jnt_dofadr[j])
         nx, ny = self.rng.uniform(-0.05, 0.05, 2)
         self.data.qpos[q:q + 7] = [nx, ny, self.scenario.balls[0].radius + 0.005, 1.0, 0.0, 0.0, 0.0]
+            self.kickoff_team = self.team_defending(side)     # the side that conceded restarts
         self.data.qvel[v:v + 6] = 0.0
         for d in self.ducks.values():
             self._respawn(d)
@@ -537,6 +554,7 @@ class World:
         `validate_scenario` rather than resolved here."""
         if self.goal_width <= 0:
             return None
+        self.kickoff_ball = (float(nx), float(ny))
         hx = self.scenario.floor[0] / 2 - 0.25
         mouth = self.scenario.attacks.get(self.team_of.get(d.id) or "")
         if mouth is not None:
@@ -549,6 +567,32 @@ class World:
         an accumulator: eval-pitch sums per-step displacements over 15 000
         control ticks, and mm-quantised differences random-walk into the
         answer. None off a pitch (no ball / no goals)."""
+    def team_defending(self, side: str) -> str | None:
+        """The team whose own mouth is `side` ("left" / "right"): the one a
+        ball crossing it scores AGAINST, which kicks off after. None when no
+        duck on the pitch belongs to a team."""
+        for d in self.ducks.values():
+            g = self.goal_for(d)
+            tm = self.team_of.get(d.id)
+            if g is None or tm is None:
+                continue
+            if ("right" if g[0] > 0 else "left") != side:
+                return tm
+        return None
+
+    @property
+    def game_state(self) -> str:
+        """"set" (the kickoff hold), "kickoff" (the conceding side's ball,
+        still on the spot, inside the window) or "playing"."""
+        if self.in_kickoff:
+            return "set"
+        if self.kickoff_team is not None and self.kickoff_ball is not None \
+                and self.t < self.kickoff_until + self.kickoff_free_s:
+            b = self.ball_xy()
+            if b is not None and math.dist(b, self.kickoff_ball) < self.kickoff_moved_m:
+                return "kickoff"
+        return "playing"
+
         if self._ball_joint is None:
             return None
         q = int(self.model.jnt_qposadr[self._ball_joint])
@@ -561,7 +605,8 @@ class World:
         return {"left": self.goals["left"], "right": self.goals["right"],
                 "ball": [round(float(self.data.qpos[q]), 3), round(float(self.data.qpos[q + 1]), 3)],
                 "lastGoal": self.last_goal, "kickoff": round(max(0.0, self.kickoff_until - self.t), 2),
-                "kicked": self.goals_kicked, "bumped": self.goals_bumped}
+                "kicked": self.goals_kicked, "bumped": self.goals_bumped,
+                "state": self.game_state, "kickoffTeam": self.kickoff_team}
 
     # -- odometry (roadmap 1.7) ---------------------------------------------
     def _odom_reset(self, d: WorldDuck, x: float, y: float, yaw: float) -> None:

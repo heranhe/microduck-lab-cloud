@@ -181,7 +181,7 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
         metrics.tick()
         if w.goal_seq != goal_seq:              # a goal: play restarts from the spawns
             goal_seq = w.goal_seq
-            kickoff_brains(brains, teams)
+            kickoff_brains(brains, teams, w)
     score = w.soccer_score()
     return {"seed": seed, "perSide": per_side, "solo": solo, "left": score["left"], "right": score["right"],
             "leftBrain": left, "rightBrain": right if not solo else None,

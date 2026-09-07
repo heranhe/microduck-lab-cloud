@@ -283,7 +283,8 @@ def test_pitch_counts_goals_and_recentres_the_ball():
     sc = make_pitch()
     assert validate_scenario(sc.to_dict()) == sc and sc.goal_width == 0.7
     w = World(sc)
-    assert w.soccer_score() == {"left": 0, "right": 0, "ball": [0.0, 0.0], "lastGoal": None, "kickoff": 0.0, "kicked": 0, "bumped": 0}
+    assert w.soccer_score() == {"left": 0, "right": 0, "ball": [0.0, 0.0], "lastGoal": None, "kickoff": 0.0, "kicked": 0, "bumped": 0,
+                                "state": "playing", "kickoffTeam": None}
     j = w._ball_joint
     q = int(w.model.jnt_qposadr[j])
     hx = sc.floor[0] / 2 - 0.25

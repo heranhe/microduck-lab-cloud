@@ -173,6 +173,16 @@ class Team:
     claims: dict[str, Claim] = field(default_factory=dict)
     _attacker: str | None = None
 
+    # --- the game state (roadmap Track 4 s6 B.3) ------------------------------
+    # What the World's GameController said at the last restart, stamped by
+    # `kickoff_brains`: whether this team kicks off, until when the other
+    # side must wait, and where the ball was put. Ours: play. Theirs: every
+    # duck of ours is a supporter in its own half until the ball leaves the
+    # spot (`waits`). A board nobody stamps never waits.
+    _kick_ours: bool = True
+    _kick_until: float = -1e9
+    _kick_ball: tuple[float, float] | None = None
+    _kick_moved: float = 0.1
     def __post_init__(self) -> None:
         self._reset_ball()
         self._pending: str | None = None
@@ -192,6 +202,25 @@ class Team:
         self._pending = None
         self._reset_ball()
 
+        self._kick_ours, self._kick_until, self._kick_ball = True, -1e9, None
+
+    # -- the game state --------------------------------------------------------
+    def kickoff(self, ours: bool, until: float, ball: tuple[float, float] | None,
+                moved_m: float = 0.1) -> None:
+        """The controller's restart message: whether it is our ball, until
+        when the other side waits, and where the ball was put."""
+        self._kick_ours, self._kick_until = bool(ours), float(until)
+        self._kick_ball = None if ball is None else (float(ball[0]), float(ball[1]))
+        self._kick_moved = float(moved_m)
+
+    def waits(self, t: float, ball: tuple[float, float] | None = None) -> bool:
+        """Must this team stand off the kickoff? Not ours, inside the
+        window, and the ball - a duck's own sighting, else the board's -
+        still on the spot; a ball nobody sees is read as not yet in play."""
+        if self._kick_ours or t >= self._kick_until or self._kick_ball is None:
+            return False
+        b = ball if ball is not None else self.ball(t)
+        return b is None or math.dist(b, self._kick_ball) < self._kick_moved
     # -- what a duck sends ---------------------------------------------------
     def claim(self, duck_id: str, t: float, dist: float, ball: tuple[float, float] | None,
               pos: tuple[float, float, float] | None = None) -> None:
@@ -485,7 +514,7 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     if duck_spec.odom != "ideal" and "localize" not in ChaseParams.env_names():
         out["p"] = replace(out.get("p") or ChaseParams.from_env(), localize=True)
 
-def kickoff_brains(brains: dict, teams: dict[str, "Team"]) -> None:
+def kickoff_brains(brains: dict, teams: dict[str, "Team"], world=None) -> None:
     """After a goal (World.goal_seq moved): every brain forgets its plan —
     the ball it was lining up on, the spot, the retreat it was in — through
     `kickoff()` where a brain has one (Chase keeps its kick count) and
@@ -499,3 +528,8 @@ def kickoff_brains(brains: dict, teams: dict[str, "Team"]) -> None:
 
 
 __all__ = ["Claim", "Team", "ROLE_ZONES", "zones_for", "brain_kwargs", "kickoff_brains"]
+    kicker = getattr(world, "kickoff_team", None) if world is not None else None
+    if kicker is not None:
+        for tm in teams.values():
+            tm.kickoff(tm.name == kicker, world.kickoff_until + world.kickoff_free_s,
+                       world.kickoff_ball, world.kickoff_moved_m)

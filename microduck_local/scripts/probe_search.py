@@ -103,6 +103,9 @@ def run(seed: int, seconds: float, per_side: int, roles: str | None = None) -> d
     blind_since: dict[str, float | None] = {d.id: None for d in sc.ducks}
     tof_ticks = 0
     stop_bear = stop_col = false_stop = 0
+    # The restarts (roadmap B.3): who kicked off, and whether the next goal
+    # inside the window went to the side that had the ball.
+    restarts: list[dict] = []
     # (ticks, old-rule stops, new-rule stops) per head-yaw bin
     bins = [[0, 0, 0] for _ in range(len(YAW_BINS) + 1)]
 
@@ -159,7 +162,12 @@ def run(seed: int, seconds: float, per_side: int, roles: str | None = None) -> d
             dt = w.t
         if w.goal_seq != goal_seq:
             goal_seq = w.goal_seq
-            kickoff_brains(brains, teams)
+            scorer = w.team_defending("left" if w.last_goal == "right" else "right")
+            if restarts:
+                restarts[-1]["nextGoalDt"] = round(w.t - restarts[-1]["t"], 1)
+                restarts[-1]["nextGoalByKicker"] = (scorer == restarts[-1]["team"])
+            restarts.append({"t": round(w.t, 1), "team": w.kickoff_team, "scorer": scorer})
+            kickoff_brains(brains, teams, w)
     dt = dt or 0.02
     nd = len(sc.ducks)
     per_duck = dt / nd                     # ticks -> seconds a duck spends, averaged over the roster
@@ -173,6 +181,7 @@ def run(seed: int, seconds: float, per_side: int, roles: str | None = None) -> d
         "losses": losses,
         "tofTicks": tof_ticks,
         "stopBearing": stop_bear, "stopColumn": stop_col, "falseStopColumn": false_stop,
+        "restarts": restarts,
         "yawBins": bins,
         "kicks": {k: b.kicks for k, b in brains.items()},
         "falls": {k: d.falls for k, d in w.ducks.items()},
@@ -203,6 +212,8 @@ def summarize(rows: list[dict], label: str) -> dict:
     adv = _mean_team(rows, "ballAdvance")
     spinf = np.array([r["spinFrac"] for r in rows if r.get("spinFrac") is not None])
     tofn = sum(r["tofTicks"] for r in rows)
+    rest = [x for r in rows for x in r.get("restarts", [])]
+    followed = [x for x in rest if "nextGoalDt" in x and x["nextGoalDt"] <= 30.0]
     out = {
         "label": label, "seeds": n,
         "searchS": search.mean(), "searchSd": search.std(ddof=1) if n > 1 else 0.0,
@@ -219,6 +230,9 @@ def summarize(rows: list[dict], label: str) -> dict:
         "possession": poss, "ballProgress": prog, "ballAdvance": adv,
         "spinFrac": float(spinf.mean()) if len(spinf) else float("nan"),
         "tofTicks": tofn,
+        "restarts": len(rest), "restartsFollowed30": len(followed),
+        "restartKickerScored30": sum(1 for x in followed if x["nextGoalByKicker"]),
+        "waitS": float(np.mean([r["stateS"].get("wait", 0.0) for r in rows])),
         "stopBearing": sum(r["stopBearing"] for r in rows),
         "stopColumn": sum(r["stopColumn"] for r in rows),
         "falseStopColumn": sum(r["falseStopColumn"] for r in rows),
@@ -242,6 +256,9 @@ def report(s: dict) -> None:
           f"   goals {s['goals']:.2f} ({s['goalsTotal']})")
     print(f"  possession {s['possession']:.2f} s/min   ballProgress {s['ballProgress']:.3f}"
           f"   ballAdvance {s['ballAdvance']:.3f}   spinFrac {s['spinFrac']:.3f}")
+    print(f"  restarts {s['restarts']}; a goal within 30 s of one: {s['restartsFollowed30']}, "
+          f"of which by the side that kicked off: {s['restartKickerScored30']}; "
+          f"wait {s['waitS']:.1f} s a duck a run")
     print(f"  ToF: {s['tofTicks']} frames; the shipped bearing rule stops on {s['stopBearing']} "
           f"({100 * s['stopBearing'] / max(s['tofTicks'], 1):.1f}%), the old column rule on "
           f"{s['stopColumn']} ({100 * s['stopColumn'] / max(s['tofTicks'], 1):.1f}%), of which "

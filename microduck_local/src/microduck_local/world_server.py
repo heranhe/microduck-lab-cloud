@@ -358,7 +358,7 @@ class WorldState:
             return
         from .brain.team import kickoff_brains
         self.goal_seq = w.goal_seq
-        kickoff_brains(self.brains, self.teams)
+        kickoff_brains(self.brains, self.teams, w)
         for th in self._tether_queue.values():
             th.clear()
         self.intents.clear()

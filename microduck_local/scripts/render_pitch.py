@@ -81,7 +81,7 @@ def main() -> None:
         metrics.tick()
         if w.goal_seq != goal_seq:
             goal_seq = w.goal_seq
-            kickoff_brains(brains, teams)
+            kickoff_brains(brains, teams, w)
         if w.tick % args.stride:
             continue
         renderer.update_scene(w.data, cam)

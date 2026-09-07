@@ -149,7 +149,7 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
         metrics.tick()
         if w.goal_seq != goal_seq:              # a goal: play restarts from the spawns
             goal_seq = w.goal_seq
-            kickoff_brains(brains, teams)
+            kickoff_brains(brains, teams, w)
     score = w.soccer_score()
     return {"seed": seed, "perSide": per_side, "left": score["left"], "right": score["right"],
             "kickGoals": score["kicked"], "bumpGoals": score["bumped"],   # attributed by the World (KICK_GOAL_S)

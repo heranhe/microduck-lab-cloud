@@ -943,6 +943,16 @@ class ChaseParams:
     # relative to the ball. Ships off; the lever is a supporter position
     # that anticipates the carrier, not a rule for the carrier.
     defender_clears: bool = False
+    # THE GAME STATE (roadmap Track 4 s6 B.3): with `kickoff_wait` on, after
+    # a goal the side that SCORED stands off the restart - every duck of it
+    # is a supporter, its post clipped into its own half and out of a
+    # centre circle of `kickoff_circle` - until the ball leaves the spot
+    # (my own sighting, else the board's) or the World's window runs out;
+    # the side that conceded plays. The World is the GameController
+    # (`World.kickoff_team`, `game_state`); the board carries its message
+    # (`Team.waits`). The first kickoff is contested, as it always was.
+    kickoff_wait: bool = False
+    kickoff_circle: float = 0.3
     # PASSING (roadmap Track 4 s6 D.1). With this on, every live teammate
     # the board places at least `pass_min_ahead` metres UP-PITCH of the
     # ball adds a candidate line straight at it (both feet), and every
@@ -974,6 +984,22 @@ class ChaseParams:
     pass_bonus: float = 0.6
     push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
     push_dir_sd: float = 0.5         # rad of spread across the side offsets the walk meets the ball at
+    # THE FIELD (roadmap Track 4 s6 D.2, brain/field.py): with `support_field`
+    # on, a striker, a midfielder or a plain supporter stands at the minimum
+    # of a potential field instead of at its post - `ahead` of the ball along
+    # the carrier's lane (the role's own number), OUT of that lane
+    # (`field_lane` half-width), `field_wide` beside it, away from
+    # teammates and from opponents that stand between it and the ball, and
+    # pulled `field_goal_pull` x the pitch potential toward the goal. The
+    # zone, the boards' margin and the attacker's room stay hard. A
+    # defender's and a keeper's posts measured well and are untouched.
+    # Why: the 3v3 push-first measurement - the team compresses around a
+    # WALKED ball because every post is a distance from the ball.
+    support_field: bool = False
+    field_lane: float = 0.2
+    field_wide: float = 0.5
+    field_goal_pull: float = 0.3
+    field_hyst: float = 0.1
     # THE HEAD. `_gaze` is a law that puts a floor ball at range `rng` on the
     # camera's axis; `head_down` clamps the command it may ask for, and the
     # gaze is applied while WALKING at a ball inside `head_range`.
@@ -1901,6 +1927,9 @@ class Chase:
         self.pushes = 0
         self.declines = 0          # swings refused by `kick_side_max`
         self._kick_rng = None              # kick_select's generator, seeded from the duck id on first use
+        self._field = None                 # the supporter's potential field, built on first use (support_field)
+        self.last_select = None            # kick_select's last Verdict, for probes and the /sim page
+        self._kick_rng = None              # kick_select's generator, seeded from the duck id on first use
         self.last_select = None            # kick_select's last Verdict, for probes and the /sim page
         self.attack: float | None = None                            # heading of the goal it attacks (first odom yaw)
         self.kickoff()
@@ -1921,6 +1950,9 @@ class Chase:
         self._bump_t0 = -1e9                                 # onset of the current contact episode
         self.last = (0.0, 0.0, 0.0)
         self.spot: tuple[float, float, str | None, float, str] | None = None   # x, y, foot, heading, "kick"|"push"
+        self._field_prev: tuple[float, float] | None = None  # the field's last spot (support_field hysteresis)
+        self._kickoff_wait = False                           # standing off the other side's kickoff (kickoff_wait)
+        self.post: tuple[float, float] | None = None         # where a supporter is holding, for probes and tests
         self.lined = False                      # stage two of the line-up: on the line, walking straight in
         self.t_state = 0.0
         self._yield_t0 = -9.0
@@ -2196,6 +2228,12 @@ class Chase:
         if self.team is not None:
             self.team.claim(self.duck_id, t, ball.range if seen else math.inf,
                             self._ball_xy(odom, ball) if seen else None, (odom[0], odom[1], odom[2]))
+            # The GameController (roadmap B.3): the other side's kickoff -
+            # we all support, in our own half, until the ball leaves the spot.
+            self._kickoff_wait = bool(p.kickoff_wait and self.team.waits(
+                t, self._ball_xy(odom, ball) if seen else None))
+            if self._kickoff_wait:
+                self.role = "support"
             self.role = self.team.role(self.duck_id, t)
             for _, (mx, my, _) in self.team.mates(self.duck_id, t):
                 self._mates.append((math.hypot(mx - odom[0], my - odom[1]),
@@ -2550,7 +2588,7 @@ class Chase:
             # into a wall or a kicked turn creeping into one). Turning still
             # happens — the left turn that starts from a standstill.
             vx = 0.0
-            if self.state in ("lineup", "settle", "support"):
+            if self.state in ("lineup", "settle", "support", "wait"):
                 wz = max_wz() if wz > 0 else -max_wz() if wz < 0 else 0.0
             else:
                 wz = max_wz()
@@ -2670,6 +2708,10 @@ class Chase:
         allowed to take the ball are the same geometry (`Team.zone_ok`)."""
         p = self.p
         t = self._senses.t
+        if p.support_field and self.job not in ("defender", "keeper"):
+            spot = self._field_spot(bxy, odom)          # the FIELD: already inside the zone and the boards
+            if spot is not None:
+                return spot
         og = self._own_goal(odom)
         if self.job == "defender":
             dx, dy = bxy[0] - og[0], bxy[1] - og[1]
@@ -2719,6 +2761,51 @@ class Chase:
             a = float(np.clip(self._attack_x(target[0]), z[0], z[1]))
             target = (self._from_attack_x(a), target[1])
         return target
+    def _field_spot(self, bxy, odom) -> tuple[float, float] | None:
+        """Where the potential field (brain/field.py) puts this supporter:
+        `ahead` of the ball along the carrier's lane by the role's number,
+        beside the lane and not in it, clear of teammates (the board's
+        positions) and of opponents (duck tracks that are not on the board
+        as a teammate, and not our colour when the colour sense is on).
+        None off a pitch, or when the zone leaves no spot."""
+        p = self.p
+        if self.goal is None or self.bounds is None:
+            return None
+        if self._field is None:
+            from .field import Field, FieldParams  # noqa: PLC0415  (only a pitch pays for it)
+            self._field = Field(self.bounds, p.support_margin, FieldParams(
+                lane_w=p.field_lane, wide=p.field_wide, goal_pull=p.field_goal_pull, hysteresis=p.field_hyst))
+        from .field import lane_unit  # noqa: PLC0415
+        from .kickselect import Pitch  # noqa: PLC0415
+        t = self._senses.t
+        u = lane_unit(bxy, self.goal, self.attack if self.attack is not None else odom[2])
+        if self.job == "striker":
+            ahead = p.strike_ahead
+        elif self.job == "midfielder":
+            ahead = 0.0
+        else:
+            ahead = p.support_back if p.support_mode == "ahead" else -p.support_back
+        # Teammates repel - except the carrier, which is AT the ball: the
+        # lane and the attacker's room already say where not to stand for
+        # it, and a repulsor on it too pushes the spot out of a push's reach.
+        att = self.team.attacker(t) if self.team is not None else None
+        mates = ([(mx, my) for k, (mx, my, _) in self.team.mates(self.duck_id, t) if k != att]
+                 if self.team is not None else [])
+        opps = []
+        for tr in self.tracker.tracks:
+            if tr.cls != "duck" or tr.xy is None or tr.age(t) > p.lost_s or self._is_mate(tr):
+                continue
+            if any(math.hypot(tr.xy[0] - mx, tr.xy[1] - my) < 0.35
+                   for _, (mx, my, _) in (self.team.mates(self.duck_id, t) if self.team is not None else [])):
+                continue                                    # the board says that one is ours
+            opps.append((float(tr.xy[0]), float(tr.xy[1])))
+        pitch = Pitch(self.bounds[0], self.bounds[1], self.goal_w, 1.0 if self.goal[0] >= 0 else -1.0)
+        zone = self.team.zone_of(self.duck_id) if self.team is not None else None
+        spot = self._field.spot(bxy, u, ahead, mates, opps, pitch, zone=zone,
+                                keep_out=p.support_min, prev=self._field_prev, me=(odom[0], odom[1]))
+        self._field_prev = spot
+        return spot
+
 
     def _support(self, odom, ball, seen: bool, cold: bool) -> tuple[float, float]:
         """A supporter: hold the post its role gives it (`_hold_target`) —
@@ -2729,15 +2816,21 @@ class Chase:
         t = self._senses.t
         bxy = self._ball_xy(odom, ball) if seen else (
             self.team.led_ball(t) if self.team is not None else None)
+        self.post = None
         self.spot = None
         if bxy is None:
-            self.state = "support"
+            self.state = "wait" if self._kickoff_wait else "support"
             vx, _, wz = turn(1.0, cold)                    # nobody has it: look for it
             return vx, wz
         target = self._hold_target(bxy, odom)
         if self.bounds is not None:                         # never a spot in the boards
             m = p.support_margin
             target = (float(np.clip(target[0], -self.bounds[0] + m, self.bounds[0] - m)),
+        if self._kickoff_wait and self.bounds is not None and self.bounds[0] > 0:
+            # Standing off the other side's kickoff: own half, out of the circle.
+            a = min(self._attack_x(target[0]), -p.kickoff_circle / self.bounds[0])
+            target = (self._from_attack_x(a), target[1])
+        self.post = target
                       float(np.clip(target[1], -self.bounds[1] + m, self.bounds[1] - m)))
         vx, wz, dist, _ = self._servo(odom, target, cold, 0.12)
         if math.hypot(bxy[0] - odom[0], bxy[1] - odom[1]) < p.support_min and vx > 0:
@@ -2749,7 +2842,7 @@ class Chase:
                 vx = max(vx, p.support_turn_vx)
         if vx <= TURN_KICK and wz != 0.0 and self._beside(t):
             vx, wz = 0.0, 0.0                               # a body beside us: no turning in place
-        self.state = "support"
+        self.state = "wait" if self._kickoff_wait else "support"
         return vx, wz
 
     def goal_cone(self, bx: float, by: float) -> float:

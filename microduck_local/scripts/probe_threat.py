@@ -214,7 +214,7 @@ def run(seed: int, seconds: float, per_side: int, v_min: float, eta_max: float,
             live.clear()
             arming.clear()
             inc.clear()
-            kickoff_brains(brains, teams)
+            kickoff_brains(brains, teams, w)
             continue
         if w.in_kickoff:
             continue
