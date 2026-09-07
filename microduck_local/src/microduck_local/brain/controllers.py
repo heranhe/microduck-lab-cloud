@@ -991,6 +991,16 @@ class ChaseParams:
     pass_min_ahead: float = 0.3
     pass_reach: float = 0.4
     pass_bonus: float = 0.6
+    # OPPONENTS IN THE ROLL-OUT (roadmap Track 4 s6 C.4, the duel's first
+    # half): with `kick_select_opps` on, every duck track the board does not
+    # own (not a teammate by position, not our colour when the colour sense
+    # is on) is an obstacle in the selector's roll-out - a sample whose path
+    # passes within `kick_select_obs_r` of one stops at its feet, BLOCKED,
+    # and is valued there less BLOCK_COST. So a line through an opponent
+    # scores as what it is, and the selector turns the kick (or the push)
+    # away from the body in the way. Off until measured.
+    kick_select_opps: bool = False
+    kick_select_obs_r: float = 0.15
     push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
     push_dir_sd: float = 0.5         # rad of spread across the side offsets the walk meets the ball at
     # THE FIELD (roadmap Track 4 s6 D.2, brain/field.py): with `support_field`
@@ -2827,17 +2837,26 @@ class Chase:
         att = self.team.attacker(t) if self.team is not None else None
         mates = ([(mx, my) for k, (mx, my, _) in self.team.mates(self.duck_id, t) if k != att]
                  if self.team is not None else [])
-        opps = []
-        for tr in self.tracker.tracks:
-            if tr.cls != "duck" or tr.xy is None or tr.age(t) > p.lost_s or self._is_mate(tr):
-                continue
-            if any(math.hypot(tr.xy[0] - mx, tr.xy[1] - my) < 0.35
-                   for _, (mx, my, _) in (self.team.mates(self.duck_id, t) if self.team is not None else [])):
-                continue                                    # the board says that one is ours
-            opps.append((float(tr.xy[0]), float(tr.xy[1])))
+        opps = self._opponents(t)
         pitch = Pitch(self.bounds[0], self.bounds[1], self.goal_w, 1.0 if self.goal[0] >= 0 else -1.0)
         zone = self.team.zone_of(self.duck_id) if self.team is not None else None
         spot = self._field.spot(bxy, u, ahead, mates, opps, pitch, zone=zone,
+    def _opponents(self, t: float) -> list[tuple[float, float]]:
+        """Where the OTHER side is, as well as this duck can tell (roadmap
+        C.4): every duck track seen within `lost_s` that the board does not
+        own - not within 0.35 m of a teammate's own claim of its position,
+        and not our colour when the colour sense is on (`_is_mate`)."""
+        p = self.p
+        mates = ([(mx, my) for _, (mx, my, _) in self.team.mates(self.duck_id, t)]
+                 if self.team is not None else [])
+        out: list[tuple[float, float]] = []
+        for tr in self.tracker.tracks:
+            if tr.cls != "duck" or tr.xy is None or tr.age(t) > p.lost_s or self._is_mate(tr):
+                continue
+            if any(math.hypot(tr.xy[0] - mx, tr.xy[1] - my) < 0.35 for mx, my in mates):
+                continue                                    # the board says that one is ours
+            out.append((float(tr.xy[0]), float(tr.xy[1])))
+        return out
                                 keep_out=p.support_min, prev=self._field_prev, me=(odom[0], odom[1]))
         self._field_prev = spot
         return spot
@@ -2931,6 +2950,7 @@ class Chase:
         if p.kick_select_push and not (p.defender_clears and self.job in ("defender", "keeper")):
             from .kickselect import push_model  # noqa: PLC0415
             lines += [(u_, "push") for u_, act in lines if act == "kick_left"]   # one push per line
+        opps = self._opponents(self._senses.t) if (p.kick_select_opps and self._senses is not None) else None
             models = {"push": push_model(p.push_roll, p.push_dir_sd, max(p.ball_decel, 0.02))}
         models = None
         if p.kick_select_push:
@@ -2948,7 +2968,8 @@ class Chase:
         pitch = Pitch(self.bounds[0], self.bounds[1], self.goal_w, 1.0 if self.goal[0] >= 0 else -1.0)
         v = select((bx, by), lines, model, pitch, self._kick_rng, n=p.kick_select_n, t_own=p.kick_select_t_own,
                    models=models, shoot=p.kick_select_shoot if p.kick_select_push else 0.0,
-                   mates=mates_xy, pass_reach=p.pass_reach, pass_bonus=p.pass_bonus if p.kick_select_pass else 0.0)
+                   mates=mates_xy, pass_reach=p.pass_reach, pass_bonus=p.pass_bonus if p.kick_select_pass else 0.0,
+                   obstacles=opps, obs_r=p.kick_select_obs_r)
         self.last_select = v
         return None if v is None else (v.heading, v.foot)
 

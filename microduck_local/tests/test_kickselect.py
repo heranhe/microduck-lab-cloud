@@ -279,3 +279,67 @@ def test_with_the_knob_off_the_plan_is_unchanged_and_on_it_stays_inside_the_aim_
     strict = ChaseParams(kick_select=True, kick_select_t_own=0.0)
     b, _ = plan(strict, odom, 0.0, 0.5)
     assert b.last_select is None
+
+
+def test_a_duck_in_the_way_stops_the_ball_at_its_feet_and_the_selector_turns_away_from_it():
+    """Roadmap C.4: an obstacle within `obs_r` of a sample's path stops it
+    there, BLOCKED; one beside the path does not; a blocked ball is valued
+    where it stops less BLOCK_COST, so of two lines that would otherwise
+    score alike the selector takes the one that misses the body."""
+    from microduck_local.brain.kickselect import BLOCK_COST, BLOCKED
+    rng = np.random.default_rng(0)
+    ball = (-0.5, 0.0)
+    (label, (x, y)), = roll_out(ball, 0.0, EXACT, PITCH, rng, 1, obstacles=[(0.3, 0.05)], obs_r=0.15)
+    assert label == BLOCKED and abs(x - 0.3) < 1e-9 and abs(y) < 1e-9        # stopped at the closest approach
+    (label, (x, y)), = roll_out(ball, 0.0, EXACT, PITCH, rng, 1, obstacles=[(0.3, 0.3)], obs_r=0.15)
+    assert label == GOALOPP                                                   # beside the line: no effect
+    (label, _), = roll_out(ball, 0.0, EXACT, PITCH, rng, 1)                   # nothing in the way
+    assert label == GOALOPP
+    # Valued: a blocked ball is worth the potential where it stopped, less the cost.
+    v = evaluate(ball, 0.0, "kick_left", KickModel(speed=1.0, speed_sd=0.0, dir_sd=0.0, decel=0.3,
+                                                   exit_left=0.0), PITCH, rng, 4, obstacles=[(0.3, 0.0)])
+    assert v.p_block == 1.0 and abs(v.value - (potential(0.3, 0.0, PITCH) - BLOCK_COST)) < 1e-9
+    # Two lines toward the boards, equal but for a duck standing on one of them.
+    wide = KickModel(speed=1.0, speed_sd=0.0, dir_sd=0.0, decel=0.3, exit_left=0.0)
+    lines = [(math.radians(35), "kick_left"), (math.radians(-35), "kick_left")]
+    free = select(ball, lines, wide, PITCH, np.random.default_rng(1), n=8)
+    body = select(ball, lines, wide, PITCH, np.random.default_rng(1), n=8,
+                  obstacles=[(ball[0] + 0.6 * math.cos(math.radians(35)), ball[1] + 0.6 * math.sin(math.radians(35)))])
+    assert free is not None and body is not None
+    assert body.heading < 0 < free.heading or (free.heading < 0 and body.heading < 0)   # never onto the body
+    assert body.p_block == 0.0
+
+
+def test_the_brain_feeds_the_selector_the_ducks_the_board_does_not_own():
+    """`kick_select_opps`: a duck track that is not a teammate by the
+    board's positions (and not our colour) is an obstacle; a track sitting
+    on a teammate's claim is not. Off, the selector never hears of them."""
+    from microduck_local.brain.team import Team
+    from microduck_local.brain.tracker import Track
+    tm = Team("cream", half_x=1.5)
+    seen = {}
+    for on in (True, False):
+        b = Chase(ChaseParams(kick_select=True, kick_select_opps=on), goal=(1.5, 0.0), team=tm, duck_id="d0",
+                  bounds=(1.5, 1.25), goal_w=0.7)
+        b._senses = Senses(t=10.0)
+        tm.claim("d1", 10.0, 1.0, None, (0.9, 0.3, 0.0))                     # a teammate, on the board
+        b.tracker.tracks.append(Track(id=1, cls="duck", bearing=0.0, elevation=0.0, width=0.3, range=0.9, conf=0.9,
+                                      born_t=9.0, last_t=9.9, xy=(0.9, 0.28)))   # that teammate, seen
+        b.tracker.tracks.append(Track(id=2, cls="duck", bearing=0.0, elevation=0.0, width=0.3, range=0.6, conf=0.9,
+                                      born_t=9.0, last_t=9.9, xy=(0.5, -0.1)))   # a stranger, in the lane
+        assert b._opponents(10.0) == [(0.5, -0.1)]
+        import microduck_local.brain.kickselect as ks
+        calls = []
+        real = ks.select
+
+        def spy(*a, **k):
+            calls.append(k.get("obstacles"))
+            return real(*a, **k)
+        ks.select = spy
+        try:
+            b._select_kick_line((-0.1, 0.0, 0.0), (0.0, 0.0), 0.0, 0.0)
+        finally:
+            ks.select = real
+        seen[on] = calls[-1]
+    assert seen[True] == [(0.5, -0.1)] and seen[False] is None
+    assert ChaseParams().kick_select_opps is False                            # ships off until measured

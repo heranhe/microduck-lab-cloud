@@ -33,6 +33,8 @@ from dataclasses import dataclass
 import numpy as np
 
 GOALOPP, GOALOWN, INFIELD = "GOALOPP", "GOALOWN", "INFIELD"
+BLOCKED = "BLOCKED"                              # stopped by a duck in the way: the ball is at its feet (C.4)
+BLOCK_COST = 0.5                                 # potential units a blocked ball is marked down by - it is theirs now
 PUSH = "push"                                    # the third action beside kick_left / kick_right
 
 
@@ -89,9 +91,12 @@ class Pitch:
 
 
 def roll_out(ball: tuple[float, float], heading: float, model: KickModel, pitch: Pitch,
-             rng: np.random.Generator, n: int) -> list[tuple[str, tuple[float, float]]]:
+             rng: np.random.Generator, n: int, obstacles=None,
+             obs_r: float = 0.15) -> list[tuple[str, tuple[float, float]]]:
     """`n` sampled outcomes of a kick from `ball` whose OUTCOME line (the exit
-    angle already applied) is `heading`: (label, where the ball ends up)."""
+    angle already applied) is `heading`: (label, where the ball ends up).
+    `obstacles` (roadmap C.4): ducks in the way - a sample whose path
+    passes within `obs_r` of one stops at the closest approach, BLOCKED."""
     out: list[tuple[str, tuple[float, float]]] = []
     v = np.clip(rng.normal(model.speed, model.speed_sd, n), 0.05, None)
     a = rng.normal(heading, model.dir_sd, n)
@@ -116,6 +121,14 @@ def roll_out(ball: tuple[float, float], heading: float, model: KickModel, pitch:
                 f = (wall_y - ball[1]) / dy
                 if 0.0 < f < hit:
                     hit, label = f, INFIELD
+        # A duck in the way, before any board: the ball stops at its feet.
+        l2 = dx * dx + dy * dy
+        for ox, oy in obstacles or ():
+            if l2 < 1e-12:
+                break
+            f = ((ox - ball[0]) * dx + (oy - ball[1]) * dy) / l2
+            if 0.0 < f < hit and math.hypot(ox - (ball[0] + f * dx), oy - (ball[1] + f * dy)) <= obs_r:
+                hit, label = f, BLOCKED
         out.append((label, (ball[0] + hit * dx, ball[1] + hit * dy)))
     return out
 
@@ -140,37 +153,45 @@ class Verdict:
     value: float
     n: int
     p_pass: float = 0.0                          # share of samples that stop within reach of a teammate
+    p_block: float = 0.0                         # share of samples a duck in the way stopped (C.4)
 
 
 def evaluate(ball, u: float, action: str, model: KickModel, pitch: Pitch,
              rng: np.random.Generator, n: int,
              mates: list[tuple[float, float]] | None = None, pass_reach: float = 0.4,
-             pass_bonus: float = 0.0) -> Verdict:
+             pass_bonus: float = 0.0, obstacles=None, obs_r: float = 0.15) -> Verdict:
     """`action` is kick_left / kick_right / push; `model` is that action's.
     With `mates` (teammates' positions in the ball's frame) a sample that
     stops within `pass_reach` of one is RECEIVED, and each such sample adds
     `pass_bonus` to the potential it is valued at (roadmap Track 4 s6 D.1:
-    Mellmann's own next step was a teammate attractor in the field)."""
-    samples = roll_out(ball, u + model.exit(action), model, pitch, rng, n)
+    Mellmann's own next step was a teammate attractor in the field). With
+    `obstacles` (C.4) a sample a duck stops is valued where it stops, less
+    `BLOCK_COST`: a ball at an opponent's feet is not a pass."""
+    samples = roll_out(ball, u + model.exit(action), model, pitch, rng, n, obstacles, obs_r)
     labels = [s[0] for s in samples]
     infield = [s[1] for s in samples if s[0] == INFIELD]
     received = 0
     vals = []
-    for px, py in infield:
+    for label, (px, py) in samples:
+        if label not in (INFIELD, BLOCKED):
+            continue
         v = potential(px, py, pitch)
-        if mates and any(math.hypot(px - mx, py - my) <= pass_reach for mx, my in mates):
+        if label == BLOCKED:
+            v -= BLOCK_COST
+        elif mates and any(math.hypot(px - mx, py - my) <= pass_reach for mx, my in mates):
             received += 1
             v += pass_bonus
         vals.append(v)
     value = float(np.mean(vals)) if vals else 0.0
-    return Verdict(u, action, labels.count(GOALOPP) / n, labels.count(GOALOWN) / n, value, n, received / n)
+    return Verdict(u, action, labels.count(GOALOPP) / n, labels.count(GOALOWN) / n, value, n, received / n,
+                   labels.count(BLOCKED) / n)
 
 
 def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: Pitch,
            rng: np.random.Generator, n: int = 30, t_own: float = 0.0,
            models: dict[str, KickModel] | None = None, shoot: float = 0.0,
            mates: list[tuple[float, float]] | None = None, pass_reach: float = 0.4,
-           pass_bonus: float = 0.0) -> Verdict | None:
+           pass_bonus: float = 0.0, obstacles=None, obs_r: float = 0.15) -> Verdict | None:
     """The best of `candidates` (line, action). Mellmann's two-step rule:
     discard anything with more than `t_own` of its samples in our own net,
     then take the most likely to score, ties (within one sample) broken by
@@ -188,7 +209,8 @@ def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: P
     if not candidates:
         return None
     per = dict(models or {})
-    verdicts = [evaluate(ball, u, act, per.get(act, model), pitch, rng, n, mates, pass_reach, pass_bonus)
+    verdicts = [evaluate(ball, u, act, per.get(act, model), pitch, rng, n, mates, pass_reach, pass_bonus,
+                         obstacles, obs_r)
                 for u, act in candidates]
     safe = [v for v in verdicts if v.p_own <= t_own]
     if not safe:
