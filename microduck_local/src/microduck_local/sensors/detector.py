@@ -23,8 +23,9 @@ positive UP (+z), both in radians; `width` is the apparent angular width.
 from __future__ import annotations
 
 import math
+import os
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 
 import mujoco
 import numpy as np
@@ -73,6 +74,32 @@ class DetectorSpec:
     fov_h_deg: float = 62.0      # ASSUMPTION: a Pi-camera-class module; the lens is still not specified
     fov_v_deg: float = 48.0      # ASSUMPTION, and 4:3-shaped: the sensor is 16:9 (see above)
     max_range_m: float = 4.0
+    # AN ABLATION, NOT A ROBOT FEATURE. The Microduck has ONE camera; this
+    # models a second one pitched down by this many degrees, sharing the
+    # head's origin, lens and FOV, so the sim can ask one question: is the
+    # blind radius really what the kick is waiting on? 0 = off = the robot.
+    # Never a default, never a battery baseline; it exists so that
+    # `MICRODUCK_CAMERA="bottom_pitch_deg=60"` can be a sensitivity test.
+    #
+    # Measured 2026-09-06 (roadmap Track 4 s6 A.1): with a second lens the
+    # brain's fresh ball estimate at the swing goes from 34% of swings to
+    # 97%, its correlation with the true side offset from r=0.48 to r=0.96,
+    # and its median error from 2.3 cm to 1.2 cm. So yes - sensing is the
+    # limit, and the closed list in item 7 stands. The useful part is the
+    # geometry it forced out: the duck's camera is 25 cm up, half the
+    # NAO's, so the NAO's 39.7 deg sees a floor ball at 20 cm but the 10 cm
+    # kick spot needs about 60 deg - and nothing occludes it (the duck's
+    # own body never blocks the ray). Which means the ONE real camera can
+    # see the kick spot if the head pitches far enough; see `GAZE_MAX_BEARING`
+    # in brain/controllers.py for why it currently refuses to try.
+    #
+    # A target the head camera cannot see is tested against the second
+    # frustum, and if that one sees it the detection is reported in the
+    # HEAD camera's frame - bearing is still the azimuth the brain steers
+    # on, and `cam_pitch` on the frame is still the head's - so nothing
+    # downstream needs to know which lens found it. Wide-lens pixel mapping
+    # (`projection="equidistant"`) is applied in the head frame either way.
+    bottom_pitch_deg: float = 0.0
     rate_hz: float = 10.0
     site: str = "head_camera"
     # Sensor width in pixels: the NPU runs YOLO11n on a 320×320 INT8 frame
@@ -126,6 +153,41 @@ class DetectorSpec:
     # toward its edges). So this field changes the BEARING only; the width
     # thresholds were always modelling the wide-lens case.
     projection: str = "pinhole"
+
+    @staticmethod
+    def from_env(spec: str | None = None) -> "DetectorSpec":
+        """The defaults with `MICRODUCK_CAMERA` applied - the camera's
+        `MICRODUCK_CHASE`, so a battery can say which sensor it measured
+        from the same command line:
+
+            MICRODUCK_CAMERA="bottom_pitch_deg=39.7" uv run python scripts/probe_shot_gate.py
+
+        Numeric fields only; an unknown name or an unreadable value RAISES,
+        because a typo that silently measured the shipped camera would be
+        the expensive mistake here."""
+        p = DetectorSpec()
+        if spec is None:
+            spec = os.environ.get("MICRODUCK_CAMERA", "")
+        if not spec.strip():
+            return p
+        kinds = {f.name: getattr(p, f.name) for f in fields(p)}
+        over: dict = {}
+        for item in spec.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            k, sep, v = item.partition("=")
+            k, v = k.strip(), v.strip()
+            if not sep or k not in kinds:
+                raise ValueError(f"MICRODUCK_CAMERA: unknown camera field {k!r}")
+            cur = kinds[k]
+            if isinstance(cur, bool) or not isinstance(cur, (int, float)):
+                raise ValueError(f"MICRODUCK_CAMERA: {k!r} is not a numeric field")
+            try:
+                over[k] = type(cur)(float(v)) if isinstance(cur, int) else float(v)
+            except ValueError as e:
+                raise ValueError(f"MICRODUCK_CAMERA: cannot read {k}={v!r}") from e
+        return replace(p, **over)
 
     def seen_angle(self, true_rad: float, fov_deg: float) -> float:
         """The angle a pinhole-calibrated reader reports for a true one.
@@ -302,14 +364,22 @@ class Detector:
 
     # -- geometry ----------------------------------------------------------
     def _visible(self, data: mujoco.MjData, tgt: Target,
-                 origin: np.ndarray, R: np.ndarray) -> tuple[float, float, float, float] | None:
+                 origin: np.ndarray, R: np.ndarray,
+                 R_frustum: np.ndarray | None = None) -> tuple[float, float, float, float] | None:
         """(bearing, elevation, width, range) if inside the frustum and not
-        occluded, else None."""
+        occluded, else None.
+
+        `R` is the frame the detection is REPORTED in (the head camera's).
+        `R_frustum`, when given, is the frame the frustum test is made in -
+        the second, pitched-down camera of `bottom_pitch_deg` - so a target
+        that lens can see comes back with the head's bearing and elevation,
+        which is what every consumer already expects."""
         p = data.xpos[tgt.body] - origin
         rng = float(np.linalg.norm(p))
         if rng < 1e-6 or rng > self.spec.max_range_m:
             return None
-        local = R.T @ p                    # camera frame: x fwd, y left, z up
+        Rf = R if R_frustum is None else R_frustum
+        local = Rf.T @ p                   # frustum camera frame: x fwd, y left, z up
         if local[0] <= 0:
             return None
         bearing = float(np.arctan2(local[1], local[0]))
@@ -319,7 +389,7 @@ class Detector:
         if tgt.height > 0:
             # The part of a tall target inside the frustum: its top and bottom
             # in world z, through the camera's tilt, clipped to the frustum.
-            up = R.T @ np.array([0.0, 0.0, 1.0])
+            up = Rf.T @ np.array([0.0, 0.0, 1.0])
             horiz = float(np.hypot(local[0], local[1]))
             lo, hi = local + up * (-tgt.height / 2), local + up * (tgt.height / 2)
             e_lo = float(np.arctan2(lo[2], horiz))
@@ -330,12 +400,17 @@ class Detector:
                 return None
             elev = 0.5 * (a + b)
             # Range and the occlusion ray go to the point actually reported.
-            p = R @ np.array([local[0], local[1], horiz * np.tan(elev)])
+            p = Rf @ np.array([local[0], local[1], horiz * np.tan(elev)])
             rng = float(np.linalg.norm(p))
         else:
             elev = float(np.arctan2(local[2], np.hypot(local[0], local[1])))
             if abs(elev) > half_v:
                 return None
+        if R_frustum is not None:
+            # Seen by the second lens: report it where the HEAD would put it.
+            rep = R.T @ p
+            bearing = float(np.arctan2(rep[1], rep[0]))
+            elev = float(np.arctan2(rep[2], np.hypot(rep[0], rep[1])))
         # Occlusion: the first thing along the line of sight must be the
         # target itself (or nothing closer than its front face).
         geomid = np.zeros(1, dtype=np.int32)
@@ -373,11 +448,20 @@ class Detector:
         s, nz = self.spec, self.noise
         origin = np.ascontiguousarray(data.site_xpos[self.site_id], dtype=np.float64)
         R = data.site_xmat[self.site_id].reshape(3, 3)
+        R2 = None
+        if s.bottom_pitch_deg > 0.0:
+            # The second lens: the head frame pitched DOWN about its own left
+            # axis (x fwd, y left, z up: +x goes toward -z).
+            th = np.deg2rad(s.bottom_pitch_deg)
+            c, sn = float(np.cos(th)), float(np.sin(th))
+            R2 = R @ np.array([[c, 0.0, sn], [0.0, 1.0, 0.0], [-sn, 0.0, c]])
         out: list[Detection] = []
         for tgt in self.targets:
             if int(self.model.body_rootid[tgt.body]) == self.own_root:
                 continue
             vis = self._visible(data, tgt, origin, R)
+            if vis is None and R2 is not None:
+                vis = self._visible(data, tgt, origin, R, R_frustum=R2)
             if vis is None:
                 continue
             bearing, elev, width, rng = vis

@@ -2568,9 +2568,6 @@ What is left, in the order it is worth doing:
    The camera sits 23 cm above the floor pointing forward, which puts a
    blind radius of 23 cm under the duck's nose at a level head and 6.9 cm
    fully dipped (`docs/camera-hardware.md` §3). The kick spot is inside it.
-   **This is a sensing limit, not a control one** — "it does not remove the
-   blind zone, nothing does". The next real move on the kick is a sensor
-   that sees the last 20 cm, not another rule for deciding when to swing.
    Everything above is worth keeping because it says, with numbers, that the
    rules have been tried.
 8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
@@ -2609,6 +2606,64 @@ What is left, in the order it is worth doing:
    was a risk to what 4e shipped, and it is closed, not open. Median head
    yaw at the swing is 0.000 on the shipped brain (the duck is back on the
    line by then), mean aim error −0.1° with an interval spanning zero,
+
+   **CORRECTED THE SAME EVENING — it is not a sensing limit after all, and
+   the sensor the duck has can see the spot.** Three measurements, all on
+   the one real camera, all on the pre-rolling-resistance floor:
+
+   1. *The "any pitch" line in the table above was a level-camera rule.*
+      Measured on the composed model: with the head 60° down, a ball on the
+      kick spot (37° off the nose) sits at **16.5° camera bearing, −19.7°
+      elevation** — inside the frustum — and nothing on the duck occludes
+      it (`mj_ray` from the lens hits the ball first in every case). The
+      neck-carried gaze reaches ~52° at `head_down`. The gaze was being
+      REFUSED at exactly that ball by `GAZE_MAX_BEARING` = 0.6, whose
+      comment said the target "is not in the picture at any head pitch".
+      Now `ChaseParams.gaze_bearing_max`, corrected in place.
+   2. *Looking down works.* `scripts/probe_shot_gate.py`, "swings the brain
+      can see at all": shipped **34%**; `gaze_still=1, gaze_neck=1` **65%**,
+      with the estimate's correlation to the true offset r = 0.48 → **0.95**
+      and its median error 2.3 → **0.9 cm**. Lifting the azimuth cap to 1.4
+      adds nothing further (64%) — the pitch was the lever, not the cap.
+      And the ball moves where the whole track has been trying to put it:
+      side offset at the swing **0.133 → 0.06 m** (the sweet spot is
+      0.04–0.08), on-spot **1.7% → 18–21%**, drift since the plan
+      0.213 → 0.06 m.
+   3. *And then the kick whiffs.* Those same arms whiff **82–85%** against
+      23%, on ~50 kicks a battery against 178. Benched directly (12 kicks
+      each, ball on the left sweet spot ±1 cm, `kick_left`):
+
+      | head at the swing | head joint | whiff | median travel |
+      |---|---|---|---|
+      | level | +0.39 rad | **0%** | 2.02 m at +23.9° off the body |
+      | head down (cmd 0.6) | +0.97 rad | **100%** | 0.00 m |
+      | head + neck down | +0.93 rad | **100%** | 0.00 m |
+
+      The arena zeroes the kick's head COMMAND for its 0.5 s window, not
+      its joints; the shipped `ball_kick_*.onnx` were trained from a level
+      head and cannot swing from a pitched one. The +23.9° level result is
+      the in-play left-foot exit angle (+23.6°, 4b) reproduced on a bench.
+
+   So the true shape is: **the camera can see the spot; the gaze can put the
+   ball on it; the KICK SKILL cannot swing from the pose that does it.** That
+   is a training-distribution problem in `ball_kick_left/right` — the third
+   different kind of limit this item has named, and the first that points at
+   something buildable without hardware: either kicks trained with the head
+   pitched (the honest fix, upstream's recipe), or a brain that raises the
+   head to level in the last ~0.3 s of the settle and fires when the joint
+   is back (`settle_head_level`, not built) — which costs a sighting again,
+   but 0.3 s of a stationary ball is not 3 s of a rolling one. → judge on
+   whiff and on-spot from `probe_kick_line.py`, re-baselined on the new
+   floor (see below).
+
+   **Baseline note.** Every number in Track 4 up to here was measured on a
+   floor with NO rolling resistance — a bumped ball rolled until a wall
+   stopped it. `Ball.rolling` (0.002, condim 6) landed in this checkout on
+   the evening of 2026-09-06 from a parallel session, with `ball_decel`
+   0.04 → 0.3 to match. Every kick and search battery needs a new baseline
+   before anything below is compared to anything above; the paired
+   comparisons above are internally consistent because each battery's
+   workers forked before the physics landed.
    against +2.4° with tracking off. Paired per seed every kick metric is
    flat: kicks p=0.68, whiffs p=0.64, |error| p=0.73, ball-ahead p=0.21.
 
@@ -2650,21 +2705,25 @@ radius, and every rule for placing, aiming and choosing the swing failed for
 that one reason. The field has met this limit and has four answers, and
 this stack has none of them.
 
-- [ ] **A.1 A second, downward camera — the NAO's answer, and it is
-      hardware.** The NAO carries two identical cameras in the forehead: the
-      top one pitched **1.2°** down, the bottom one pitched **39.7°** down,
-      each 60.9° × 47.6°. The bottom camera exists for one reason: to see the
-      ground in front of the feet. Our whole 4c/4e/item-7 investigation — the
-      head that cannot pitch far enough, the gaze that cannot reach 37°, the
-      ToF that is wrong 2 in 3 at the feet, the gate that can see 34% of
-      swings — is the work of a robot with one forward camera. **This is the
-      single highest-leverage change to the kick and it is not software.**
-      → **what settles it:** `docs/camera-hardware.md` §3 already has the
-      geometry; add a second camera pose at 40° down to the sim detector
-      (`sensors/detector.py` takes a mount pose), re-run
-      `scripts/probe_shot_gate.py` and read "swings it can see at all" — 34%
-      today. If it is above ~90%, re-run `kick_side_max` and `refresh_min`,
-      both of which were killed by coverage, not by their mechanism.
+- [x] **A.1 A second, downward camera — built as an ABLATION, and it did its
+      job: it proved the real camera is enough.** The NAO carries two
+      identical cameras in the forehead: the top one pitched 1.2° down, the
+      bottom one **39.7°** down, for one reason — to see the ground at the
+      feet. The Microduck has one camera and is not getting a second, so
+      `DetectorSpec.bottom_pitch_deg` (`MICRODUCK_CAMERA=bottom_pitch_deg=…`)
+      exists only to ask the simulator whether the blind radius is what the
+      kick was waiting on. Off by default, never a baseline, proven
+      bit-for-bit inert at 0. The answer: **swings the brain can see 34% →
+      97%**, estimate r = 0.48 → 0.96, median error 2.3 → 1.2 cm. So
+      sensing was the limit — *at the shipped head pose.* The geometry it
+      forced out is the useful part: the duck's lens is 25 cm up, half the
+      NAO's, so the NAO's 39.7° reaches a floor ball at 20 cm but the 10 cm
+      kick spot needs about **60°**, and nothing on the duck occludes it.
+      Which means the head the robot HAS, pitched with the neck (~52°),
+      already sees the spot — measured at 65% coverage on the real camera,
+      and then the kick skill fails from that pose. The whole chain is in
+      item 7's correction. Nothing more to build here; the ablation stays
+      as the tool that settles "is it the sensor?" in one run.
 - [ ] **A.2 In-walk kicks — kick inside the gait instead of stop, settle,
       swing.** B-Human's `WalkKickEngine` defines every kick as a set of
       relative ball positions converted into **walk step sizes**: a pre-step

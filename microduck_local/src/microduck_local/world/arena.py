@@ -27,7 +27,7 @@ import mujoco
 import numpy as np
 
 from .. import contract as C
-from ..sensors import Detector, DetectorNoise, Target, TofNoise, TofSensor
+from ..sensors import Detector, DetectorNoise, DetectorSpec, Target, TofNoise, TofSensor
 from ..walk_env import MicroduckWalkEnv
 from .compose import DuckAddress, compose, spawn_duck
 from .scenario import PICKABLE_KINDS, Person, Scenario
@@ -376,6 +376,7 @@ class World:
                                noise=DetectorNoise.preset(d.detector), targets=targets,
                                seed=int(self.rng.integers(0, 2**31 - 1)))
             self.ducks[d.id] = WorldDuck(
+                               spec=DetectorSpec.from_env(),          # MICRODUCK_CAMERA, a battery's sensor variant
                 id=d.id, adr=adr, spawn=d.spawn, infer=infer_for.get(d.id, zero_infer),
                 policy_id=d.policy, tof=tof, detector=det,
                 odom_preset=d.odom, odom_noise=OdomNoise.preset(d.odom),

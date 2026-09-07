@@ -25,7 +25,14 @@ from .runtime import REGISTRY, Intent, Senses, age_inputs
 from .tracker import Tracker, TrackerParams
 
 # The camera's horizontal HALF-field (62° full, sensors/detector.py) plus a
-# little: past this a target is not in the picture at any head pitch.
+# little. The shipped default of `ChaseParams.gaze_bearing_max`, and it was
+# WRONG about why: "past this a target is not in the picture at any head
+# pitch" is true of a LEVEL camera only. Pitch the camera down and the
+# azimuth stops being the bearing the lens sees - measured on the composed
+# model (2026-09-06): a ball 37° off the nose on the kick spot is at 16.5°
+# camera bearing, -19.7° elevation, inside the frustum, with the head at
+# 60° down, and nothing on the duck occludes it. The neck-carried gaze
+# reaches ~52° at `head_down` (0.75 + 0.43 per unit, 11° at rest).
 GAZE_MAX_BEARING = 0.6
 
 
@@ -891,6 +898,15 @@ class ChaseParams:
     # why the split arm went blind for 0.14 s at the swing and the
     # head-slot arm for 1.20 s.
     gaze_neck: float = 0.0
+    # The azimuth past which a line-up gaze is not attempted (rad). Ships at
+    # `GAZE_MAX_BEARING` = 0.6 (34°), which refuses the gaze at exactly the
+    # kick spot - the ball there is 37° off the nose - on the level-camera
+    # reasoning corrected beside that constant. A pitched camera CAN see
+    # that ball. Raise it toward `head_yaw_max` (1.4) to let the gaze try;
+    # what it buys is measured with `scripts/probe_shot_gate.py` ("swings
+    # it can see at all": 34% shipped, 65% with gaze_still+gaze_neck at the
+    # shipped cap).
+    gaze_bearing_max: float = GAZE_MAX_BEARING
     cam_level: float = 0.197
     cam_z: float = 0.21
     # Hold the gaze while the duck is STANDING STILL, instead of dropping it
@@ -939,12 +955,25 @@ class ChaseParams:
     # these depressions and the split costs about nothing — and it is the
     # reason `gaze_neck` exists at all.
     #
-    # WHY IT CANNOT WIN, measured: on the kick spot the ball is 37° off the
-    # nose and the camera's horizontal HALF-field is 31°. The last
-    # centimetres of a line-up are unseeable at ANY pitch, and what a held
-    # gaze recovers is the run-in, which the spot has already been planned
-    # from. The lever that does move the placement is `refresh_min` — see
-    # its note.
+    # "WHY IT CANNOT WIN" used to sit here: that on the kick spot the ball is
+    # 37° off the nose against a 31° horizontal half-field, unseeable at any
+    # pitch. That was a level-camera rule and it is wrong for a pitched one
+    # - see `GAZE_MAX_BEARING`. Re-measured 2026-09-06 on the one real
+    # camera (`scripts/probe_shot_gate.py`, 24 seeds): with gaze_still +
+    # gaze_neck the brain has a fresh ball estimate on 65% of swings against
+    # 34% shipped, r to the true side offset 0.95 against 0.48, and the ball
+    # at the swing moves onto the sweet spot - side 0.133 -> 0.06 m, on-spot
+    # 1.7% -> ~20%. The held gaze DOES win on placement.
+    #
+    # And then the kick whiffs 82-85% (against 23%): benched, the shipped
+    # kick skill whiffs 12 of 12 when the swing starts with the head joint
+    # at +0.97 rad (cmd 0.6) and 0 of 12 level (+0.39), same ball, same
+    # spot. The arena zeroes the kick's head COMMAND, not its joints, and
+    # `ball_kick_*.onnx` were trained from a level head. So this ships OFF
+    # for a different reason than before: it puts the ball where the kick
+    # cannot swing. The fix is in the kick policy's training distribution,
+    # or a settle that raises the head in its last ~0.3 s (not built).
+    # Roadmap Track 4 item 7, the correction.
     gaze_still: bool = False
     # …and yaw the head at it too while standing. The pitch alone cannot
     # reach the endpoint: on the kick spot the ball is 0.08 m ahead and
@@ -1675,17 +1704,17 @@ class Chase:
         (odometry frame, so it survives the duck walking on — `Track.range`
         does not, it only moves on a hit), else the ball this line-up was
         planned around. None when neither exists, or when the target is
-        further off the nose than the camera's own horizontal half-field
-        (31°, so `GAZE_MAX_BEARING` is already generous): pitching the head
-        cannot bring in something the lens does not cover sideways, and
-        `gaze_yaw` is the knob that can.
+        further off the nose than `gaze_bearing_max` (0.6 rad shipped, or
+        `head_yaw_max` when `gaze_yaw` is on).
 
-        Worth knowing about the endpoint: ON the kick spot the ball is
-        `kick_ahead` 0.08 m forward and `kick_side` 0.06 m to the side, i.e.
-        37° off the nose — OUTSIDE the 31° half-field. The last few
-        centimetres of a line-up are unseeable with a fixed head at any
-        pitch. What is inside is the run-in: at 0.20 m ahead the same side
-        offset is 17°, at 0.15 m it is 22°."""
+        The old text here said a ball past the 31° horizontal half-field is
+        "unseeable with a fixed head at any pitch". That is a level-camera
+        rule and it is wrong for a pitched one (2026-09-06, measured on the
+        composed model): ON the kick spot the ball is 0.08 m forward and
+        0.06 m to the side, 37° off the nose, and with the head 60° down it
+        sits at 16.5° camera bearing and -19.7° elevation - inside the
+        frustum, unoccluded. The gaze was being refused by this very test
+        at the one place it was needed."""
         p = self.p
         tgt = None
         if ball is not None and ball.xy is not None:
@@ -1697,7 +1726,7 @@ class Chase:
             return None
         dx, dy = tgt[0] - odom[0], tgt[1] - odom[1]
         bearing = _wrap(math.atan2(dy, dx) - odom[2])
-        if abs(bearing) > (p.head_yaw_max if p.gaze_yaw else GAZE_MAX_BEARING):
+        if abs(bearing) > (p.head_yaw_max if p.gaze_yaw else p.gaze_bearing_max):
             return None
         return math.hypot(dx, dy), bearing
 

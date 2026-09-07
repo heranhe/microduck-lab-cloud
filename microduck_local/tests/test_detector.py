@@ -373,3 +373,42 @@ def test_a_pitch_gives_every_duck_target_its_teams_colour():
     for d in sc.ducks:
         assert by_name[d.id].color == d.team
     assert by_name["ball0"].color is None
+
+
+def test_a_second_camera_pitched_down_sees_the_ball_at_the_feet_and_reports_it_in_the_head_frame():
+    """`DetectorSpec.bottom_pitch_deg` is an ABLATION, not a robot feature:
+    the Microduck has one camera. It models the NAO's second, downward lens
+    so the sim can ask whether the blind radius is really what the kick is
+    waiting on (roadmap Track 4 §6 A.1). Measured geometry, not the NAO's
+    number: the duck's camera is 25 cm up, half the NAO's, so 39.7° reaches
+    a floor ball at 20 cm and NOT one on the 10 cm kick spot, which needs
+    about 60°. A ball the second lens sees is reported with the HEAD's
+    bearing (the azimuth the brain steers on), left-positive, ranged from
+    its width; a far ball is seen by the head lens first and is identical
+    either way; and nothing occludes a ball at the feet — the duck's own
+    body never blocks the line (checked with mj_ray)."""
+    spot, near, far = (0.10, 0.06), (0.20, 0.05), (1.2, 0.0)
+    m, d = world([("a", (0, 0, 0))], balls=[Ball(spot), Ball(near), Ball(far)])
+    tg = targets(m, balls=(0, 1, 2))
+    top = Detector(m, site="a/head_camera", targets=tg)
+    nao = Detector(m, site="a/head_camera", spec=DetectorSpec(bottom_pitch_deg=39.7), targets=tg)
+    steep = Detector(m, site="a/head_camera", spec=DetectorSpec(bottom_pitch_deg=60.0), targets=tg)
+    seen_top = {x.name: x for x in top.capture(d, 0.0).detections}
+    seen_nao = {x.name: x for x in nao.capture(d, 0.0).detections}
+    seen_steep = {x.name: x for x in steep.capture(d, 0.0).detections}
+    assert set(seen_top) == {"ball2"}                               # one level camera: only the far ball
+    assert set(seen_nao) == {"ball1", "ball2"}                      # the NAO's angle: 20 cm yes, the spot no
+    assert set(seen_steep) == {"ball0", "ball1", "ball2"}           # 60 deg: the kick spot too
+    b = seen_steep["ball0"]
+    assert b.bearing > 0.2                                          # 6 cm left at ~10 cm: left-positive azimuth
+    assert 0.05 < b.range_est < 0.30                                # ranged from its width, not the lens
+    assert b.elevation < -0.8                                       # far below a level head: the HEAD's frame
+    f1, f2 = seen_top["ball2"], seen_steep["ball2"]
+    assert (f1.bearing, f1.elevation, f1.width, f1.range_est) == (f2.bearing, f2.elevation, f2.width, f2.range_est)
+    # The env knob mirrors MICRODUCK_CHASE: numeric fields only, typos raise.
+    assert DetectorSpec.from_env("bottom_pitch_deg=39.7").bottom_pitch_deg == 39.7
+    assert DetectorSpec.from_env("").bottom_pitch_deg == 0.0
+    with pytest.raises(ValueError):
+        DetectorSpec.from_env("bottom_pitch=39.7")
+    with pytest.raises(ValueError):
+        DetectorSpec.from_env("site=foo")
