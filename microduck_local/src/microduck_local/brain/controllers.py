@@ -519,6 +519,14 @@ class ChaseParams:
     # The shipped kicks (measured, `walker-facts`-style, on the walker): a
     # ball 0.08 m ahead of the trunk and 0.06 m to the kicking foot's side
     # flies 1.6 m; 0.10 m dead ahead barely moves; the other side, nothing.
+    # 0.08 is the WALK-IN'S MINIMUM, not the kick's optimum. Measured on the
+    # rolling-resistance floor (2026-09-06, 24 seeds, runs/ahead/): at 0.06
+    # and 0.05 the duck still reaches its spot to 1.5 cm, but the ball has
+    # moved since the plan - drift 0.042 -> 0.108 m, +5.4 cm p=0.002 and
+    # +7.0 cm p=0.031, the only significant effect - and sits further out
+    # (spot-to-ball 0.135 -> 0.165). The feet reach a ball 5-6 cm ahead
+    # before the settle does, and bump it. Whiff 39 -> 44/50%, on-spot
+    # 14 -> 7/9%, all the wrong way. Roadmap Track 4 item 7.
     kick_ahead: float = 0.08
     kick_side: float = 0.06
     # The kick map (a standing duck, the ball swept over (ahead, side) of

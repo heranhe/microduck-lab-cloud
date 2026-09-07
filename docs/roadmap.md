@@ -2628,42 +2628,6 @@ What is left, in the order it is worth doing:
    before anything below is compared to anything above; the paired
    comparisons above are internally consistent because each battery's
    workers forked before the physics landed.
-   against +2.4° with tracking off. Paired per seed every kick metric is
-   flat: kicks p=0.68, whiffs p=0.64, |error| p=0.73, ball-ahead p=0.21.
-
-10. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
-   teammates' frames wander 0.456 m apart over a run, so "the ball is at
-   (x, y)" stops being a place the teammate can act on. Everything soccer
-   here runs at `ideal`, where the frames agree exactly — so nothing measured
-   is affected, and nothing measured is evidence about a robot either.
-
-And one thing this track did NOT settle, which every item above kept
-running into: **the score.** Goals need 136 seeds to move 25% and own goals
-347 (1.5). Positional play buys shape, safety and a ball that goes less
-wrong; whether it wins games is a question this benchmark cannot answer at
-any sane cost, and saying so is the honest end of the track.
-
-### 6. What the field does that this stack does not — a survey (2026-09-06)
-
-Jonathan asked what a robot-soccer stack has that ours is missing, after the
-basics (a brain, positions, tracking). This is a read of the RoboCup
-literature — the Standard Platform League (NAO) and Humanoid League code
-releases and symposium papers, plus the recent learned-soccer work on small
-humanoids — mapped onto what is actually in this repo. Every item says what
-we have, what the field does, what it would take here, and what number
-would settle it. They are ordered by how directly each one addresses a
-problem this track has already measured, not by how impressive it sounds.
-
-One framing fact first. The RoboCup Humanoid League's smallest class,
-KidSize, requires a robot **40–100 cm** tall; the Microduck is ~25 cm. This
-is not a competition robot and never will be, so nothing below is about
-rules or eligibility. It is about which ideas transfer. Most of them do,
-because the NAO (58 cm, two cameras in the head, 25 DOF) has the same
-problems this duck has — it just solved some of them a decade ago.
-
-#### A. The kick — what the field does about the exact limit 4b/4c/item 7 hit
-
-Item 7 closed with: the kick is a **sensing** limit. The camera sits 23 cm
 
    **The settle that raises the head — BUILT, and measured off on the new
    floor (2026-09-06, late).** `ChaseParams.settle_head_level`: for the
@@ -2715,13 +2679,32 @@ Item 7 closed with: the kick is a **sensing** limit. The camera sits 23 cm
    The kick reaches ~10 cm. `kick_ahead` = 0.08 plans the spot 8 cm behind
    the ball and the residual drift is 4–7 cm, so the median ball is 11.7 cm
    ahead at the swing and a third of them are past the reach. That is the
-   whole whiff on this floor, and it is not a sensing problem: either plan
-   the spot closer (`kick_ahead` 0.05?) or decline on AHEAD rather than
-   side (`kick_side_max` gates the wrong axis here). Judge on whiff and
-   on-spot with `probe_kick_line.py` — the shipped floor baseline is
-   `runs/raise/k_ship2.jsonl` — and only after the parallel session's
-   floor change is committed, since every number in this paragraph is on
-   its uncommitted physics.
+   whole whiff on this floor, and it is not a sensing problem. Both obvious
+   levers were then measured the same evening, and both close:
+
+   - *Decline on AHEAD* cannot fire. On this floor the shipped brain has a
+     fresh ball estimate on **13%** of swings (8 of 62; was 34% on the old
+     floor) — a ball that stops is last seen more than `predict_s` before
+     the swing — so a gate on the predicted distance sees nothing.
+   - *Plan the spot closer* bumps the ball. `kick_ahead` 0.06 and 0.05
+     against 0.08, 24 seeds (`runs/ahead/`): the duck still reaches its
+     spot (trunk-to-spot 0.015–0.016 m, flat) but the ball has moved since
+     the plan — drift **0.042 → 0.108 m, +5.4 cm (p=0.002) and +7.0 cm
+     (p=0.031)**, the only significant effect — and sits further out
+     (spot-to-ball 0.135 → 0.165). Whiff 39 → 44/50%, on-spot 14 → 7/9%,
+     side 0.059 → 0.096/0.108, none significant on ~70 kicks, all the
+     wrong way. The walk-in's feet reach a ball 5–6 cm ahead before the
+     settle does. **0.08 is the walk-in's minimum.**
+
+   **And this is where measuring on this floor stops, deliberately.** The
+   parallel session's world files (`compose.py`, `scenario.py`,
+   `arena.py`) changed again at 19:36:29, between the sweep's second and
+   third arms, so only shipped-vs-0.06 shares a tree state; two "shipped"
+   arms 25 minutes apart gave 47 and 66 kicks on the same seeds with no
+   code difference visible in the files whose mtimes were recorded — so
+   something unrecorded moved. Every number in this item from "Baseline
+   note" down is provisional until that session commits. Re-baseline
+   then; the arms and the probes are all here to re-run.
 8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
    and a result, all measured.
 
@@ -2794,6 +2777,42 @@ this stack has none of them.
       for `settle_s` and swings at a plan that is 3.0 s old and 0.21 m stale**
       (4b). An in-walk kick has no settle and no separate kick policy; the
       decision is made on the last step, with the freshest sighting there is.
+   against +2.4° with tracking off. Paired per seed every kick metric is
+   flat: kicks p=0.68, whiffs p=0.64, |error| p=0.73, ball-ahead p=0.21.
+
+10. **A shared frame for the blackboard** (4.3). At `datasheet` drift two
+   teammates' frames wander 0.456 m apart over a run, so "the ball is at
+   (x, y)" stops being a place the teammate can act on. Everything soccer
+   here runs at `ideal`, where the frames agree exactly — so nothing measured
+   is affected, and nothing measured is evidence about a robot either.
+
+And one thing this track did NOT settle, which every item above kept
+running into: **the score.** Goals need 136 seeds to move 25% and own goals
+347 (1.5). Positional play buys shape, safety and a ball that goes less
+wrong; whether it wins games is a question this benchmark cannot answer at
+any sane cost, and saying so is the honest end of the track.
+
+### 6. What the field does that this stack does not — a survey (2026-09-06)
+
+Jonathan asked what a robot-soccer stack has that ours is missing, after the
+basics (a brain, positions, tracking). This is a read of the RoboCup
+literature — the Standard Platform League (NAO) and Humanoid League code
+releases and symposium papers, plus the recent learned-soccer work on small
+humanoids — mapped onto what is actually in this repo. Every item says what
+we have, what the field does, what it would take here, and what number
+would settle it. They are ordered by how directly each one addresses a
+problem this track has already measured, not by how impressive it sounds.
+
+One framing fact first. The RoboCup Humanoid League's smallest class,
+KidSize, requires a robot **40–100 cm** tall; the Microduck is ~25 cm. This
+is not a competition robot and never will be, so nothing below is about
+rules or eligibility. It is about which ideas transfer. Most of them do,
+because the NAO (58 cm, two cameras in the head, 25 DOF) has the same
+problems this duck has — it just solved some of them a decade ago.
+
+#### A. The kick — what the field does about the exact limit 4b/4c/item 7 hit
+
+Item 7 closed with: the kick is a **sensing** limit. The camera sits 23 cm
       Ours cannot do this today: the two shipped kicks are separate ONNX
       skills that run from standing. **What it would take:** a walking policy
       with a kick command channel — the 61-obs contract has zero-padded
@@ -3010,42 +3029,6 @@ and its [WalkKickEngine](https://docs.b-human.de/coderelease2024/motion/motion-w
 [RoboCup Humanoid League call for participation (KidSize 40–100 cm)](https://humanoid.robocup.org/robocup-2025/call-for-participation/);
 [RoboCup SPL GameController](https://github.com/RoboCup-SPL/GameController3).
 
-## Later / parked
-
-- **Port `find_ball` to an mjlab cfg** and retrain on GPU in upstream
-  `microduck_rl`. That stack, not this one, is the sim2real recipe. Blocked on
-  the items above: there is no point porting a recipe whose back-bucket
-  behavior is still moving.
-- **What the fake detector cannot produce.** The env fakes the detector by
-  projecting a point through the MJCF camera: FOV bounds plus a range check,
-  and nothing else. Three things a real one does are therefore untested, and
-  they are worth doing in this order rather than as one "real detector" job:
-
-  1. **Box size, hence RANGE.** Cheapest, and it unblocks queued work rather
-     than opening new questions: the handoff gate asserts *aimed* and never
-     *in range*, which is exactly why the kick whiffs in every soccer render,
-     and the approach behavior (item 4's stretch) cannot start without it.
-     `distance ~= focal x real diameter / box height`.
-  2. **Occlusion — i.e. WALLS.** Today "not seen" ALWAYS means "not inside my
-     camera cone", so the belief's dead-reckoning is never wrong about
-     anything except direction. Put an occluder in the scene and that
-     assumption breaks: not-seen can mean *hidden*, and the right response is
-     to look around the obstacle rather than sweep past it — the memory slot
-     would have to represent "hidden there", not just "it went that way".
-     That is a qualitatively harder search than the one this recipe solves,
-     and it is the one a robot in a real room faces. Needs geometry in the
-     scene AND a ray test in `_ball_sense`; note the lab arena on the
-     `robot-lab-sim-roadmap` branch may bring the geometry along anyway, in
-     which case the deployed duck meets walls its training never had.
-     (Worth being clear about what walls are NOT: they are not a better
-     search-direction cue. Spawns are uniform in bearing, so no wall makes one
-     side likelier — see section 3, where the wrong-side cost is real but the
-     fix is a faster sweep, not a smarter choice.)
-  3. **False positives.** A real detector reports something orange that is not
-     the ball. The policy currently trusts `seen` completely, and nothing in
-     training has ever lied to it.
-
-  The fully honest version — render the head camera and run the actual
 ## Physics audit — 2026-09-06 (after the ball that never stopped)
 
 The ball's zero rolling resistance (a coefficient set on a condim-3 geom,
@@ -3143,3 +3126,39 @@ XL330-M288 datasheet. The gaps are fidelity, not errors:
   wants precise bearing for gaze and following) or "find the charging dock".
   A second target is a cheap test of whether the recipe generalizes or whether
   it memorized a ball-sized blob.
+## Later / parked
+
+- **Port `find_ball` to an mjlab cfg** and retrain on GPU in upstream
+  `microduck_rl`. That stack, not this one, is the sim2real recipe. Blocked on
+  the items above: there is no point porting a recipe whose back-bucket
+  behavior is still moving.
+- **What the fake detector cannot produce.** The env fakes the detector by
+  projecting a point through the MJCF camera: FOV bounds plus a range check,
+  and nothing else. Three things a real one does are therefore untested, and
+  they are worth doing in this order rather than as one "real detector" job:
+
+  1. **Box size, hence RANGE.** Cheapest, and it unblocks queued work rather
+     than opening new questions: the handoff gate asserts *aimed* and never
+     *in range*, which is exactly why the kick whiffs in every soccer render,
+     and the approach behavior (item 4's stretch) cannot start without it.
+     `distance ~= focal x real diameter / box height`.
+  2. **Occlusion — i.e. WALLS.** Today "not seen" ALWAYS means "not inside my
+     camera cone", so the belief's dead-reckoning is never wrong about
+     anything except direction. Put an occluder in the scene and that
+     assumption breaks: not-seen can mean *hidden*, and the right response is
+     to look around the obstacle rather than sweep past it — the memory slot
+     would have to represent "hidden there", not just "it went that way".
+     That is a qualitatively harder search than the one this recipe solves,
+     and it is the one a robot in a real room faces. Needs geometry in the
+     scene AND a ray test in `_ball_sense`; note the lab arena on the
+     `robot-lab-sim-roadmap` branch may bring the geometry along anyway, in
+     which case the deployed duck meets walls its training never had.
+     (Worth being clear about what walls are NOT: they are not a better
+     search-direction cue. Spawns are uniform in bearing, so no wall makes one
+     side likelier — see section 3, where the wrong-side cost is real but the
+     fix is a faster sweep, not a smarter choice.)
+  3. **False positives.** A real detector reports something orange that is not
+     the ball. The policy currently trusts `seen` completely, and nothing in
+     training has ever lied to it.
+
+  The fully honest version — render the head camera and run the actual
