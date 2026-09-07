@@ -3,14 +3,17 @@
 #
 #   git clone <this repo> microduck-workspace && cd microduck-workspace && ./scripts/setup.sh
 #
-# Clones the two upstream Pollen repos NEXT TO this checkout at the shas CI
-# pins (the contract, golden-bit and symmetry tests are measured against
-# those exact models and policies), syncs the Python env with uv, installs
-# the viewer's npm packages, and runs the quick contract tests. Re-running it
-# is safe: it only moves the upstream checkouts to the pinned shas.
+# Clones the two upstream Pollen repos INSIDE this checkout (beside
+# microduck_local/ and duck-viewer/ — where CI, the docs and contract.py look
+# for them) at the shas CI pins (the contract, golden-bit and symmetry tests
+# are measured against those exact models and policies), fetches the shipped
+# policy set from the Hub at a pinned revision, syncs the Python env with uv,
+# installs the viewer's npm packages, and runs the quick contract tests.
+# Re-running it is safe: it only moves the upstream checkouts to the pinned
+# shas and downloads whichever policy files are missing.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-ws="$(dirname "$here")"
+ws="$here"   # the workspace IS this checkout; the upstream clones are .gitignored inside it
 RL_SHA="$(sed -n 's/.*git -C microduck_rl checkout \([0-9a-f]\{40\}\).*/\1/p' "$here/AGENTS.md" | head -1)"
 MD_SHA="$(sed -n 's/.*git -C microduck checkout \([0-9a-f]\{40\}\).*/\1/p' "$here/AGENTS.md" | head -1)"
 [ -n "$RL_SHA" ] && [ -n "$MD_SHA" ] || { echo "could not read the pinned upstream shas from AGENTS.md"; exit 1; }
@@ -36,6 +39,34 @@ clone_at microduck microduck "$MD_SHA"
 
 echo "→ uv sync (microduck_local)"
 (cd "$here/microduck_local" && uv sync -q)
+
+# The shipped policies. Upstream stopped vendoring them on 2026-09-03
+# (pollen-robotics/microduck ef4becf: "policies/ leaves the repository") — a
+# `microduck` checkout past the pinned sha has no policies/ at all, and the
+# by-hand clone in README.md lands on main. Their home is now the Hub repo
+# pollen-robotics/microduck-policies. Fetch the set at a PINNED revision: the
+# nine files at this commit are byte-identical to the ones the pinned
+# microduck sha vendored (git blob hashes compared 2026-09-06), which is what
+# the golden-bit and symmetry tests were measured against. Bump the revision
+# the way the shas are bumped — on purpose, with the tests re-measured.
+POLICY_REPO="pollen-robotics/microduck-policies"
+POLICY_REV="088524a64e2557dc453256b6071dbb9d23888802"   # the files of tag v4
+POLICIES=(alpha_walking alpha_stand alpha_sitstand alpha_ground_pick
+          ball_kick_left ball_kick_right roller roller_crouch roulade)
+policy_dir="$ws/microduck/policies"
+missing=()
+for p in "${POLICIES[@]}"; do [ -s "$policy_dir/$p.onnx" ] || missing+=("$p.onnx"); done
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "→ downloading ${#missing[@]} shipped policies from huggingface.co/$POLICY_REPO @ ${POLICY_REV:0:7}"
+  mkdir -p "$policy_dir"
+  (cd "$here/microduck_local" && uv run hf download "$POLICY_REPO" "${missing[@]}" \
+     --revision "$POLICY_REV" --local-dir "$policy_dir" --quiet >/dev/null)
+  for p in "${missing[@]}"; do
+    [ -s "$policy_dir/$p" ] || { echo "download failed: $policy_dir/$p"; exit 1; }
+  done
+fi
+echo "✓ shipped policies (${#POLICIES[@]}) in $policy_dir"
+
 echo "→ npm install (duck-viewer)"
 (cd "$here/duck-viewer" && npm install --silent --no-audit --no-fund)
 

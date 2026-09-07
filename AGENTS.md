@@ -17,8 +17,9 @@ two upstream Pollen repos are cloned next to them (they are in `.gitignore`):
 
 ## Setup
 
-One command does all of the below (upstream clones at the pinned shas, `uv
-sync`, `npm install`, a smoke test) on a Mac or Linux:
+One command does all of the below (upstream clones at the pinned shas, the
+shipped policies from the Hub, `uv sync`, `npm install`, a smoke test) on a
+Mac or Linux:
 
 ```bash
 git clone <this repo> microduck-workspace && cd microduck-workspace && ./scripts/setup.sh
@@ -37,12 +38,21 @@ git clone https://github.com/pollen-robotics/microduck_rl
 git -C microduck_rl checkout badc4e7ffe5507fd7acb1a21487bd2925c1afe5a
 git -C microduck checkout 2c61dcc1f03440541cdc0729f7a375b2a9ea3005
 cd microduck_local && uv sync            # needs https://docs.astral.sh/uv/
+# The shipped policies left the microduck repo for the Hub on 2026-09-03
+# (ef4becf); the pinned sha above still vendors them, any later one does not.
+# This Hub revision is byte-identical to the vendored set — see setup.sh.
+uv run hf download pollen-robotics/microduck-policies \
+  alpha_walking.onnx alpha_stand.onnx alpha_sitstand.onnx alpha_ground_pick.onnx \
+  ball_kick_left.onnx ball_kick_right.onnx roller.onnx roller_crouch.onnx roulade.onnx \
+  --revision 088524a64e2557dc453256b6071dbb9d23888802 --local-dir ../microduck/policies --quiet
 cd ../duck-viewer && npm install
 ```
 
 `microduck_local` finds the MJCF models in `../microduck_rl` (override with
 `MICRODUCK_RL_DIR`) and the shipped reference policies in
-`../microduck/policies/`.
+`../microduck/policies/` (downloaded from
+[pollen-robotics/microduck-policies](https://huggingface.co/pollen-robotics/microduck-policies)
+by `setup.sh`; upstream no longer vendors them).
 
 ## Read the repo-local docs first — they are authoritative
 

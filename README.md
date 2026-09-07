@@ -66,11 +66,21 @@ Node 20+, ~3 GB of disk for the checkouts and models.
 
 ```bash
 git clone https://github.com/jonathanhawkins/microduck-lab && cd microduck-lab
-git clone https://github.com/pollen-robotics/microduck        # shipped policies, docs
-git clone https://github.com/pollen-robotics/microduck_rl     # MJCF models, official stack
+./scripts/setup.sh    # upstream clones at the pinned shas, the shipped policies
+                      # from the Hub, uv sync, npm install, a smoke test
 
+# …or by hand — the same steps, which AGENTS.md "Setup" lists with the pinned shas:
+git clone https://github.com/pollen-robotics/microduck        # robot software, docs
+git clone https://github.com/pollen-robotics/microduck_rl     # MJCF models, official stack
 cd microduck_local
 uv sync
+# The shipped policies moved off the microduck repo and onto the Hub
+# (https://huggingface.co/pollen-robotics/microduck-policies); the harness
+# expects them in ../microduck/policies/. Same pinned revision as setup.sh:
+uv run hf download pollen-robotics/microduck-policies \
+  alpha_walking.onnx alpha_stand.onnx alpha_sitstand.onnx alpha_ground_pick.onnx \
+  ball_kick_left.onnx ball_kick_right.onnx roller.onnx roller_crouch.onnx roulade.onnx \
+  --revision 088524a64e2557dc453256b6071dbb9d23888802 --local-dir ../microduck/policies --quiet
 uv run --with pytest pytest tests/        # contract tests, should be all green
 
 # train your first walking policy (a few minutes on an M-series Mac)
