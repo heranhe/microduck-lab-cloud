@@ -125,6 +125,13 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
                 sp = prev_spot.get(d.id)
                 pending.append({"t": w.t, "duck": d.id, "foot": intent.skill,
                                 "u": b._hunt_u, "heading": oyaw, "ball0": (bx, by),
+                                # The goal this duck attacks, so a kick can be
+                                # scored as toward / away from it and as "would
+                                # cross our own mouth" (kickselect's labels).
+                                "goal": None if b.goal is None else [round(b.goal[0], 3), round(b.goal[1], 3)],
+                                "select": None if getattr(b, "last_select", None) is None else
+                                {"p_goal": round(b.last_select.p_goal, 3), "p_own": round(b.last_select.p_own, 3),
+                                 "value": round(b.last_select.value, 3)},
                                 "ahead": round(ahead, 3), "side": round(side, 3),
                                 "spot_dist": None if sp is None else round(math.dist((ox, oy), sp[:2]), 3),
                                 "spot_ball": None if sp is None else round(math.dist((bx, by), sp[:2]), 3),
@@ -163,6 +170,8 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             dx, dy = bx - k["ball0"][0], by - k["ball0"][1]
             dist = math.hypot(dx, dy)
             rec = {"seed": seed, "t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
+                   "ball0": [round(k["ball0"][0], 3), round(k["ball0"][1], 3)], "goal": k["goal"],
+                   "select": k["select"], "u": round(k["u"], 4),
                    "dist": round(dist, 3), "ahead": k["ahead"], "side": k["side"],
                    "moved": k["moved"], "plan_age": k["plan_age"], "head_yaw": k["head_yaw"],
                    "head_jt": k.get("head_jt"), "neck_jt": k.get("neck_jt"), "trunk_pitch": k.get("trunk_pitch"),

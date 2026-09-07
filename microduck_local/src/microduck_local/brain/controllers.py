@@ -830,6 +830,56 @@ class ChaseParams:
     # verdict (4 kicks and 2 falls a run for 1.0 goals against 1.75 for the
     # cone rule) with an instrument that can see the mechanism.
     aim_mode: str = "clamp"
+    # CHOOSE THE KICK BY SIMULATING ITS OUTCOMES (brain/kickselect.py;
+    # roadmap Track 4 s6 A.3, after Mellmann et al., RoboCup 2016). With this
+    # on, `_plan` does not take the clamp's line as given: it lays a fan of
+    # candidate lines inside the same `aim_max` window, rolls each out
+    # `kick_select_n` times under the measured kick model (kick_speed,
+    # ball_decel, the per-foot exit angles and their scatter), throws away
+    # any line with a sample in our own net, and takes the one most likely
+    # to score, ties broken by a potential field over the pitch. The clamp's
+    # own line is always one of the candidates, so with nothing to choose
+    # between them this reproduces the clamp.
+    #
+    # SHIPS ON (2026-09-07). Measured with scripts/probe_kick_line.py, 24
+    # discovery seeds + 24 fresh, both arms of each block forked on one tree
+    # state, scoring every kick that moved the ball by the line it actually
+    # travelled (proportions over kick events, the power table's rule):
+    #
+    #                                 discovery        fresh          pooled 48
+    #   aimed AWAY from their goal    25% -> 5%        39% -> 20%     31% -> 13%   z=-2.19 p=0.029
+    #   on a line through THEIR mouth  9% -> 18%        4% -> 24%      7% -> 21%   z=+2.05 p=0.040
+    #   on a line through OUR mouth    6% -> 0%         4% -> 4%       5% -> 2%    p=0.39 (too rare)
+    #   whiffs                        52% -> 66%       50% -> 55%     51% -> 61%   p=0.14
+    #   effective kicks a seed                                        -0.17        p=0.41
+    #   back-kicks a seed, paired                                     -0.23        p=0.016
+    #
+    # Same direction on both blocks for the two numbers it was built to
+    # move, no significant cost, the whiff gap shrinking on fresh seeds.
+    # The second brain-tier change to ship on a fresh-seed confirmation
+    # after the aim clamp, and it explains why kicksBack stalled at 34%
+    # after that clamp: see `_select_kick_line` - the planner's foot rule
+    # let the exit angle bend every clamped kick back toward the ball's
+    # own heading. `kick_select=0` is the pre-2026-09-07 brain.
+    kick_select: bool = True
+    kick_select_n: int = 30
+    kick_select_fan: float = 0.35     # rad between candidate lines across the aim window
+    kick_select_dir_sd: float = 0.6   # rad of scatter about the exit line (measured 33-49 deg, 4b)
+    kick_select_v_sd: float = 0.3     # m/s of scatter about kick_speed
+    # The own-goal tolerance. Mellmann refused any line with ONE own-goal
+    # sample, on kicks repeatable to a few degrees; ours scatter 35 deg, so
+    # that rule refuses everything near our own mouth and the selector would
+    # only ever fall back to the clamp. Measured over the fan (200 samples
+    # a line, this floor's model), the share of kicks that end in OUR net:
+    #
+    #   ball 0.4 m from our mouth, facing it:  +-60 deg off the line of sight  0.07-0.09
+    #                                          +-40  0.20-0.27   +-20  0.44-0.51   straight  0.66
+    #   ball 1.3 m out, facing it:             +-60  0.02-0.04   +-40  0.03-0.07   straight  0.28
+    #   mid-pitch or nearer, facing theirs:    every line <= 0.01
+    #
+    # 0.10 admits the edge lines the clamp itself would take and refuses
+    # everything that puts a fifth or more of kicks in our own net.
+    kick_select_t_own: float = 0.10
     # THE HEAD. `_gaze` is a law that puts a floor ball at range `rng` on the
     # camera's axis; `head_down` clamps the command it may ask for, and the
     # gaze is applied while WALKING at a ball inside `head_range`.
@@ -1745,6 +1795,8 @@ class Chase:
         self.kicks = 0
         self.pushes = 0
         self.declines = 0          # swings refused by `kick_side_max`
+        self._kick_rng = None              # kick_select's generator, seeded from the duck id on first use
+        self.last_select = None            # kick_select's last Verdict, for probes and the /sim page
         self.attack: float | None = None                            # heading of the goal it attacks (first odom yaw)
         self.kickoff()
 
@@ -1910,12 +1962,19 @@ class Chase:
         foot = "kick_left" if rel >= 0 else "kick_right"
         if self.spot is not None and self.spot[2] in ("kick_left", "kick_right") and abs(rel) < 0.3:
             foot = self.spot[2]                                   # hysteresis: nearly on the line, keep the foot
+        foot_sel: str | None = None
+        if p.kick_select and not far and self.goal is not None and self.bounds is not None and self.goal_w > 0:
+            chosen = self._select_kick_line(odom, (bx, by), los, u)
+            if chosen is not None:
+                u, foot_sel = chosen
         side = -p.kick_side if foot == "kick_left" else p.kick_side     # stand to the ball's other side
         # The body heading that sends the kick along u (the map's deflection
         # is in the body frame, so the spot is laid out in that heading too).
         h = _wrap(u - (p.kick_deflect_left if foot == "kick_left" else p.kick_deflect_right))
         return (bx - p.kick_ahead * math.cos(h) - side * math.sin(h),
                 by - p.kick_ahead * math.sin(h) + side * math.cos(h), foot, h, "kick")
+        if foot_sel is not None:
+            foot = foot_sel                                       # kick_select chose the foot for its exit angle
 
     def _board_ball(self, t: float) -> tuple[tuple[float, float] | None, float]:
         """The freshest ball sighting on the team board, and its age. A duck
@@ -2587,6 +2646,47 @@ class Chase:
         pitch or without a mouth width."""
         if self.goal is None or self.goal_w <= 0:
             return math.inf
+    def _select_kick_line(self, odom, ball_xy, los: float, u_clamp: float) -> tuple[float, str] | None:
+        """The kick line and FOOT `_plan` should lay its spot for, chosen by
+        simulated outcomes (brain/kickselect.py) from a fan of lines inside
+        the aim window `los +- aim_max` - the same walk-round the clamp
+        permits, so nothing here costs a longer line-up - with BOTH feet
+        offered on every line. The foot matters more than it looks: the
+        planner's own rule takes the foot on the ball's side of the line,
+        and that foot's exit angle (+23.6 / -28.7 deg) bends the kick back
+        toward the line of sight, so a 60 deg clamp turn leaves an outcome
+        only ~30 deg off the ball's own heading. Measured (this scenario is
+        locked in tests/test_kickselect.py): facing our own mouth from
+        0.4 m, every line with the planner's foot puts 50-83% of kicks in
+        our own net; the other foot on the same edge line puts in 7%. None
+        when every candidate is too risky: the caller keeps the clamp's
+        line and its own foot."""
+        from .kickselect import (  # noqa: PLC0415  (only a pitch pays for it)
+            KickModel,
+            Pitch,
+            select,
+        )
+        p = self.p
+        if self._kick_rng is None:
+            import zlib  # noqa: PLC0415
+            self._kick_rng = np.random.default_rng(zlib.crc32(self.duck_id.encode() or b"duck"))
+        x, y, _ = odom
+        bx, by = ball_xy
+        lines: list[tuple[float, str]] = []
+        k = max(1, int(round(p.aim_max / max(p.kick_select_fan, 1e-3))))
+        for i in range(-k, k + 1):
+            u = _wrap(los + i * p.kick_select_fan)
+            if abs(_wrap(u - los)) > p.aim_max + 1e-9:
+                continue
+            lines += [(u, "kick_left"), (u, "kick_right")]
+        lines += [(u_clamp, "kick_left"), (u_clamp, "kick_right")]   # the clamp's own line is always a candidate
+        model = KickModel(speed=p.kick_speed, speed_sd=p.kick_select_v_sd, dir_sd=p.kick_select_dir_sd,
+                          decel=max(p.ball_decel, 0.02), exit_left=p.kick_exit_left, exit_right=p.kick_exit_right)
+        pitch = Pitch(self.bounds[0], self.bounds[1], self.goal_w, 1.0 if self.goal[0] >= 0 else -1.0)
+        v = select((bx, by), lines, model, pitch, self._kick_rng, n=p.kick_select_n, t_own=p.kick_select_t_own)
+        self.last_select = v
+        return None if v is None else (v.heading, v.foot)
+
         gx = self.goal[0]
         a1 = math.atan2(-self.goal_w / 2 - by, gx - bx)
         a2 = math.atan2(self.goal_w / 2 - by, gx - bx)

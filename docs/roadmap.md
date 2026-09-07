@@ -2924,29 +2924,54 @@ this stack has none of them.
       A real training track, not a knob. → **what settles it:** plan age at
       the swing (3.0 s) and ball-drift-since-plan (0.21 m) from
       `probe_kick_line.py`, which an in-walk kick should cut to under a step.
-- [ ] **A.3 Choose the kick by simulating its outcomes — and stop kicking
-      out.** Mellmann, Schlotter & Blum (Berlin United, RoboCup 2016):
-      before every kick, each candidate action (long, short, sidekick left,
-      sidekick right, turn) is forward-simulated **30 times**, sampling the
-      kick's velocity and direction from Gaussians fitted to real kicks and
-      the ball from the tracker's uncertainty; each sample rolls out under a
-      rolling-resistance model (d_max = v₀²/2c_R·g) until it stops or hits
-      the goal box or an obstacle; each is labelled INFIELD / OUT / GOALOPP /
-      GOALOWN / COLLISION; actions with p(INFIELD ∪ GOALOPP) < 0.85 or any
-      own-goal sample are discarded, and the rest are scored by a potential
-      field (linear slope to the opponent goal, Gaussian attractor at it,
-      Gaussian repulsor at own goal). On labelled video of real games it cut
-      kicks out at the opponent goal line **5× (6.1% → 1.2%)** and raised
-      strategically-good kicks from 67% to 78%. **We already own every number
-      this needs**: v₀ = 1.4 m/s and decel 0.04 m/s² (`predict_s` note), the
-      per-foot exit angles +23.6°/−28.7° AND their sd 33–49° (4b), the goal
-      geometry, and now +1.90°/cm of side offset. Our `aim_mode="clamp"` is a
-      one-line deterministic version of the potential field with no notion
-      of risk; the ledger's `kicksBack` (34% after the clamp) and out-of-play
-      counts are exactly what this would move. → **what settles it:**
-      `kicksBack` as a proportion over kick events (24 seeds), plus a new
-      `kicksOut` in `PitchMetrics`. Cheap: it is a function over numbers the
-      brain has, called once per settle.
+- [x] **A.3 Choose the kick by simulating its outcomes — BUILT, CONFIRMED
+      ON FRESH SEEDS, SHIPS ON (2026-09-07).** `brain/kickselect.py`, after
+      Mellmann, Schlotter & Blum (RoboCup 2016): `_plan` lays a fan of kick
+      lines inside the clamp's own `aim_max` window — so no line-up gets
+      longer — offers BOTH feet on every line, rolls each candidate out 30
+      times under the measured kick model (1.4 m/s ± 0.3, `ball_decel`, the
+      per-foot exit angles ± 35° of scatter), labels each sample by where
+      it stops (their mouth, our mouth, the field of play — the pitch is
+      walled, there is no OUT), refuses any line with more than 10% of its
+      samples in our own net, and takes the most likely to score, ties
+      broken by a potential field over the pitch. Locked by
+      `tests/test_kickselect.py`; inert when off (24 000 ticks, 0 differ).
+
+      **What building it found.** The planner's foot rule takes the foot on
+      the ball's side of the line, and that foot's exit angle bends the
+      kick back toward the ball's own heading — a 60° clamp turn leaves an
+      outcome ~30° off the line of sight. Facing our own mouth from 0.4 m,
+      every line with the planner's foot put 50–83% of kicks in our own
+      net; the OTHER foot on the edge line put in 7%. That is why
+      `kicksBack` stalled at 34% after the aim clamp (3.1): the clamp
+      turned the line and the foot turned it back. The foot is the lever,
+      and the selector is what chooses it. Mellmann's zero own-goal
+      tolerance also had to go — his kicks repeated to a few degrees, ours
+      scatter 35°, and at zero tolerance the selector refused every line
+      near our mouth and only ever fell back to the clamp; 0.10 admits the
+      lines the clamp itself would take.
+
+      **Measured**, `probe_kick_line.py` (rows now carry the ball, the goal
+      and the verdict), 24 discovery + 24 fresh seeds, each block's arms
+      forked on one tree state, every kick that moved the ball scored by
+      the line it actually travelled:
+
+      | | discovery 0–23 | fresh 100–123 | pooled 48 |
+      |---|---|---|---|
+      | kicks aimed AWAY from their goal | 25% → 5% (p=0.048) | 39% → 20% | **31% → 13%, p=0.029** |
+      | kicks on a line through THEIR mouth | 9% → 18% | 4% → 24% | **7% → 21%, p=0.040** |
+      | kicks on a line through OUR mouth | 6% → 0% | 4% → 4% | 5% → 2% (too rare) |
+      | whiffs | 52% → 66% | 50% → 55% | 51% → 61% (p=0.14) |
+      | back-kicks a seed, paired | | | −0.23, p=0.016 |
+      | effective kicks a seed, paired | | | −0.17, p=0.41 |
+
+      Both numbers it was built to move replicate in direction on the fresh
+      block and resolve pooled; the whiff cost shrinks from 14 points to 5
+      on fresh seeds and does not resolve. The second brain-tier change to
+      ship on a fresh-seed confirmation, after the aim clamp. The absolute
+      levels are on the parallel session's uncommitted floor; both arms of
+      every block share it. Goals remain unjudgeable at this seed count
+      (4.1.5), as always.
 - [ ] **A.4 Dribbling — carry the ball rather than stop and strike it.**
       B-Human ships a `Dribble` behaviour beside kicks; Dribble Master (2025)
       learns dribbling with RL using **a virtual camera in the simulator that
@@ -3312,6 +3337,14 @@ tests):
   obs/reward change to measure on its own.
 - The shipped `alpha_walking.onnx` under the new env: 0/10 falls, tracking
   0.171 m/s (unchanged); with pushes on, ~1 fall per 120 pushes.
+- One measured test moved with the physics: `test_mapping.py`'s
+  loop-closure bound. With fresh gyro obs the walker turns 98° instead of
+  83° on the same 2.2 s turn command (126° asked), so the corner is
+  approached at another heading and the wall-line matcher gets 0.21 →
+  0.16 m instead of 0.21 → 0.12. Replaying the identical actions with
+  stale sensing gives 0.146 (one seed of three equal), so it is the path,
+  not the matcher's inputs; the bound is re-measured (0.85 × raw, 0.68 of
+  the map on a wall) and the docstring says why.
 - **The Linux x86_64 goldens in `tests/goldens/` are invalidated** (obs
   bytes and RNG draw order moved); re-record with
   `MICRODUCK_RECORD_GOLDENS=1` on Linux before CI goes green.
