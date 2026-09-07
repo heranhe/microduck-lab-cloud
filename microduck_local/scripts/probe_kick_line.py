@@ -41,6 +41,16 @@ from microduck_local.world.metrics import CARRY_S
 MAP_DEG = {"kick_left": 21.6, "kick_right": -11.0}   # the bench measurement, for comparison
 
 
+def _head_joint(w, d) -> float | None:
+    """This duck's head-pitch joint angle (rad) right now, or None."""
+    import mujoco
+    for j in range(w.model.njnt):
+        n = mujoco.mj_id2name(w.model, mujoco.mjtObj.mjOBJ_JOINT, j)
+        if n and n.startswith(d.adr.prefix) and n.endswith("head_pitch"):
+            return float(w.data.qpos[w.model.jnt_qposadr[j]])
+    return None
+
+
 def wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
@@ -78,6 +88,11 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             # ball again. Both halves of "which way is it going" in one
             # number.
             if intent.skill in MAP_DEG and b._hunt_u is not None:
+                # The head-pitch JOINT at the instant of the swing - not the
+                # command. The kick skill was trained from a level head
+                # (~+0.39 rad) and whiffs 12/12 from +0.97 (benched), so a
+                # gaze that leaves the joint down explains a whiff directly.
+                hj = _head_joint(w, d)
                 # Where the ball REALLY is relative to the kicking body at the
                 # instant of the swing. The sweet spot is `kick_ahead` 0.08 m
                 # forward and `kick_side` 0.06 m to the foot's side, and the
@@ -105,7 +120,8 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
                                 round(math.dist((bx, by), plan[d.id][1]), 3),
                                 "plan_age": None if plan.get(d.id) is None else
                                 round(w.t - plan[d.id][0], 2),
-                                "head_yaw": round(prev_yaw.get(d.id, 0.0), 4)})
+                                "head_yaw": round(prev_yaw.get(d.id, 0.0), 4),
+                                "head_jt": None if hj is None else round(hj, 3)})
             # Remember when this duck last laid a spot, and where the ball was
             # then: the plan's age and the ball's drift since are the two ways
             # a line-up goes wrong that aiming cannot fix.
@@ -133,6 +149,7 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             rec = {"seed": seed, "t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
                    "dist": round(dist, 3), "ahead": k["ahead"], "side": k["side"],
                    "moved": k["moved"], "plan_age": k["plan_age"], "head_yaw": k["head_yaw"],
+                   "head_jt": k.get("head_jt"),
                    "spot_dist": k["spot_dist"], "spot_ball": k["spot_ball"]}
             if dist < 0.10:                    # the swing missed: no line to speak of
                 out.append({**rec, "err": None, "off_heading": None})
@@ -209,6 +226,13 @@ def main() -> None:
         if len(mv):
             print(f"  ball drift since the spot was planned  median {np.median(mv):.3f} m "
                   f"(90th {np.percentile(mv, 90):.3f});  plan age median {np.median(ag):.2f} s")
+        hj = np.array([r["head_jt"] for r in sweet if r.get("head_jt") is not None])
+        if len(hj):
+            wh = np.array([r.get("err") is None for r in sweet if r.get("head_jt") is not None])
+            print(f"  head-pitch JOINT at the swing  median {np.median(hj):+.2f} rad "
+                  f"(level ~ +0.39; the kick whiffs 12/12 from +0.97);  whiff when joint > 0.6: "
+                  f"{wh[hj > 0.6].mean() if (hj > 0.6).any() else float('nan'):.0%} of {(hj > 0.6).sum()}, "
+                  f"when <= 0.6: {wh[hj <= 0.6].mean() if (hj <= 0.6).any() else float('nan'):.0%} of {(hj <= 0.6).sum()}")
         sdst = np.array([r["spot_dist"] for r in sweet if r.get("spot_dist") is not None])
         sbal = np.array([r["spot_ball"] for r in sweet if r.get("spot_ball") is not None])
         if len(sdst):

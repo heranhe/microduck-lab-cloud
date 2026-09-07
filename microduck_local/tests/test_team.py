@@ -346,7 +346,7 @@ def test_the_head_yaw_is_gated_on_forward_clearance_and_fails_open():
 
 
 def _settling(still: bool, neck: float = 0.0, yaw: bool = False,
-              heading_off: float = 0.0, stale: float | None = None, n: int = 9):
+              heading_off: float = 0.0, stale: float | None = None, n: int = 9, **params):
     """Walk a Chase in to the settle in front of a kick, the way the sim does:
     a fixed ball at 0.5 m, a detection consistent with the pose every step,
     and the duck closing half the remaining gap to its own spot. Returns the
@@ -357,7 +357,7 @@ def _settling(still: bool, neck: float = 0.0, yaw: bool = False,
     `stale` moves the TRACK that far out in front before one last step: the
     plan gone stale, which is the ordinary case in play (spot-to-ball a
     median 0.285 m over 191 kicks) and the one a held gaze is for."""
-    b = Chase(ChaseParams(gaze_still=still, gaze_neck=neck, gaze_yaw=yaw), goal=(1.5, 0.0))
+    b = Chase(ChaseParams(gaze_still=still, gaze_neck=neck, gaze_yaw=yaw, **params), goal=(1.5, 0.0))
     x, y, head = 0.0, 0.0, 0.0
     out = None
     for i in range(n):
@@ -372,6 +372,40 @@ def _settling(still: bool, neck: float = 0.0, yaw: bool = False,
         track.xy = (x + stale * math.cos(head), y + stale * math.sin(head))
         out = b.step(_senses(0.1 * n - 0.05, None, odom=(x, y, head)))   # still inside settle_s
     return b, out
+
+
+def test_the_settle_raises_the_head_for_its_last_settle_head_level_seconds():
+    """`settle_head_level`: the held gaze puts the ball on the sweet spot and
+    leaves the head where the kick skill cannot swing (benched: 12/12 whiffs
+    from a head joint at +0.97 rad, 0/12 level, and 0.2-0.3 s of a level
+    command brings it back). So for the last `settle_head_level` seconds of
+    the settle the gaze is dropped and the head goes level. Early in the
+    settle the gaze holds exactly as before; 0 is the shipped brain."""
+    def settle_then(knob: float):
+        """Into the settle with a short walk-in (n=7 leaves most of the
+        0.4 s settle ahead), the plan gone stale the way play leaves it, then
+        one step early in the settle and one inside its last 0.2 s. Times
+        are taken from `b.t_state`, when the settle was entered."""
+        b, _ = _settling(True, neck=1.0, n=7, settle_head_level=knob)
+        assert b.state == "settle"
+        t_last, x, y, head = b._poses[-1]
+        early, late = b.t_state + 0.15, b.t_state + 0.25              # 0.4 - 0.2 = 0.2 is the boundary
+        assert early > t_last, (early, t_last)                          # time runs forward from the helper
+        track = b.tracker.best("ball", t_last, min_hits=1)
+        track.xy = (x + 0.22 * math.cos(head), y + 0.22 * math.sin(head))
+        a = b.step(_senses(early, None, odom=(x, y, head)))
+        assert b.state == "settle"
+        c = b.step(_senses(late, None, odom=(x, y, head)))
+        assert b.state == "settle"
+        return a, c
+    a, c = settle_then(0.2)
+    assert a.head[1] > 0.35 and a.head[0] < 0.0, a.head                 # early: gazing, the neck carrying it
+    # The last 0.2 s: neck and pitch level for the swing. The YAW slot is
+    # the head-tracking gaze (predict_s ships on) and is not this knob's.
+    assert c.head[0] == 0.0 and c.head[1] == 0.0, c.head
+    a, c = settle_then(0.0)
+    assert a.head[1] > 0.35 and c.head[1] > 0.35, (a.head, c.head)      # knob off: the gaze holds throughout
+    assert ChaseParams().settle_head_level == 0.0
 
 
 def test_chase_holds_the_gaze_through_the_settle_only_when_gaze_still_is_on():

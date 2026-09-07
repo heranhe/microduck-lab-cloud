@@ -2570,42 +2570,6 @@ What is left, in the order it is worth doing:
    fully dipped (`docs/camera-hardware.md` §3). The kick spot is inside it.
    Everything above is worth keeping because it says, with numbers, that the
    rules have been tried.
-8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
-   and a result, all measured.
-
-   *It was a dead knob alone.* `gaze_yaw` only produces a non-zero yaw
-   inside the `gaze_still` branch, and `_gaze_range` — the only thing it
-   widens — is called from nowhere else. 24 000 duck-ticks over three seeds,
-   4 157 in lineup/settle where it would apply: **0 differ** with it on. The
-   same shape as the `head_yaw_when="always"` dead knob in 4e, caught the
-   same way, before a battery was spent on it. "Default unknown" was too
-   generous — with `gaze_still` off there was nothing to be unknown about.
-
-   *Its blocker had a fix.* `gaze_still` was parked partly on the ToF hazard
-   that 4e has since measured and gated, so `yaw_clear` now covers the gaze
-   yaw too (proven bit-for-bit inert on the shipped brain). That made the
-   real arm runnable: `gaze_still=1, gaze_neck=1, gaze_yaw=1`.
-
-   *And it does not help.* Three arms x 24 seeds x 300 s of 2v2 on
-   `scripts/probe_kick_line.py`, against the shipped 178 kicks / 23.0%
-   whiffs / 1.7% on-spot:
-
-   | arm | kicks | whiff | on-spot | spot-to-ball | plan age |
-   |---|---|---|---|---|---|
-   | shipped | 178 | 23.0% | 1.7% | 0.285 m | 3.03 s |
-   | held gaze on the neck | 204 | 23.5% (p=0.91) | 0.5% | 0.315 m | 3.05 s |
-   | + gaze yaw | 211 | 19.9% (p=0.45) | 0.5% | 0.307 m | 2.96 s |
-
-   It reaches the 37° endpoint and nothing it was meant to fix moves.
-   Paired per seed the absolute aim error is flat as well (p=0.93). What it
-   DOES move is the systematic aim: **+12.4°, 95% CI [+6.2, +18.6]**,
-   against a shipped brain whose interval spans zero. A systematic bias
-   lands on every kick the same way, so that is a real cost for nothing.
-
-9. **Head tracking does not bias the kick** — settled 2026-09-06 because it
-   was a risk to what 4e shipped, and it is closed, not open. Median head
-   yaw at the swing is 0.000 on the shipped brain (the duck is back on the
-   line by then), mean aim error −0.1° with an interval spanning zero,
 
    **CORRECTED THE SAME EVENING — it is not a sensing limit after all, and
    the sensor the duck has can see the spot.** Three measurements, all on
@@ -2700,6 +2664,100 @@ problems this duck has — it just solved some of them a decade ago.
 #### A. The kick — what the field does about the exact limit 4b/4c/item 7 hit
 
 Item 7 closed with: the kick is a **sensing** limit. The camera sits 23 cm
+
+   **The settle that raises the head — BUILT, and measured off on the new
+   floor (2026-09-06, late).** `ChaseParams.settle_head_level`: for the
+   last N seconds of the settle the gaze is dropped and the head commanded
+   level, so the swing starts from the pose the kicks were trained in. Its
+   lead was benched first: head+neck gazed down, then level for `lead`,
+   then `kick_left` on the sweet spot —
+
+   | lead | head joint at the swing | whiff |
+   |---|---|---|
+   | 0.0 s | +0.93 | 100% |
+   | 0.1 s | +0.64 | 100% |
+   | **0.2 s** | +0.45 | **0%** |
+   | 0.3 s | +0.41 | 0% |
+
+   In play (24 seeds, four arms forked on one tree state, TODAY'S floor):
+
+   | arm | kicks | whiff | on-spot | ball ahead | effective kicks/seed vs shipped |
+   |---|---|---|---|---|---|
+   | shipped | 47 | 34% | 23% | 0.117 m | – |
+   | gaze (still+neck) | 50 | 76% (p<0.001) | 6% | 0.138 | −0.79 (p=0.003) |
+   | gaze + raise 0.3 s | 42 | 52% (p=0.08) | 10% | 0.163 | −0.46 (p=0.11) |
+   | gaze + raise, settle 0.6 s | 39 | 44% (p=0.37) | 5% | 0.128 | −0.38 (p=0.25) |
+
+   The raise does what it was built to do — with it the head-pitch joint at
+   the swing is a median **+0.41 rad on all 42 kicks, none above 0.6** — and
+   it recovers about half the gaze's whiffs. It does not beat shipped, and
+   two things say why. First, **the floor fix did more for placement than
+   any brain rule this session**: on the old floor shipped put 2% of kicks
+   on the sweet spot with the ball drifting 0.213 m off a 3 s plan; on the
+   new floor it puts **23%** there with 0.072 m of drift, because a ball
+   that stops within a stride does not leave the plan behind. The gaze's
+   whole advantage was drift, and the floor took it. Second, a residual the
+   head does not explain: with the head level and the ball inside 10 cm,
+   shipped whiffs **0 of 14** and the raise arm **4 of 12** — so the gaze
+   line carries a second cost at the swing, not measured, most likely the
+   neck joint (only head-pitch was recorded) or the posture the walker
+   arrives in after a line-up walked head-down. `settle_head_level` ships
+   at 0, with the mechanism confirmed and the lead benched, for the day the
+   kick skill is retrained head-down and the gaze becomes worth holding.
+
+   **The next lever, on the new floor, with its number.** Whiff by where
+   the ball was ahead of the trunk at the swing, shipped brain:
+
+   | ball ahead | 0–10 cm | 10–15 | 15–25 | >25 |
+   |---|---|---|---|---|
+   | whiff | **0%** (n=14) | 27% (15) | 71% (7) | 75% (8) |
+
+   The kick reaches ~10 cm. `kick_ahead` = 0.08 plans the spot 8 cm behind
+   the ball and the residual drift is 4–7 cm, so the median ball is 11.7 cm
+   ahead at the swing and a third of them are past the reach. That is the
+   whole whiff on this floor, and it is not a sensing problem: either plan
+   the spot closer (`kick_ahead` 0.05?) or decline on AHEAD rather than
+   side (`kick_side_max` gates the wrong axis here). Judge on whiff and
+   on-spot with `probe_kick_line.py` — the shipped floor baseline is
+   `runs/raise/k_ship2.jsonl` — and only after the parallel session's
+   floor change is committed, since every number in this paragraph is on
+   its uncommitted physics.
+8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
+   and a result, all measured.
+
+   *It was a dead knob alone.* `gaze_yaw` only produces a non-zero yaw
+   inside the `gaze_still` branch, and `_gaze_range` — the only thing it
+   widens — is called from nowhere else. 24 000 duck-ticks over three seeds,
+   4 157 in lineup/settle where it would apply: **0 differ** with it on. The
+   same shape as the `head_yaw_when="always"` dead knob in 4e, caught the
+   same way, before a battery was spent on it. "Default unknown" was too
+   generous — with `gaze_still` off there was nothing to be unknown about.
+
+   *Its blocker had a fix.* `gaze_still` was parked partly on the ToF hazard
+   that 4e has since measured and gated, so `yaw_clear` now covers the gaze
+   yaw too (proven bit-for-bit inert on the shipped brain). That made the
+   real arm runnable: `gaze_still=1, gaze_neck=1, gaze_yaw=1`.
+
+   *And it does not help.* Three arms x 24 seeds x 300 s of 2v2 on
+   `scripts/probe_kick_line.py`, against the shipped 178 kicks / 23.0%
+   whiffs / 1.7% on-spot:
+
+   | arm | kicks | whiff | on-spot | spot-to-ball | plan age |
+   |---|---|---|---|---|---|
+   | shipped | 178 | 23.0% | 1.7% | 0.285 m | 3.03 s |
+   | held gaze on the neck | 204 | 23.5% (p=0.91) | 0.5% | 0.315 m | 3.05 s |
+   | + gaze yaw | 211 | 19.9% (p=0.45) | 0.5% | 0.307 m | 2.96 s |
+
+   It reaches the 37° endpoint and nothing it was meant to fix moves.
+   Paired per seed the absolute aim error is flat as well (p=0.93). What it
+   DOES move is the systematic aim: **+12.4°, 95% CI [+6.2, +18.6]**,
+   against a shipped brain whose interval spans zero. A systematic bias
+   lands on every kick the same way, so that is a real cost for nothing.
+
+9. **Head tracking does not bias the kick** — settled 2026-09-06 because it
+   was a risk to what 4e shipped, and it is closed, not open. Median head
+   yaw at the swing is 0.000 on the shipped brain (the duck is back on the
+   line by then), mean aim error −0.1° with an interval spanning zero,
 up pointing forward, so the ball on the kick spot is inside a 23 cm blind
 radius, and every rule for placing, aiming and choosing the swing failed for
 that one reason. The field has met this limit and has four answers, and
@@ -2988,6 +3046,96 @@ and its [WalkKickEngine](https://docs.b-human.de/coderelease2024/motion/motion-w
      training has ever lied to it.
 
   The fully honest version — render the head camera and run the actual
+## Physics audit — 2026-09-06 (after the ball that never stopped)
+
+The ball's zero rolling resistance (a coefficient set on a condim-3 geom,
+Track 4 item 0) prompted a sweep of every other physics parameter in the
+harness, measured, not read. Probe scripts were scratch; the numbers are
+here. Nothing below was changed — each item is a decision to make.
+
+**World layer (the /sim rooms and the pitch).**
+
+1. **In `collision="walk"` — every builtin scenario — a duck is two 13 mm
+   soles.** Only the foot meshes carry contact bits against the world
+   (`compose.py`, upstream's `robot_walk.xml` by design, for flat-floor
+   training). Measured: a ball thrown at trunk height passes THROUGH a
+   standing duck touching only its ankles; a person capsule at 0.3 m/s walks
+   through the trunk (its surface 19.7 cm inside) and displaces the duck by
+   7 mm; two walkers head-on overlap to 3.1 cm trunk-to-trunk (11.3 cm
+   under `all`); a walker into a wall gets its beak 9 cm inside the board
+   before the feet touch. The `_sense_bumps` docstring ("only the FEET carry
+   collision geometry") is also wrong for duck-duck: trunk/leg slivers
+   collide with each other's. `collision="all"` fixes all of it and the
+   shipped walker is bit-identical on a flat floor under `walk` and `all`
+   (max |Δqpos| = 0 over 10 s × 3 seeds with shoves) — but see 2 first.
+   Severity: high for anything eval-tidy / eval-pitch / the person-follow
+   brains measure about contact, crowding and bumps.
+2. **A mocap person is an infinite-mass teleporter.** Under `collision="all"`
+   a person at 0.8 m/s flings the duck at 4 m/s (233 mm penetration, 7 falls
+   in 2.5 s); at 0.3 m/s it shoves it 1.1 m. Moving the mocap per substep
+   does not help; a softer capsule only trims it to 2.3 m/s. `yield_m > 0`
+   (the polite walker) never touches. Before adopting 1, make `yield_m`
+   default nonzero or cap person speed, and say in `Person` that a mocap
+   body cannot yield momentum.
+3. **The ball is dead off the boards**: restitution 0.06 at a 1.4 m/s kick
+   (a real hollow ball is ~0.5–0.7). Not a wrong setting — restitution is
+   unmodelled by MuJoCo's soft contact at the default solref; a much stiffer
+   ball contact gets to ~0.27. Matters for eval-pitch: a kicked ball sits at
+   the wall.
+4. **Toy sliding friction 0.8 is inert** (`compose.py`): equal priority with
+   the floor takes the element-wise max, so toys slide at μ = 1.0 (measured
+   0.41 cm from 0.3 m/s, the μ = 1.0 prediction). Their torsional/rolling
+   entries are on condim 3 too — harmless for boxes. Give toys `priority=1`
+   if 0.8 is meant, else delete the numbers.
+5. `_sense_bumps` reads only the last substep's contact list (a touch under
+   four substeps is invisible). Low.
+
+Clean, measured: solver/integrator options equal `scene_walk.xml` (and
+upstream's implicitfast/10-iteration choice makes zero difference to the
+trajectory); every duck body mass/inertia bit-identical to upstream; box
+and ball inertia right; timing (200 substeps per 50 ticks, one ctrl write a
+tick); the grasp weld (0.4 mm drift, clean release); toys and boxes rest;
+ToF/detector rays see what they should and never the duck's own body; the
+goal line has 3.5 cm of margin and registers slow rolls.
+
+**Training layer (walk env, BAM, vec env).** No silently-ignored
+parameter: every geom is condim 3 with default torsional/rolling values;
+friction and mass randomisation land in the model (300/300 episodes);
+joint order, DEFAULT_POSE, obs frames, action sign, the body-velocity frame
+(the `mj_objectVelocity` trap) and the 50 Hz cadence are all right; BAM is
+line-exact against upstream's `bam/actuator.py` and within 8% of the
+XL330-M288 datasheet. The gaps are fidelity, not errors:
+
+6. **IMU obs are one substep (5 ms) stale** relative to the joint blocks in
+   the same vector: `walk_env` reads gyro / projected gravity after the 4th
+   `mj_step` without an `mj_forward`. mjlab forwards once before
+   observations. Measured with `alpha_walking.onnx`: gyro median 0.06,
+   max 0.76 rad/s off (obs noise band ±0.03); gravity max 0.0097 (band
+   ±0.01). `infer_policy.py` has the same staleness, so the deployed policy
+   sees it too. One `mj_forward` after the substep loop makes obs,
+   termination and the height check consistent.
+7. **Integrator**: local runs Euler / 100 Newton iterations (XML default,
+   same as `infer_policy.py`); upstream trains on implicitfast / 10.
+   Measured zero trajectory difference on the walker — record it as a
+   deliberate choice or match it.
+8. **`train-walk` trains on the XML PD servo by default** (`train.py` passes
+   no `actuator`; BAM only reaches `train_behavior` forward behaviors).
+   XML stall 0.96 Nm vs BAM's firmware-limited 0.64; Coulomb 0.005 vs
+   0.011–0.024; 0–1 ctrl-step lag vs 3–6 substeps. Documented, not silent,
+   but the default is the low-fidelity path.
+9. **Domain randomisation missing vs upstream**: velocity pushes (±0.3 m/s
+   every 3–6 s), trunk/head CoM offsets, armature ±10%, IMU misalignment
+   ≤6°, encoder bias, 0–1 step sensor delay, joint-limit penalty; trunk
+   mass DR is mass-only (upstream scales inertia too), and
+   `body_subtreemass` goes stale after the write (dynamics unaffected).
+10. **Open hardware questions** (not sim bugs): the 1.75 A current clamp
+    BAM models may not exist on the robot — `robotd` never writes
+    `operating_mode` or `current_limit`, and in plain Position mode the
+    XL330's ceiling is the PWM limit (~0.98 Nm, the XML's 0.96). One
+    register read settles it. And `robotd.toml` now defaults to
+    `action_scale 0.9` with low-pass filters that the pinned upstream sha
+    and this harness never train with.
+
   `duck_detect` ONNX — subsumes all three and is far slower per step. Worth it
   only once the behavior is otherwise settled.
 - **Other things to find.** The slot layout is not ball-specific: the same

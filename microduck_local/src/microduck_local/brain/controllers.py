@@ -975,6 +975,30 @@ class ChaseParams:
     # or a settle that raises the head in its last ~0.3 s (not built).
     # Roadmap Track 4 item 7, the correction.
     gaze_still: bool = False
+    # The settle that raises the head: with `gaze_still` the line-up gaze
+    # puts the ball on the sweet spot and leaves the head pitched where the
+    # kick skill cannot swing (benched: 12 of 12 whiffs from a head joint at
+    # +0.97 rad, 0 of 12 level). For the LAST this many seconds of the
+    # settle the gaze is dropped and the head commanded level, so the swing
+    # starts from the pose the kicks were trained in. It costs the sighting
+    # for that long - but the duck is standing and the ball is still, so
+    # 0.3 s of a stationary ball is not 3 s of a rolling one. 0 = off (the
+    # gaze holds through the swing, as measured off above). Only means
+    # anything with `gaze_still`.
+    #
+    # BENCHED: 0.2 s of level command brings the head joint from +0.93 to
+    # +0.45 and the whiff from 12/12 to 0/12; 0.3 s gives +0.41. IN PLAY on
+    # the rolling-resistance floor (24 seeds, four arms on one tree): with
+    # 0.3 the joint at the swing is +0.41 on all 42 kicks - the mechanism
+    # works - and the gaze's whiff falls 76% -> 52% (44% with settle_s 0.6).
+    # It still does not beat the shipped brain (34% whiff, 23% on-spot):
+    # on that floor a stopped ball no longer drifts off the plan, so the
+    # gaze's placement advantage is gone, and a residual whiff the head does
+    # not explain remains (ball inside 10 cm, head level: shipped 0/14,
+    # this 4/12 - the neck, or the posture after a head-down walk-in; not
+    # measured). Ships at 0 with the lead known, for the day the kick skill
+    # is retrained head-down. Roadmap Track 4 item 7.
+    settle_head_level: float = 0.0
     # …and yaw the head at it too while standing. The pitch alone cannot
     # reach the endpoint: on the kick spot the ball is 0.08 m ahead and
     # 0.06 m to the kicking foot's side, which is 37° off the nose, and the
@@ -2174,7 +2198,9 @@ class Chase:
             # (`vx > 0`, below) dropped the head. Aimed at the ball's last
             # PLACE rather than its last range, because the duck has walked
             # since. The application gate still refuses a turn in place.
-            if p.gaze_still and gaze_at is None and self.state in ("lineup", "settle"):
+            raising = (p.settle_head_level > 0.0 and self.state == "settle"
+                       and t - self.t_state >= p.settle_s - p.settle_head_level)
+            if p.gaze_still and gaze_at is None and self.state in ("lineup", "settle") and not raising:
                 got = self._gaze_range(odom, ball)
                 if got is not None:
                     gaze_at, gaze_yaw = got
