@@ -2699,12 +2699,51 @@ What is left, in the order it is worth doing:
    **And this is where measuring on this floor stops, deliberately.** The
    parallel session's world files (`compose.py`, `scenario.py`,
    `arena.py`) changed again at 19:36:29, between the sweep's second and
-   third arms, so only shipped-vs-0.06 shares a tree state; two "shipped"
-   arms 25 minutes apart gave 47 and 66 kicks on the same seeds with no
-   code difference visible in the files whose mtimes were recorded — so
-   something unrecorded moved. Every number in this item from "Baseline
-   note" down is provisional until that session commits. Re-baseline
-   then; the arms and the probes are all here to re-run.
+   third arms, so only shipped-vs-0.06 shares a tree state; three "shipped"
+   forks tonight (19:10, 19:33, 19:46) gave 34%, 39% and 63% whiff on the
+   same seeds as `compose.py` and `arena.py` kept moving under them. Every
+   number in this item from "Baseline note" down is provisional until that
+   session commits. Re-baseline then; the arms and the probes are all here
+   to re-run — `probe_kick_line.py` now records the head joint, the neck
+   joint and the trunk pitch at every swing.
+
+   **The residual is the NECK, and the retrain is specified to the line.**
+   With `settle_head_level` 0.3 the head joint is level at the swing
+   (+0.41) but the neck is still low — +0.17 against shipped's +0.21, lower
+   quartile +0.14 — and pooled over both arms with the ball inside 15 cm:
+
+   | neck joint at the swing | n | whiff |
+   |---|---|---|
+   | +0.00 .. +0.15 | 12 | **83%** |
+   | +0.15 .. +0.30 | 51 | 43% |
+
+   Trunk pitch is flat (−0.004 vs −0.006) and is not it. The kick skill
+   needs BOTH `neck_pitch` and `head_pitch` near HOME, and upstream's kick
+   task (`microduck_ball_kick_env_cfg.py`) resets every joint within
+   ±0.05 rad of HOME and pulls the neck home with `pose_stand_neck` — it
+   never saw a gazing start. **The port is
+   `docs/patches/microduck_rl-kick-head-down.patch`**: two reset events
+   after `reset_robot_joints`, `head_pitch` offset (0, +0.60) and
+   `neck_pitch` offset (−0.30, 0) — the gaze pose is head +0.95 / neck
+   −0.05 against HOME +0.39 / +0.21 — leaving `pose_stand_neck` to pay the
+   policy to bring the head home as it kicks. Validated: the patched cfg
+   constructs on CPU with the events ordered `reset_robot_joints` → head →
+   neck → `set_ground_state`, and `git apply --check` passes against the
+   pinned `badc4e7`. It needs the GPU stack to train (AGENTS.md: the
+   sim2real recipe is upstream's); nothing here can run it.
+
+   **Why it was not retrained locally tonight.** The local `train-behavior`
+   has no kick behaviour, and cannot have one cheaply: `MicroduckWalkEnv`
+   knows two scenes, neither with a ball, and upstream's `scene_ball.xml`
+   adds a free joint that changes `nq` — every joint slice, keyframe and
+   observation index the local env assumes. `distill` collects its
+   observations in the walk env under walking commands, off-distribution
+   for a standing kick. A local kick behaviour is a real track (ball
+   scene + nq handling, distill-in-the-kick-env as the warm start, reward
+   = ball speed along the heading + support foot planted + settle, the
+   head/neck spawned across the gaze range) and its product would still
+   need the upstream retrain to reach the robot. The patch is the part
+   that reaches the robot.
 8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
    and a result, all measured.
 
@@ -2741,42 +2780,6 @@ What is left, in the order it is worth doing:
    was a risk to what 4e shipped, and it is closed, not open. Median head
    yaw at the swing is 0.000 on the shipped brain (the duck is back on the
    line by then), mean aim error −0.1° with an interval spanning zero,
-up pointing forward, so the ball on the kick spot is inside a 23 cm blind
-radius, and every rule for placing, aiming and choosing the swing failed for
-that one reason. The field has met this limit and has four answers, and
-this stack has none of them.
-
-- [x] **A.1 A second, downward camera — built as an ABLATION, and it did its
-      job: it proved the real camera is enough.** The NAO carries two
-      identical cameras in the forehead: the top one pitched 1.2° down, the
-      bottom one **39.7°** down, for one reason — to see the ground at the
-      feet. The Microduck has one camera and is not getting a second, so
-      `DetectorSpec.bottom_pitch_deg` (`MICRODUCK_CAMERA=bottom_pitch_deg=…`)
-      exists only to ask the simulator whether the blind radius is what the
-      kick was waiting on. Off by default, never a baseline, proven
-      bit-for-bit inert at 0. The answer: **swings the brain can see 34% →
-      97%**, estimate r = 0.48 → 0.96, median error 2.3 → 1.2 cm. So
-      sensing was the limit — *at the shipped head pose.* The geometry it
-      forced out is the useful part: the duck's lens is 25 cm up, half the
-      NAO's, so the NAO's 39.7° reaches a floor ball at 20 cm but the 10 cm
-      kick spot needs about **60°**, and nothing on the duck occludes it.
-      Which means the head the robot HAS, pitched with the neck (~52°),
-      already sees the spot — measured at 65% coverage on the real camera,
-      and then the kick skill fails from that pose. The whole chain is in
-      item 7's correction. Nothing more to build here; the ablation stays
-      as the tool that settles "is it the sensor?" in one run.
-- [ ] **A.2 In-walk kicks — kick inside the gait instead of stop, settle,
-      swing.** B-Human's `WalkKickEngine` defines every kick as a set of
-      relative ball positions converted into **walk step sizes**: a pre-step
-      that does not touch the ball, then a kick step, interpolated inside one
-      gait cycle, with `maxXDeviation`/`maxYDeviation` bounds that refuse a
-      kick the ball has drifted out of and a `maxClipBeforeAbort` that aborts
-      one the step cannot reach. NimbRo's 2023 AdultSize winner does the same
-      with parametric waveform kicks blended into the walk. The advantage is
-      exactly our failure mode: our duck plans a spot, walks to it, **stands
-      for `settle_s` and swings at a plan that is 3.0 s old and 0.21 m stale**
-      (4b). An in-walk kick has no settle and no separate kick policy; the
-      decision is made on the last step, with the freshest sighting there is.
    against +2.4° with tracking off. Paired per seed every kick metric is
    flat: kicks p=0.68, whiffs p=0.64, |error| p=0.73, ball-ahead p=0.21.
 
@@ -2849,6 +2852,42 @@ Item 7 closed with: the kick is a **sensing** limit. The camera sits 23 cm
       learns dribbling with RL using **a virtual camera in the simulator that
       models the field of view**, plus rewards for *active sensing* — keeping
       the ball in view — and transfers to hardware. The point for us:
+up pointing forward, so the ball on the kick spot is inside a 23 cm blind
+radius, and every rule for placing, aiming and choosing the swing failed for
+that one reason. The field has met this limit and has four answers, and
+this stack has none of them.
+
+- [x] **A.1 A second, downward camera — built as an ABLATION, and it did its
+      job: it proved the real camera is enough.** The NAO carries two
+      identical cameras in the forehead: the top one pitched 1.2° down, the
+      bottom one **39.7°** down, for one reason — to see the ground at the
+      feet. The Microduck has one camera and is not getting a second, so
+      `DetectorSpec.bottom_pitch_deg` (`MICRODUCK_CAMERA=bottom_pitch_deg=…`)
+      exists only to ask the simulator whether the blind radius is what the
+      kick was waiting on. Off by default, never a baseline, proven
+      bit-for-bit inert at 0. The answer: **swings the brain can see 34% →
+      97%**, estimate r = 0.48 → 0.96, median error 2.3 → 1.2 cm. So
+      sensing was the limit — *at the shipped head pose.* The geometry it
+      forced out is the useful part: the duck's lens is 25 cm up, half the
+      NAO's, so the NAO's 39.7° reaches a floor ball at 20 cm but the 10 cm
+      kick spot needs about **60°**, and nothing on the duck occludes it.
+      Which means the head the robot HAS, pitched with the neck (~52°),
+      already sees the spot — measured at 65% coverage on the real camera,
+      and then the kick skill fails from that pose. The whole chain is in
+      item 7's correction. Nothing more to build here; the ablation stays
+      as the tool that settles "is it the sensor?" in one run.
+- [ ] **A.2 In-walk kicks — kick inside the gait instead of stop, settle,
+      swing.** B-Human's `WalkKickEngine` defines every kick as a set of
+      relative ball positions converted into **walk step sizes**: a pre-step
+      that does not touch the ball, then a kick step, interpolated inside one
+      gait cycle, with `maxXDeviation`/`maxYDeviation` bounds that refuse a
+      kick the ball has drifted out of and a `maxClipBeforeAbort` that aborts
+      one the step cannot reach. NimbRo's 2023 AdultSize winner does the same
+      with parametric waveform kicks blended into the walk. The advantage is
+      exactly our failure mode: our duck plans a spot, walks to it, **stands
+      for `settle_s` and swings at a plan that is 3.0 s old and 0.21 m stale**
+      (4b). An in-walk kick has no settle and no separate kick policy; the
+      decision is made on the last step, with the freshest sighting there is.
       dribbling keeps the ball in continuous contact inside the walk, so
       there is never a 3 s blind approach to a stale spot. Our `push` mode
       (`push_beyond`, a "push spot squarely behind the ball") is a crude
@@ -3119,13 +3158,6 @@ XL330-M288 datasheet. The gaps are fidelity, not errors:
     `action_scale 0.9` with low-pass filters that the pinned upstream sha
     and this harness never train with.
 
-  `duck_detect` ONNX — subsumes all three and is far slower per step. Worth it
-  only once the behavior is otherwise settled.
-- **Other things to find.** The slot layout is not ball-specific: the same
-  four head slots and scan clock would serve "find the other duck" (upstream
-  wants precise bearing for gaze and following) or "find the charging dock".
-  A second target is a cheap test of whether the recipe generalizes or whether
-  it memorized a ball-sized blob.
 ## Later / parked
 
 - **Port `find_ball` to an mjlab cfg** and retrain on GPU in upstream
@@ -3162,3 +3194,10 @@ XL330-M288 datasheet. The gaps are fidelity, not errors:
      training has ever lied to it.
 
   The fully honest version — render the head camera and run the actual
+  `duck_detect` ONNX — subsumes all three and is far slower per step. Worth it
+  only once the behavior is otherwise settled.
+- **Other things to find.** The slot layout is not ball-specific: the same
+  four head slots and scan clock would serve "find the other duck" (upstream
+  wants precise bearing for gaze and following) or "find the charging dock".
+  A second target is a cheap test of whether the recipe generalizes or whether
+  it memorized a ball-sized blob.

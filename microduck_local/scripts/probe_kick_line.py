@@ -41,14 +41,26 @@ from microduck_local.world.metrics import CARRY_S
 MAP_DEG = {"kick_left": 21.6, "kick_right": -11.0}   # the bench measurement, for comparison
 
 
-def _head_joint(w, d) -> float | None:
-    """This duck's head-pitch joint angle (rad) right now, or None."""
+def _joint(w, d, suffix: str) -> float | None:
+    """This duck's joint angle (rad) for the joint whose name ends in `suffix`."""
     import mujoco
     for j in range(w.model.njnt):
         n = mujoco.mj_id2name(w.model, mujoco.mjtObj.mjOBJ_JOINT, j)
-        if n and n.startswith(d.adr.prefix) and n.endswith("head_pitch"):
+        if n and n.startswith(d.adr.prefix) and n.endswith(suffix):
             return float(w.data.qpos[w.model.jnt_qposadr[j]])
     return None
+
+
+def _head_joint(w, d) -> float | None:
+    """This duck's head-pitch joint angle (rad) right now, or None."""
+    return _joint(w, d, "head_pitch")
+
+
+def _trunk_pitch(w, d) -> float:
+    """Trunk pitch from projected gravity (rad, nose-down positive)."""
+    import math
+    g = d.projected_gravity(w.data)
+    return float(math.atan2(-g[0], -g[2]))
 
 
 def wrap(a: float) -> float:
@@ -93,6 +105,8 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
                 # (~+0.39 rad) and whiffs 12/12 from +0.97 (benched), so a
                 # gaze that leaves the joint down explains a whiff directly.
                 hj = _head_joint(w, d)
+                nj = _joint(w, d, "neck_pitch")
+                tp = _trunk_pitch(w, d)
                 # Where the ball REALLY is relative to the kicking body at the
                 # instant of the swing. The sweet spot is `kick_ahead` 0.08 m
                 # forward and `kick_side` 0.06 m to the foot's side, and the
@@ -121,7 +135,9 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
                                 "plan_age": None if plan.get(d.id) is None else
                                 round(w.t - plan[d.id][0], 2),
                                 "head_yaw": round(prev_yaw.get(d.id, 0.0), 4),
-                                "head_jt": None if hj is None else round(hj, 3)})
+                                "head_jt": None if hj is None else round(hj, 3),
+                                "neck_jt": None if nj is None else round(nj, 3),
+                                "trunk_pitch": round(tp, 3)})
             # Remember when this duck last laid a spot, and where the ball was
             # then: the plan's age and the ball's drift since are the two ways
             # a line-up goes wrong that aiming cannot fix.
@@ -149,7 +165,7 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             rec = {"seed": seed, "t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
                    "dist": round(dist, 3), "ahead": k["ahead"], "side": k["side"],
                    "moved": k["moved"], "plan_age": k["plan_age"], "head_yaw": k["head_yaw"],
-                   "head_jt": k.get("head_jt"),
+                   "head_jt": k.get("head_jt"), "neck_jt": k.get("neck_jt"), "trunk_pitch": k.get("trunk_pitch"),
                    "spot_dist": k["spot_dist"], "spot_ball": k["spot_ball"]}
             if dist < 0.10:                    # the swing missed: no line to speak of
                 out.append({**rec, "err": None, "off_heading": None})

@@ -1,0 +1,40 @@
+--- a/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py
++++ b/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py
+@@ -432,6 +432,37 @@
+     # velstand policy, whose settled stand won't match HOME exactly.
+     cfg.events["reset_robot_joints"].params["position_range"] = (-0.05, 0.05)
+ 
++    # HEAD-DOWN STARTS (microduck-lab, 2026-09-06). In play the swing is
++    # decided while the robot is LOOKING AT THE BALL: the line-up gaze that
++    # puts the ball on the sweet spot leaves head_pitch at ~+0.95 rad and
++    # neck_pitch at ~-0.05 (HOME: +0.39 / +0.21). The shipped kicks, trained
++    # from HOME +-0.05 only, whiff 12/12 from that pose and 0/12 level; in
++    # play a head brought level in 0.3 s still whiffs while the neck lags
++    # (neck +0.00..0.15 at the swing: 83% whiff; +0.15..0.30: 43%). So the
++    # kick must be able to START from a gazing pose. Two extra offsets on
++    # top of the +-0.05 above, one per joint because the two go opposite
++    # ways; the existing pose_stand_neck reward then pays the policy to
++    # bring the head home as it kicks. Ramp the ranges via curriculum if
++    # the from-scratch run stalls; start at half these if it does.
++    cfg.events["reset_head_down"] = EventTermCfg(
++        func=mdp.reset_joints_by_offset,
++        mode="reset",
++        params={
++            "position_range": (0.0, 0.60),          # head_pitch: level .. gazing at the feet
++            "velocity_range": (0.0, 0.0),
++            "asset_cfg": SceneEntityCfg("robot", joint_names=(r".*head_pitch.*",)),
++        },
++    )
++    cfg.events["reset_neck_down"] = EventTermCfg(
++        func=mdp.reset_joints_by_offset,
++        mode="reset",
++        params={
++            "position_range": (-0.30, 0.0),         # neck_pitch: level .. carrying the gaze
++            "velocity_range": (0.0, 0.0),
++            "asset_cfg": SceneEntityCfg("robot", joint_names=(r".*neck_pitch.*",)),
++        },
++    )
++
+     # Standing-only start (reuses the standup env's ground-state machinery for
+     # the noisy upright spawn: random yaw ± tilt noise, z near equilibrium).
+     cfg.events["set_ground_state"] = EventTermCfg(

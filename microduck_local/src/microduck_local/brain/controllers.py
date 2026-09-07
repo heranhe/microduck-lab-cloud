@@ -1006,6 +1006,18 @@ class ChaseParams:
     # this 4/12 - the neck, or the posture after a head-down walk-in; not
     # measured). Ships at 0 with the lead known, for the day the kick skill
     # is retrained head-down. Roadmap Track 4 item 7.
+    #
+    # THE RESIDUAL IS THE NECK (measured after the above, neck and trunk
+    # recorded at every swing): with this at 0.3 the head joint is level
+    # (+0.41) but the neck is still low - +0.17 against the shipped +0.21,
+    # lower quartile +0.14 - and pooled over both arms with the ball inside
+    # 15 cm, a neck at +0.00..0.15 whiffs 83% and at +0.15..0.30 whiffs 43%
+    # (corr -0.26); trunk pitch is flat (-0.004 vs -0.006) and is not it.
+    # `neck_gain` (0.43) is what carries the gaze and it returns slower than
+    # the head. So the kick skill needs BOTH neck_pitch and head_pitch near
+    # HOME, which is what the upstream port randomises
+    # (docs/patches/microduck_rl-kick-head-down.patch). A longer raise
+    # (0.5 s) is the brain-side alternative, not measured.
     settle_head_level: float = 0.0
     # …and yaw the head at it too while standing. The pitch alone cannot
     # reach the endpoint: on the kick spot the ball is 0.08 m ahead and
