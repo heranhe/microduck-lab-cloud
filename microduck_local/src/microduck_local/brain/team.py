@@ -548,6 +548,12 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     # nothing here changes - bit for bit - unless a battery says otherwise
     # through MICRODUCK_CHASE. Same by-name rule as above.
     if duck_spec.odom != "ideal" and "localize" not in ChaseParams.env_names():
+    # The shared ball (roadmap C.3): the board fuses sightings when the
+    # brain's knob says so - every teammate writes the same value.
+    if team is not None:
+        team.fuse = bool((out.get("p") or ChaseParams.from_env()).fuse_ball)
+    return out
+
         out["p"] = replace(out.get("p") or ChaseParams.from_env(), localize=True)
 
 def kickoff_brains(brains: dict, teams: dict[str, "Team"], world=None) -> None:

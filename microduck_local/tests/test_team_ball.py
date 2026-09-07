@@ -7,7 +7,7 @@ import math
 
 from microduck_local.brain.controllers import Chase, ChaseParams
 from microduck_local.brain.runtime import Senses
-from microduck_local.brain.team import Team
+from microduck_local.brain.team import Team, brain_kwargs
 from microduck_local.sensors.detector import Detection, DetectionFrame
 
 
@@ -39,6 +39,22 @@ def test_a_single_sighting_is_returned_as_it_is_and_stale_ones_drop_off():
     tm.claim("d0", 10.0, 0.5, (0.50, 0.00), ball_sigma=0.05)
     assert tm.ball(10.0) == (0.50, 0.00)
     assert tm.ball(10.0 + 3 * tm.stale_s + 0.1) is None
+
+
+def test_the_roster_sets_the_boards_fusion_from_the_brains_knob(monkeypatch):
+    from microduck_local.world import World, make_pitch
+    sc = make_pitch(per_side=2)
+    w = World(sc, seed=1)
+    assert ChaseParams().fuse_ball is False                       # ships off until the ledger is read
+    teams = {}
+    for d in sc.ducks:
+        brain_kwargs(d, w, teams)
+    assert all(tm.fuse is False for tm in teams.values())
+    monkeypatch.setenv("MICRODUCK_CHASE", "fuse_ball=1")
+    teams = {}
+    for d in sc.ducks:
+        brain_kwargs(d, w, teams)
+    assert all(tm.fuse is True for tm in teams.values())
 
 
 def test_the_chase_brain_sends_its_tracks_sigma_with_the_claim():

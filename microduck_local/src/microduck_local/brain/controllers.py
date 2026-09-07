@@ -1001,6 +1001,17 @@ class ChaseParams:
     # away from the body in the way. Off until measured.
     kick_select_opps: bool = False
     kick_select_obs_r: float = 0.15
+    # THE SHARED BALL (roadmap Track 4 s6 C.3): with `fuse_ball` on, the
+    # team board's ball is the inverse-variance mean of every live
+    # sighting, each weighed by its sender's sigma (C.1) grown by its age
+    # (`Team.fuse`; brain_kwargs sets it on the board from this knob). The
+    # estimate measured closer (odometry probe, 8 seeds x 300 s of 2v2:
+    # when two ducks saw the ball the fused one was nearer the truth 70%
+    # of the time at ideal odometry, 61% at datasheet; 95th percentile
+    # 0.253 -> 0.236 m and 0.883 -> 0.685 m; the median unchanged, since
+    # three samples in four have one sighting). Off until the ledger says
+    # the play does not mind.
+    fuse_ball: bool = False
     push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
     push_dir_sd: float = 0.5         # rad of spread across the side offsets the walk meets the ball at
     # THE FIELD (roadmap Track 4 s6 D.2, brain/field.py): with `support_field`
