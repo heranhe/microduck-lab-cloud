@@ -169,7 +169,6 @@ def evaluate(ball, u: float, action: str, model: KickModel, pitch: Pitch,
     `BLOCK_COST`: a ball at an opponent's feet is not a pass."""
     samples = roll_out(ball, u + model.exit(action), model, pitch, rng, n, obstacles, obs_r)
     labels = [s[0] for s in samples]
-    infield = [s[1] for s in samples if s[0] == INFIELD]
     received = 0
     vals = []
     for label, (px, py) in samples:
