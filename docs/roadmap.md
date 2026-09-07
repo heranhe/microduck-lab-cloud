@@ -3540,9 +3540,29 @@ this stack has none of them.
       8, nothing significant either way. Null, leaning the wrong way. So
       the field is for the ROLES it was measured on: `field_plain` (off)
       keeps the role-less supporter on its post, and `support_field`
-      concerns the striker and the midfielder. Last arm before the
-      default flips: 2v2 with roles (defender + striker, the lab's
-      `pitch-2v2`), which no field battery had run — running.
+      concerns the striker and the midfielder.
+
+      **2v2 with roles** (defender + striker, the lab's `pitch-2v2`, 24
+      seeds, field on v off): ball progress 0.148 → 0.061 (**p=0.002**,
+      worse on 18 of 24), advance 0.261 → 0.214 (p=0.15), kicks 2.4 → 3.4
+      a run (p=0.024) that go nowhere, possession flat, crowd −0.04 and
+      spread +0.17 (p=0.09) — the shape better, the ball worse. With no
+      midfielder the striker is the only duck in the field, and a striker
+      held wide of the lane on a two-duck side's smaller pitch is a
+      striker the kick does not reach.
+
+      **Verdict (2026-09-07).** The field pays on one roster and costs on
+      the other two: a side with a midfielder (3v3 with roles) gains
+      possession +2.1 s/min (+15%, pooled 48 seeds, p=0.004) with the
+      midfielder behind the ball and no shape cost; a defender + striker
+      pair loses progress (p=0.002); the role-less roster is null. So
+      `support_field` ships OFF as a knob and `brain_kwargs` turns it on
+      — with `field_mid_ahead=−0.5` — for a roster WITH A MIDFIELDER,
+      the one it measured a win on, unless the command line names it (the
+      same by-name rule as the localiser's auto-on). `pitch-3v3` in the
+      lab gets it; `pitch-2v2` and `eval-pitch` do not, bit for bit.
+      Under push-first (when the floor lands) the level mid is the shape
+      prize and the config names `field_mid_ahead=0` itself.
 #### E. Learning — where the field found it pays, and where it did not
 
 - [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**

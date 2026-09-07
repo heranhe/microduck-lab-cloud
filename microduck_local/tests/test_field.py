@@ -165,6 +165,28 @@ def test_a_role_less_supporter_keeps_its_post_unless_field_plain_says_otherwise(
     assert ChaseParams().field_plain is False
 
 
+def test_the_roster_turns_the_field_on_only_for_a_side_with_a_midfielder(monkeypatch):
+    from microduck_local.brain.team import brain_kwargs
+    from microduck_local.world import World, make_pitch
+    monkeypatch.delenv("MICRODUCK_CHASE", raising=False)
+    three = make_pitch(per_side=3, formation=True)                          # defender, midfielder, striker
+    w3 = World(three, seed=1)
+    p3 = brain_kwargs(three.ducks[0], w3, {})["p"]
+    assert p3.support_field is True and p3.field_mid_ahead == -0.5
+    two = make_pitch(per_side=2, formation=True)                            # defender, striker: measured worse
+    w2 = World(two, seed=1)
+    kw2 = brain_kwargs(two.ducks[0], w2, {})
+    assert (kw2.get("p") or ChaseParams()).support_field is False
+    plain = make_pitch(per_side=3)                                          # no roles: measured null
+    wp = World(plain, seed=1)
+    assert (brain_kwargs(plain.ducks[0], wp, {}).get("p") or ChaseParams()).support_field is False
+    monkeypatch.setenv("MICRODUCK_CHASE", "support_field=0")                # the command line is the caller's
+    assert brain_kwargs(three.ducks[0], w3, {})["p"].support_field is False
+    monkeypatch.setenv("MICRODUCK_CHASE", "field_mid_ahead=0")
+    p3b = brain_kwargs(three.ducks[0], w3, {})["p"]
+    assert p3b.support_field is True and p3b.field_mid_ahead == 0.0
+
+
 def test_field_params_are_read_off_the_environment():
     p = ChaseParams.from_env("support_field=1,field_wide=0.4,field_lane=0.25,field_mid_ahead=-0.5")
     assert p.support_field is True and p.field_wide == 0.4 and p.field_lane == 0.25

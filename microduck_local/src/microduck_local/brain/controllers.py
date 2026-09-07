@@ -1053,6 +1053,17 @@ class ChaseParams:
     # support_field=1) for when the floor is committed. `field_mid_ahead`
     # is the midfielder's `ahead` (0 = level with the ball; negative =
     # behind it), the one number the kick case turns on.
+    #
+    # THE MIDFIELDER BEHIND THE BALL (field_mid_ahead=-0.5), measured
+    # across rosters: 3v3 with roles, possession +3.0 s/min (p=0.001) on
+    # the discovery block and +1.3 (p=0.26) on the fresh one, pooled 48
+    # +2.1 (+15%, p=0.004), shape flat, back line +0.08 m (the OTHER
+    # side's defender drawn off its post); 2v2 with roles (defender +
+    # striker), ball progress 0.148 -> 0.061 (p=0.002, worse on 18 of
+    # 24) with more kicks that go nowhere; the role-less roster null,
+    # leaning the wrong way. So the knob ships OFF here and brain_kwargs
+    # turns it on for a roster WITH A MIDFIELDER - the one it measured a
+    # win on - unless the command line names it.
     support_field: bool = False
     field_lane: float = 0.2
     field_wide: float = 0.5

@@ -547,6 +547,19 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     # already agree exactly and every soccer number was measured there, so
     # nothing here changes - bit for bit - unless a battery says otherwise
     # through MICRODUCK_CHASE. Same by-name rule as above.
+        out["p"] = replace(out.get("p") or ChaseParams.from_env(), localize=True)
+    # The supporter FIELD (roadmap D.2) ships for the roster it measured a
+    # win on and nowhere else: a side WITH A MIDFIELDER (3v3 with roles:
+    # possession +2.1 s/min, +15%, pooled 48 seeds p=0.004, shape flat,
+    # with the midfielder held behind the ball) - a defender + striker
+    # pair lost ball progress under it (0.148 -> 0.061, p=0.002) and the
+    # role-less roster measured null. Same by-name rule as above: a knob
+    # named on the command line is the caller's.
+    if (duck_spec.team and any(x.team == duck_spec.team and x.role == "midfielder" for x in world.scenario.ducks)
+            and "support_field" not in ChaseParams.env_names()):
+        p = out.get("p") or ChaseParams.from_env()
+        out["p"] = replace(p, support_field=True,
+                           field_mid_ahead=(p.field_mid_ahead if "field_mid_ahead" in ChaseParams.env_names() else -0.5))
     if duck_spec.odom != "ideal" and "localize" not in ChaseParams.env_names():
     # The shared ball (roadmap C.3): the board fuses sightings when the
     # brain's knob says so - every teammate writes the same value.
