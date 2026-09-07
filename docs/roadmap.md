@@ -2847,8 +2847,43 @@ What is left, in the order it is worth doing:
    with `MICRODUCK_SKILL_KICK_RIGHT/LEFT=runs/<run>/policy.onnx`. In play,
    with the gaze HELD through the swing (`gaze_still=1,gaze_neck=1`) —
    the configuration that put the ball in view at 0.14 s before the swing
-   and whiffed on the shipped kick — is the measurement running now (2v2
-   kick probe for the whiff, 3v3 ledger; runs/localkick). These are
+   and whiffed on the shipped kick — was measured next (runs/localkick;
+   2v2 kick probe, 24 seeds; 3v3 ledger with roles, 24 seeds; every arm
+   forked with the others on one package copy):
+
+   | at the swing (2v2) | shipped | shipped + gaze held | **local kicks** | **local + gaze held** |
+   |---|---|---|---|---|
+   | kicks | 64 | 56 | 45 | 50 |
+   | whiff (< 10 cm of travel) | 66% | 73% | **42%** | **34%** |
+   | …of the head-down swings | — | 84% of 38 | — | 37% of 38 |
+   | on the sweet spot | 5% | 5% | **16%** | 6% |
+   | ball drift since the plan | 0.165 m | 0.154 | **0.063** | 0.126 |
+   | ball ahead of the trunk | 0.172 m | 0.180 | 0.127 | 0.164 |
+   | aim error of the kicks that connected | 29° (sd 34) | 69° (sd 83) | 30° (sd 49) | 43° (sd 52) |
+
+   | 3v3 ledger | shipped | local kicks | local + gaze held | shipped + gaze held |
+   |---|---|---|---|---|
+   | possession s/min | 16.94 | 16.98 | 17.10 | 16.39 |
+   | ball progress | 0.084 | 0.072 (p=0.71) | **0.012 (p=0.023)** | 0.036 (p=0.12) |
+   | goals / own goals | 6 / 1 | 6 / 2 | 5 / 1 | 5 / 2 |
+   | back-kicks a run | 0.83 | **0.46** (p=0.12) | 0.75 | 0.71 |
+   | kicks a run / falls | 3.33 / 1 | 2.63 / 2 | 2.88 / 4 | 3.04 / 3 |
+
+   **The local kicks halve the whiff in play** (66 → 42%, two-proportion
+   p≈0.01; 34% with the gaze held, p≈0.001) — the 42% that remain are
+   the ball off the spot and moving, not the pose, as the bench's 0% from
+   every pose says — land on the sweet spot three times as often, and
+   leave the ledger where it was (possession, progress, goals flat;
+   back-kicks fewer). **The gaze held through the swing still costs the
+   ball**, with either kick: progress 0.084 → 0.012 (p=0.023) with the
+   local kicks, 0.036 with the shipped; the kicks that connect head-down
+   aim worse (43–69° against 29–30°) — the head-down line-up puts the
+   ball somewhere the plan did not expect. So the kicks are worth
+   having and the held gaze is still not, which is the same verdict item
+   7 reached with one fewer reason. A fresh block (seeds 100–123) of the
+   kick probe is running before the local kicks become the sim's
+   default; `support_gaze` — the supporter looking at the ball, which is
+   most of what the eye sees on /sim — is measured beside it. These are
    local policies for the SIM; the robot's kick still ships from upstream
    (the patch), as AGENTS.md's sim2real rule requires.
 
