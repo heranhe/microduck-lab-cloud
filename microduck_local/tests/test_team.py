@@ -1139,3 +1139,45 @@ def test_the_brains_branch_priority_is_the_one_written_down():
     order = [key[h] for h in heads if h in key]
     assert order == list(Chase.PRIORITY[:-1]), order          # every branch, in this order; search is the fall-through
     assert Chase.PRIORITY[-1] == "search" and "search" in chain
+
+
+def test_cover_that_holds_the_role_leaves_through_the_hysteresis():
+    """A cover attacker (off its zone, `give_up_s` quicker than the owner)
+    stays a candidate once it holds the role, until the owner is quicker by
+    the same margin — so the role moves back through `attacker`'s hold, not
+    the moment the cover's cost jitters back across the line it came in on.
+    Measured in play (roadmap Track 4 item 11): without this the role
+    flipped ~300 times a 3v3 run, median spell 0.09 s."""
+    tm = Team("cream")
+    tm.jobs, tm.half_x, tm.attack_sign = {"d0": "defender", "d1": "striker"}, 1.5, 1.0
+    ball = (1.0, 0.0)                                                   # the striker's half
+    tm.claim("d1", 1.0, 2.5, ball, (-1.4, 0.0, 0.0))                    # owner, ~4 s away, nose the wrong way
+    tm.claim("d0", 1.0, 0.12, ball, (1.05, 0.0, math.pi))                # defender on it: cover
+    assert tm.attacker(1.0) == "d0"
+    # The cover is now only a LITTLE quicker than the owner: it still holds.
+    tm.claim("d1", 1.1, 0.4, ball, (0.6, 0.0, 0.0))
+    tm.claim("d0", 1.1, 0.3, ball, (1.05, 0.0, math.pi))
+    assert tm.cost("d1", 1.1) - tm.cost("d0", 1.1) < tm.give_up_s
+    assert "d0" in tm.candidates(1.1) and tm.attacker(1.1) == "d0"
+    # The owner becomes clearly quicker: the role moves back by `hold_s`, not at once.
+    for k in range(0, 15):
+        t = 1.2 + 0.1 * k
+        tm.claim("d1", t, 0.15, ball, (1.15, 0.0, math.pi))               # on it, facing it: cost 0
+        tm.claim("d0", t, 0.9, ball, (1.9, 0.0, math.pi))                 # 1.7 s away: past switch_s, short of give_up_s
+        att = tm.attacker(t)
+        if k == 0:
+            assert att == "d0"
+    assert tm.attacker(2.6) == "d1"
+    # Out of the play altogether (an owner give_up_s quicker): the cover is dropped at once.
+    tm.claim("d1", 3.0, 0.12, ball, (1.15, 0.0, 0.0))
+    tm.claim("d0", 3.0, 2.5, ball, (-1.4, 0.0, math.pi))
+    assert "d0" not in tm.candidates(3.0) and tm.attacker(3.0) == "d1"
+    # A keeper is never kept out of its box this way.
+    km = Team("cream")
+    km.jobs, km.half_x, km.attack_sign = {"d0": "keeper", "d1": "striker"}, 1.5, 1.0
+    km.claim("d0", 1.0, 0.12, (-1.3, 0.0), (-1.4, 0.0, 0.0))
+    km.claim("d1", 1.0, 2.0, (-1.3, 0.0), (0.5, 0.0, math.pi))
+    assert km.attacker(1.0) == "d0"                                     # the ball in its box
+    km.claim("d0", 1.1, 0.5, (-0.9, 0.0), (-1.4, 0.0, 0.0))             # …rolled out of it
+    km.claim("d1", 1.1, 1.6, (-0.9, 0.0), (0.5, 0.0, math.pi))
+    assert "d0" not in km.candidates(1.1)

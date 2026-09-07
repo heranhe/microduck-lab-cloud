@@ -2987,6 +2987,118 @@ What is left, in the order it is worth doing:
    C.3 (a shared world model with a frame that means the same thing to
    both ducks) and passing (D.1), which were both waiting on this.
 
+11. **Where a run's time actually goes — the game-flow budget (2026-09-07,
+   evening).** Jonathan asked what could be improved about the soccer
+   games. Before another knob, a clock was put on the whole run: a
+   per-tick probe of every duck's state, the ball's zone (open / within
+   0.20 m of the boards / a corner), stretches the ball sits still for
+   5 s or more, and every line-up's exit. 8 seeds x 300 s, the lab's
+   `pitch-3v3` and `pitch-2v2` rosters (formation roles on, as the /sim
+   page runs them), on a package copy of the tree at `00e408d` plus the
+   parallel session's uncommitted world files:
+
+   | | 3v3 | 2v2 |
+   |---|---|---|
+   | ball at rest >= 5 s | **85%** of the run (254 s) | 84% |
+   | …with a duck a median | 0.24 m from it | 0.24 m |
+   | ball at the boards / in a corner | 51% / 22% | 37% / 28% |
+   | kicks a run (whole pitch) | 1.9 | 2.4 |
+   | kicks taken at the boards or a corner | **0 of 15** | 1 of 19 |
+   | line-ups entered / settled | 439 / 16 (**96% abandoned**) | 507 / 24 |
+   | a duck's time in `support` / `search` / `retreat` / `lineup` | 61 / 10 / 10 / 7% | 45 / 15 / 13 / 11% |
+
+   Three things, in the order they were found, each with its lever
+   measured on the same seeds (12 x 300 s of 3v3, arms forked on one
+   package copy, paired per seed, then a fresh block of seeds 100-111
+   for the one that ships):
+
+   **(a) The cover role churned every tick — FIXED (`Team.candidates`).**
+   `record-world`'s own doc names the symptom ("a chase duck cycling
+   every 0.1 s is fighting a teammate") and the seed-1 events log had it:
+   the midfielder and the striker swapping `support` <-> `hunt` at the
+   control rate for 30 s straight with the ball dead between them. The
+   board admits an off-zone teammate as cover only while it is
+   `give_up_s` (2 s) quicker than the zone owner; the moment it holds the
+   role and its cost jitters above that line it is no longer a
+   *candidate*, and `attacker` moves the role at once (the "incumbent not
+   live" path has no hysteresis), then the give-up path moves it back
+   the next tick. Instrumented: 300 handovers a run, median spell 0.09 s,
+   77% of spells under a second, 1968 of 3605 handovers by that path.
+   The fix keeps the incumbent cover a candidate until an owner is
+   `give_up_s` quicker, so the way back runs through the same
+   `switch_s`/`hold_s` hysteresis as every other handover (a keeper is
+   never kept out of its box). Discovery block / fresh block:
+
+   | | base | fix | p |
+   |---|---|---|---|
+   | handovers a run | 300 / 289 | **46 / 44** | <0.001 |
+   | spells under 1 s | 77% / 75% | **10% / 9%** | <0.001 |
+   | median spell | 0.09 / 0.12 s | 9.7 / 10.5 s | <0.001 |
+   | `search` s a duck | 29.7 / 28.5 | 22.8 / 22.7 | <0.001 both |
+   | `lineup` s a duck | 21.3 / 24.0 | 26.8 / 26.9 | 0.003 / 0.11 |
+   | line-ups lost to `support` | 96 / 103 | **12 / 16** | — |
+   | possession, progress, advance, spread, depth, goals, kicks | flat | flat | all p > 0.3 |
+   | crowd | 0.245 / 0.197 | 0.249 / 0.273 | 0.86 / 0.065 |
+   | falls, 24 runs pooled | 1 | 7 | — |
+
+   The ledger does not move (the ball is still dead, see (b)); the shape
+   caution is real and stated: the cover now stays on the ball while the
+   owner arrives, so two teammates are within 0.5 m of it a little more
+   (crowd +0.08 on the fresh block, p=0.065) and falls went 1 -> 7 in 24
+   runs — still 0.3 a run, and every one a duck near another duck. Ships,
+   with `tests/test_team.py::test_cover_that_holds_the_role_leaves_through_the_hysteresis`.
+
+   **(b) The ball at the boards is unkickable, and it is there 72% of the
+   time.** With (a) in, the line-up exits were re-read by zone: every one
+   of the 36 kicks in both rosters was taken in the open; at the boards
+   and in the corners **every** line-up ran out the 4 s `lineup_s`
+   timeout (search exits, 99% at age >= 4 s, 194 of 212 in 3v3). The
+   kick spot is laid 8 cm behind the ball on the line to the goal with no
+   regard for the boards: for a ball against the side wall that line
+   tilts away from the wall, so the spot is *inside* it, and the walker
+   stops at `tof_stop` and stands until the timeout, then searches, sees
+   the ball, lines up again — 11-12 line-ups a minute of boards time,
+   none of them a kick. Two levers, both measured against (a):
+
+   | fix + … | dead-ball s | kicks a run | possession | progress | advance | goals | falls |
+   |---|---|---|---|---|---|---|---|
+   | (a) alone | 247 | 2.9 | 34.7 | 0.119 | 0.45 | 0.08 | 0.25 |
+   | + kick ALONG the boards (`board_margin` 0.12) | 242 (p=0.44) | 4.2 (p=0.056) | 36.1 | 0.158 | 0.50 | 0.33 (p=0.056) | 0.25 |
+   | + BALL OUT (World: at rest 5 s within 0.20 m of the boards -> placed 0.45 m in) | **175 (p<0.001)** | **7.7 (p<0.001)** | **42.8 (p<0.001)** | **0.31 (p=0.003)** | **1.08 (p<0.001)** | 0.42 (p=0.08) | 0.25 |
+
+   The brain rule (a kick line along the side wall up the pitch, or
+   along the end wall toward the middle, whenever the spot would land
+   within `board_margin` of the boards; the foot chosen so the body
+   stands on the open side) is the honest fix and it is not enough alone:
+   kicks +1.3 a run at p=0.056, the dead-ball clock flat, crowd up. The
+   ball-out rule is what a referee does on a walled table and it is
+   worth 2.6x the kicks and a quarter of the dead time — but it changes
+   the benchmark under every number in this track, so it goes in as a
+   World knob (0 = off, bit for bit what was measured) and ON for the
+   lab's pitch builtins, the way `getup_s` and the kickoff rule went in.
+   Both patches are in `docs/patches/` (`soccer-ball-out.patch`,
+   `soccer-board-margin.patch`), against the tree state above, because
+   `arena.py` and `controllers.py` were open in the parallel session when
+   this was measured and the hunks are theirs to land beside; the numbers
+   are the ones to beat. Back-kicks rise with the ball-out rule (0.8 ->
+   2.4 a run) at the same PROPORTION of kicks (29% -> 31%): more play,
+   not worse play.
+
+   **(c) In the open, line-ups die to `avoid` in 0.4 s** — 263 of 508
+   3v3 exits, with the ball 0.43 m away and another duck 0.33 m ahead,
+   70% of them an OPPONENT (87% in 2v2). Two attackers meet at the ball,
+   each turns away from the other, each re-lines-up: the duel the survey
+   (C.4, bead mdl-23b) said needs a colour sense that survives contact
+   range. Not attempted here; after (b) it is the largest remaining
+   share of the dead clock (175 s of 300 with the ball-out rule).
+
+   **What this says about the track.** The ledger metrics all read
+   "flat" for three sessions of brain knobs because the game they measure
+   is 85% a stationary ball. The two cheap instruments that see it —
+   dead-ball seconds and kicks a run — resolve at 12 seeds what goals
+   need 136 for, and should be the first row of every soccer battery
+   from here.
+
 And one thing this track did NOT settle, which every item above kept
 running into: **the score.** Goals need 136 seeds to move 25% and own goals
 347 (1.5). Positional play buys shape, safety and a ball that goes less

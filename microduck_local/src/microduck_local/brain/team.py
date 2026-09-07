@@ -379,6 +379,20 @@ class Team:
         owners_best = min(self.cost(k, t) for k in allowed)
         cover = [k for k in live if k not in allowed
                  and self.cost(k, t) < owners_best - self.give_up_s]
+        # The cover that HOLDS the role stays a candidate until a zone owner
+        # is quicker by the margin that let it in, so the handover back runs
+        # through `attacker`'s hysteresis like every other one. Without this
+        # the line it entered on (give_up_s quicker) was also the line it
+        # left on, and a cost jittering across it moved the role every tick:
+        # 300 handovers a run of 3v3, a median spell of 0.09 s, 77% of
+        # spells under a second, the ball dead between the two of them
+        # (roadmap Track 4 item 11: 46 / 9.7 s / 10% with this). A keeper is
+        # never kept: it does not leave its box for a loose ball.
+        cur = self._attacker
+        if cur in live and cur not in allowed and cur not in cover \
+                and self.jobs.get(cur) != "keeper" \
+                and self.cost(cur, t) < owners_best + self.give_up_s:
+            cover.append(cur)
         return allowed + cover
 
     def attacker(self, t: float) -> str | None:

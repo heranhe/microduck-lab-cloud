@@ -1,0 +1,54 @@
+--- a/microduck_local/src/microduck_local/world/arena.py	2026-09-07 13:08:57
++++ b/microduck_local/src/microduck_local/world/arena.py	2026-09-07 13:18:43
+@@ -318,6 +318,13 @@
+         # floor-to-stand yet), which on a robot costs 10-20 s. 0: the
+         # respawn as it always was, and every number measured before this.
+         self.getup_s = float(getup_s)
++        # BALL OUT (a referee's throw-in on a walled table): a ball at rest
++        # within  of the boards for  is placed
++        #  in from that wall. 0 = off (every number before it).
++        self.ball_out_s = float(__import__("os").environ.get("MICRODUCK_BALL_OUT_S", "0") or 0)
++        self.ball_out_m, self.ball_out_in = 0.20, 0.45
++        self._ball_rest_t0 = None
++        self.ball_outs = 0
+         self.model = compose(scenario)
+         self.data = mujoco.MjData(self.model)
+         self.t = 0.0
+@@ -551,6 +558,28 @@
+                 self.goal_credit_duck = None
+             self.kickoff()
+ 
++    def _check_ball_out(self) -> None:
++        j = self._ball_joint
++        q, v = int(self.model.jnt_qposadr[j]), int(self.model.jnt_dofadr[j])
++        x, y = float(self.data.qpos[q]), float(self.data.qpos[q + 1])
++        sp = float(np.hypot(self.data.qvel[v], self.data.qvel[v + 1]))
++        hx, hy = self.scenario.floor[0] / 2 - 0.25, self.scenario.floor[1] / 2 - 0.25
++        near = min(hx - abs(x), hy - abs(y)) < self.ball_out_m
++        if not (near and sp < 0.05):
++            self._ball_rest_t0 = None
++            return
++        if self._ball_rest_t0 is None:
++            self._ball_rest_t0 = self.t
++            return
++        if self.t - self._ball_rest_t0 < self.ball_out_s:
++            return
++        m = self.ball_out_in
++        nx = float(np.clip(x, -hx + m, hx - m)); ny = float(np.clip(y, -hy + m, hy - m))
++        self.data.qpos[q:q + 3] = [nx, ny, self.scenario.balls[0].radius + 0.005]
++        self.data.qvel[v:v + 6] = 0.0
++        self.ball_outs += 1
++        self._ball_rest_t0 = None
++
+     def kickoff(self) -> None:
+         """Restart play: the ball on the centre spot (a few centimetres of
+         random nudge, so two mirror-image ducks do not meet nose to nose),
+@@ -965,6 +994,8 @@
+             self._odom_step(d)
+         if self._ball_joint is not None:
+             self._check_goal()
++            if self.ball_out_s > 0:
++                self._check_ball_out()
+         t1 = time.perf_counter()
+         for d in self.ducks.values():
+             if d.tof is not None:
