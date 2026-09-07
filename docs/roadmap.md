@@ -2814,7 +2814,46 @@ What is left, in the order it is worth doing:
    pinned `badc4e7`. It needs the GPU stack to train (AGENTS.md: the
    sim2real recipe is upstream's); nothing here can run it.
 
-   **Why it was not retrained locally tonight.** The local `train-behavior`
+   **Retrained locally after all (2026-09-07, 10:00) — the premise below
+   was wrong, and the kick trains here in four minutes.** The walk env
+   indexes joints by address, so the ball's free joint changes nothing it
+   assumes; only the keyframes were missing, and `contract.
+   scene_walk_ball_xml()` supplies them (the walk scene rewritten beside
+   symlinks to the upstream files, the ball included last, every keyframe
+   padded by its seven qpos). `behaviors/kick.py` is upstream's recipe on
+   that scene with the one thing the shipped kick never saw — the head and
+   neck spawned across the gaze range. `train-behavior kick_right --steps
+   2000000 --envs 12`: ~11k steps/s, 2M steps in ~4 minutes; both feet in
+   under ten. `scripts/bench_kick_headdown.py`, 12 seeds a pose, 1.2 s from
+   standing with the ball on the sweet spot:
+
+   | head pose at the swing | shipped right | **local right** | shipped left | **local left** |
+   |---|---|---|---|---|
+   | level | 33% whiff, 1.00 m | 0%, 1.01 m | 25%, 0.84 m | 0%, 1.12 m |
+   | head +0.60 (the shipped gaze clamp) | 100%, 0 m | 0%, 1.06 m | 83%, 0 m | 0%, 1.22 m |
+   | neck −0.30 / head +0.60 (the split) | 100% | 0%, 1.16 m | 100% | 0%, 1.25 m |
+   | head +0.95 / neck −0.25 (the line-up gaze) | 100% | 0%, 1.13 m | 100% | 0%, 1.28 m |
+   | peak speed / when | 1.03 m/s at 0.15 s | 1.2–1.5 at 0.18 s | 0.88 at 0.18 s | 1.2–1.5 at 0.14 s |
+   | exit off the body | −11° (in play −29°) | ~0° (sd 7–14) | +5° (in play +24°) | −9° (sd 4) |
+   | falls in 60 swings | 0 | 0 | 0 | 0 |
+
+   **Zero whiffs from every gaze pose, both feet**, the ball 1.0–1.3 m
+   away at 1.2–1.5 m/s, no falls; the rendered rollout shows the duck
+   start looking at its feet, plant the left foot, swing at 0.2 s and
+   settle standing. The exits are near straight where the shipped kicks
+   bend, so the brain's `kick_exit_left/right` (+23.6° / −28.7°, measured
+   in play for the shipped pair) are set per kick when these run
+   (`kick_exit_left=-0.16,kick_exit_right=0.0`), and the arena takes them
+   with `MICRODUCK_SKILL_KICK_RIGHT/LEFT=runs/<run>/policy.onnx`. In play,
+   with the gaze HELD through the swing (`gaze_still=1,gaze_neck=1`) —
+   the configuration that put the ball in view at 0.14 s before the swing
+   and whiffed on the shipped kick — is the measurement running now (2v2
+   kick probe for the whiff, 3v3 ledger; runs/localkick). These are
+   local policies for the SIM; the robot's kick still ships from upstream
+   (the patch), as AGENTS.md's sim2real rule requires.
+
+   *The note as it stood before that, kept because its premise is what
+   was measured wrong:* The local `train-behavior`
    has no kick behaviour, and cannot have one cheaply: `MicroduckWalkEnv`
    knows two scenes, neither with a ball, and upstream's `scene_ball.xml`
    adds a free joint that changes `nq` — every joint slice, keyframe and
