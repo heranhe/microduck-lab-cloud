@@ -182,10 +182,15 @@ class Team:
     fuse: bool = False
     sigma_default: float = 0.10
     vel_prior: float = 0.06                  # the tracker's calibrated prior (TrackerParams.vel_prior)
-    # Only claims this close in time to the FRESHEST one are fused with it:
-    # the play-level loss measured with the full 3 x stale_s window was the
-    # board's ball lagging a moving ball toward stale sightings.
-    fuse_window: float = 3.0
+    # Only claims this close in time to the FRESHEST one are fused with it.
+    # MEASURED (3v3 with roles, 24 seeds, fused v freshest, forked on one
+    # package copy): with the full 3 s window the board's ball lagged a
+    # moving ball toward stale sightings - own goals 0 -> 6 (p=0.006); with
+    # 0.5 s the own goals are gone (1 -> 2, p=0.57) and nothing else moves
+    # (crowd, spread, possession flat; progress -0.056, p=0.10). So the
+    # fusion, if anyone turns it on, is the 0.5 s one - and nobody should
+    # yet: closer in the probe, nothing in the game.
+    fuse_window: float = 0.5
     claims: dict[str, Claim] = field(default_factory=dict)
     _attacker: str | None = None
 

@@ -70,7 +70,8 @@ def test_the_chase_brain_sends_its_tracks_sigma_with_the_claim():
 
 
 def test_the_fusion_window_drops_claims_much_older_than_the_freshest():
-    tm = Team("cream", fuse=True, fuse_window=0.5)
+    tm = Team("cream", fuse=True)
+    assert tm.fuse_window == 0.5                                  # the measured window is the default
     tm.claim("d0", 10.0, 0.5, (0.50, 0.00), ball_sigma=0.02)     # sure, but 1 s older than the freshest
     tm.claim("d1", 11.0, 1.5, (0.80, 0.30), ball_sigma=0.20)
     bx, by = tm.ball(11.0)

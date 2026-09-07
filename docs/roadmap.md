@@ -3296,6 +3296,16 @@ this stack has none of them.
       freshest, or drop the fusion once the board's velocity is kick-like
       — is one more arm; `fuse_ball` ships off, and the sigma each claim
       now carries is there for whoever runs it.
+
+      **That arm was run (later the same night): `Team.fuse_window`, only
+      claims within 0.5 s of the freshest fused** (3v3 with roles on the
+      then-current tree, 24 seeds, fused v freshest forked together): own
+      goals 1 → 2 (p=0.57; the 3 s window's 0 → 6 is gone, which is the
+      lag mechanism confirmed), goals 6 → 8, crowd / spread / possession
+      flat, progress 0.084 → 0.028 (p=0.10), ball in view +1.3% (p=0.13).
+      The harm is removed and nothing is gained: closer in the probe,
+      nothing in the game. `fuse_window` defaults to 0.5 s so the fusion,
+      if anyone turns it on, is the safe one; `fuse_ball` stays off.
 - [ ] **C.4 An opponent model and a duel — the first half BUILT and
       measured (2026-09-07).** B-Human has a `Zweikampf` (one-on-one)
       behaviour; every stack tracks opponents as first-class objects. Ours

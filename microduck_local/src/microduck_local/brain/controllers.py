@@ -1024,7 +1024,7 @@ class ChaseParams:
     # when the ball MOVES the board's ball lags toward where teammates
     # last saw it, and a supporter walks to a point it has left. Off.
     fuse_ball: bool = False
-    fuse_window: float = 3.0         # s: only claims this close to the freshest are fused (Team.fuse_window)
+    fuse_window: float = 0.5         # s: only claims this close to the freshest are fused (Team.fuse_window, measured)
     push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
     push_dir_sd: float = 0.5         # rad of spread across the side offsets the walk meets the ball at
     # THE FIELD (roadmap Track 4 s6 D.2, brain/field.py): with `support_field`
