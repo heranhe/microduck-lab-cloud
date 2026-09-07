@@ -326,6 +326,14 @@ class World:
         self.pickables: dict[str, int] = {
             t.id: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, t.id) for t in scenario.pickables}
         self.pickable_kind = {t.id: t.kind for t in scenario.pickables}
+        # A pitch's four goal POSTS, as landmarks a camera can classify
+        # (roadmap Track 4 s6 C.2): the goal is a scored line with no
+        # geometry, so they are fixed-position targets on the mouth line,
+        # post-high, 5 cm round. What a self-localiser has to steer by.
+        if scenario.goal_width > 0:
+            gx, gw = scenario.floor[0] / 2 - 0.25, scenario.goal_width / 2   # the mouth line (goal_for) and half-width
+            targets += [Target(f"post_{side}_{lr}", "post", -1, 0.05, pos=(sx * gx, sy * gw, 0.15))
+                        for side, sx in (("right", 1.0), ("left", -1.0)) for lr, sy in (("l", 1.0), ("r", -1.0))]
         targets += [Target(t.id, "toy", self.pickables[t.id],
                            max(PICKABLE_KINDS[t.kind]["size"]) / 2) for t in scenario.pickables]
         self.basket = scenario.basket

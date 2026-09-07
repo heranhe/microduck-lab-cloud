@@ -49,6 +49,9 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
     pos_err, yaw_err, miss, disagree = [], [], [], []
+    # The same four columns for the brain's LOCALISED pose, when the chase
+    # brain runs the goal-post particle filter (`MICRODUCK_CHASE=localize=1`).
+    loc_pos, loc_yaw, loc_miss, loc_disagree = [], [], [], []
     goal_seq = 0
     while w.t < seconds:
         for d in w.ducks.values():
@@ -64,6 +67,7 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
         # Sample once a second: consecutive ticks are the same error.
         if w.tick % 50 == 0:
             errs: list[tuple[float, float]] = []
+            lerrs: list[tuple[float, float]] = []
             for d in w.ducks.values():
                 true = d.trunk_pos(w.data)
                 est = w.odom(d)
@@ -78,6 +82,18 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
                 # aiming chain (the ball's placement, the kick line) is laid
                 # out in this frame, so a yaw error rotates the shot.
                 miss.append(abs(math.sin(dyaw)) * rng)
+                loc = getattr(brains[d.id], "loc", None)
+                if loc is not None and loc.pose is not None:
+                    lx, ly, lyaw = loc.pose
+                    lex, ley = lx - float(true[0]), ly - float(true[1])
+                    ldyaw = float(np.arctan2(np.sin(lyaw - d.yaw(w.data)), np.cos(lyaw - d.yaw(w.data))))
+                    loc_pos.append(math.hypot(lex, ley))
+                    loc_yaw.append(abs(ldyaw))
+                    loc_miss.append(abs(math.sin(ldyaw)) * rng)
+                    lerrs.append((lex, ley))
+            for i in range(len(lerrs)):
+                for j in range(i + 1, len(lerrs)):
+                    loc_disagree.append(math.dist(lerrs[i], lerrs[j]))
             # What the blackboard costs: two teammates put the SAME ball in
             # different places, because each one's fix is its own pose plus a
             # bearing and a range. The message says "the ball is at (x, y)"
@@ -89,7 +105,9 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
             goal_seq = w.goal_seq
             kickoff_brains(brains, teams)
     return {"pos": np.array(pos_err), "yaw": np.array(yaw_err), "miss": np.array(miss),
-            "disagree": np.array(disagree)}
+            "disagree": np.array(disagree),
+            "loc_pos": np.array(loc_pos), "loc_yaw": np.array(loc_yaw), "loc_miss": np.array(loc_miss),
+            "loc_disagree": np.array(loc_disagree)}
 
 
 def main() -> None:
@@ -101,17 +119,23 @@ def main() -> None:
     args = ap.parse_args()
     print(f"{args.per_side}v{args.per_side}, {args.seeds} seeds x {args.seconds:g} s; "
           f"the goal's half-width is {GOAL_HALF_W} m\n")
-    print(f"{'odom':<11}{'pos err med':>12}{'95%':>8}{'yaw err med':>13}{'95%':>8}"
+    print(f"{'odom':<21}{'pos err med':>12}{'95%':>8}{'yaw err med':>13}{'95%':>8}"
           f"{'miss at goal med':>18}{'95%':>8}{'over half-width':>17}{'mates disagree':>16}")
+    import os
+    print(f"MICRODUCK_CHASE={os.environ.get('MICRODUCK_CHASE', '')!r}")
     for preset in args.presets.split(","):
         got = [run(s, args.seconds, preset, args.per_side) for s in range(args.seeds)]
-        out = {k: np.concatenate([g[k] for g in got]) for k in ("pos", "yaw", "miss", "disagree")}
-        over = float((out["miss"] > GOAL_HALF_W).mean())
-        print(f"{preset:<11}{np.median(out['pos']):>11.3f}m{np.percentile(out['pos'], 95):>7.3f}"
-              f"{math.degrees(np.median(out['yaw'])):>12.2f}°{math.degrees(np.percentile(out['yaw'], 95)):>7.2f}"
-              f"{np.median(out['miss']):>17.3f}m{np.percentile(out['miss'], 95):>7.3f}"
-              f"{over:>16.0%}"
-              f"{np.median(out['disagree']) if len(out['disagree']) else 0.0:>15.3f}m")
+        for tag, keys in (("", ("pos", "yaw", "miss", "disagree")),
+                          (" localised", ("loc_pos", "loc_yaw", "loc_miss", "loc_disagree"))):
+            out = {k[4:] if k.startswith("loc_") else k: np.concatenate([g[k] for g in got]) for k in keys}
+            if not len(out["pos"]):
+                continue
+            over = float((out["miss"] > GOAL_HALF_W).mean())
+            print(f"{preset + tag:<21}{np.median(out['pos']):>11.3f}m{np.percentile(out['pos'], 95):>7.3f}"
+                  f"{math.degrees(np.median(out['yaw'])):>12.2f}°{math.degrees(np.percentile(out['yaw'], 95)):>7.2f}"
+                  f"{np.median(out['miss']):>17.3f}m{np.percentile(out['miss'], 95):>7.3f}"
+                  f"{over:>16.0%}"
+                  f"{np.median(out['disagree']) if len(out['disagree']) else 0.0:>15.3f}m")
 
 
 if __name__ == "__main__":

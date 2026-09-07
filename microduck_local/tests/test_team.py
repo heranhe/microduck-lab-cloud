@@ -303,6 +303,37 @@ def test_a_shot_is_declined_when_the_ball_is_too_far_to_the_side():
     assert off.p.kick_side_max == 0.0 and off._too_wide(odom) is False
 
 
+def test_a_drifting_odometry_turns_the_localiser_on_and_ideal_leaves_it_off():
+    """`brain_kwargs`: a duck whose odometry preset is not `ideal` gets the
+    goal-post particle filter (roadmap Track 4 s6 C.2); at `ideal` the
+    frames already agree and every soccer number was measured there, so the
+    shipped brain stays bit for bit. A battery's MICRODUCK_CHASE wins."""
+    from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
+    from microduck_local.world import World, make_pitch
+    sc = make_pitch(per_side=1)
+    sc.ducks[0].odom, sc.ducks[1].odom = "datasheet", "ideal"
+    infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=0)
+    teams: dict = {}
+    drift = brain_kwargs(sc.ducks[0], w, teams)
+    ideal = brain_kwargs(sc.ducks[1], w, teams)
+    assert drift["p"].localize is True and "p" not in ideal            # 1v1 at ideal: not even a params object
+    b = Chase(**drift)
+    assert b.loc is not None and len(b.loc.posts) == 4
+    assert Chase(**ideal).loc is None
+    # A battery that speaks (`localize=0`) wins over the roster rule. For a
+    # lone duck there is then no params object at all - `Chase.__init__`
+    # reads MICRODUCK_CHASE itself - so what is locked is the BRAIN's state.
+    os.environ["MICRODUCK_CHASE"] = "localize=0"
+    try:
+        kw = brain_kwargs(sc.ducks[0], w, {})
+        assert "p" not in kw
+        c = Chase(**kw)
+        assert c.p.localize is False and c.loc is None
+    finally:
+        del os.environ["MICRODUCK_CHASE"]
+
+
 def test_the_head_yaw_is_gated_on_forward_clearance_and_fails_open():
     """`yaw_clear`: the head only leaves the walking line while the bumper
     says the line is empty. The ToF is ON THE HEAD, so a yawed head reports

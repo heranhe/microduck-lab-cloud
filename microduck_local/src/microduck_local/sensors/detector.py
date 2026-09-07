@@ -30,7 +30,7 @@ from dataclasses import dataclass, fields, replace
 import mujoco
 import numpy as np
 
-DETECT_CLASSES = ("duck", "person", "ball", "marker", "toy", "basket")
+DETECT_CLASSES = ("duck", "person", "ball", "marker", "toy", "basket", "post")
 
 # The frame the two size thresholds below were sized on: the shipped 320 px
 # YOLO11n input behind the 62° lens, 296 px/rad. A spec with another lens or
@@ -291,6 +291,11 @@ class Target:
     # left the 48 deg vertical frustum (the capsule's centre leaves it at
     # 1.2 m); the part in view is what is reported. 0: a point-like thing.
     height: float = 0.0
+    # A FIXED world position instead of a body: the goal posts of a pitch,
+    # which are a line the World scores and not geometry in the model
+    # (roadmap Track 4 s6 C.2). `body` is ignored (pass -1) and the target
+    # is never "own"; occlusion is still ray-tested from the lens.
+    pos: tuple[float, float, float] | None = None
 
 
 @dataclass
@@ -336,7 +341,8 @@ class DetectionFrame:
     cam_pose: tuple[float, ...] = ()
 
 
-NOMINAL_RADIUS = {"duck": 0.10, "person": 0.20, "ball": 0.035, "marker": 0.05, "toy": 0.02, "basket": 0.12}
+NOMINAL_RADIUS = {"duck": 0.10, "person": 0.20, "ball": 0.035, "marker": 0.05, "toy": 0.02, "basket": 0.12,
+                  "post": 0.05}
 
 
 class Detector:
@@ -347,6 +353,11 @@ class Detector:
         self.noise = noise
         self.model = model
         self.rng = np.random.default_rng(seed)
+        # Landmarks (the `post` class) draw their find/noise from a SEPARATE
+        # stream, so adding posts to a world leaves every ball and duck
+        # detection - and so every soccer number ever measured - bit for bit
+        # where it was. Seeded from the same seed, not drawn from `rng`.
+        self.rng_land = np.random.default_rng(None if seed is None else seed + 10_007)
         self.site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, self.spec.site)
         if self.site_id < 0:
             raise KeyError(f"site {self.spec.site!r} not in model")
@@ -374,7 +385,7 @@ class Detector:
         the second, pitched-down camera of `bottom_pitch_deg` - so a target
         that lens can see comes back with the head's bearing and elevation,
         which is what every consumer already expects."""
-        p = data.xpos[tgt.body] - origin
+        p = (np.asarray(tgt.pos, dtype=np.float64) if tgt.pos is not None else data.xpos[tgt.body]) - origin
         rng = float(np.linalg.norm(p))
         if rng < 1e-6 or rng > self.spec.max_range_m:
             return None
@@ -418,7 +429,7 @@ class Detector:
                              self.mount_body, geomid)
         if dist >= 0 and geomid[0] >= 0:
             hit_root = int(self.model.body_rootid[self.model.geom_bodyid[geomid[0]]])
-            tgt_root = int(self.model.body_rootid[tgt.body])
+            tgt_root = int(self.model.body_rootid[tgt.body]) if tgt.body >= 0 else -1
             if hit_root != tgt_root and dist < rng - tgt.radius:
                 return None
         width = 2.0 * float(np.arctan(tgt.radius / rng))
@@ -457,7 +468,7 @@ class Detector:
             R2 = R @ np.array([[c, 0.0, sn], [0.0, 1.0, 0.0], [-sn, 0.0, c]])
         out: list[Detection] = []
         for tgt in self.targets:
-            if int(self.model.body_rootid[tgt.body]) == self.own_root:
+            if tgt.body >= 0 and int(self.model.body_rootid[tgt.body]) == self.own_root:
                 continue
             vis = self._visible(data, tgt, origin, R)
             if vis is None and R2 is not None:
@@ -465,16 +476,17 @@ class Detector:
             if vis is None:
                 continue
             bearing, elev, width, rng = vis
+            g = self.rng_land if tgt.cls == "post" else self.rng
             p_find = float(np.clip((width - s.w_none) / (s.w_full - s.w_none), 0.0, 1.0))
             p_find *= 1.0 - nz.miss_p
-            if self.rng.random() > p_find:
+            if g.random() > p_find:
                 continue
             if nz.bearing_sigma_rad:
-                bearing += float(self.rng.normal(0.0, nz.bearing_sigma_rad))
-                elev += float(self.rng.normal(0.0, nz.bearing_sigma_rad))
+                bearing += float(g.normal(0.0, nz.bearing_sigma_rad))
+                elev += float(g.normal(0.0, nz.bearing_sigma_rad))
             if nz.width_sigma_frac:
-                width *= float(np.clip(1.0 + self.rng.normal(0.0, nz.width_sigma_frac), 0.3, 3.0))
-            conf = p_find * float(self.rng.uniform(nz.conf_floor, 1.0))
+                width *= float(np.clip(1.0 + g.normal(0.0, nz.width_sigma_frac), 0.3, 3.0))
+            conf = p_find * float(g.uniform(nz.conf_floor, 1.0))
             rad = NOMINAL_RADIUS.get(tgt.cls, tgt.radius)
             range_est = rad / max(np.tan(width / 2), 1e-4)
             out.append(Detection(tgt.cls, tgt.name, bearing, elev, width, float(range_est), conf,

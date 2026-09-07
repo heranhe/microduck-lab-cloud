@@ -445,8 +445,7 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     # not null"), and it is caught here by a test rather than by an arm that
     # comes back suspiciously flat.
     mates = sum(1 for x in world.scenario.ducks if duck_spec.team and x.team == duck_spec.team)
-    if mates > 1:
-        from dataclasses import replace
+    from dataclasses import replace  # noqa: PLC0415
 
         from .controllers import ChaseParams
         base = ChaseParams.from_env()
@@ -458,6 +457,15 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
                     else replace(base, bump_stand_s=base.team_bump_stand_s))
     return out
 
+    # Localise whenever the duck's odometry is DECLARED to drift: the goal-
+    # post particle filter (brain/localize.py) is what keeps its goal, its
+    # spot and the board's ball in a frame that means the same thing to a
+    # teammate (roadmap Track 4 s6 C.2 / item 10). At `ideal` the frames
+    # already agree exactly and every soccer number was measured there, so
+    # nothing here changes - bit for bit - unless a battery says otherwise
+    # through MICRODUCK_CHASE. Same by-name rule as above.
+    if duck_spec.odom != "ideal" and "localize" not in ChaseParams.env_names():
+        out["p"] = replace(out.get("p") or ChaseParams.from_env(), localize=True)
 
 def kickoff_brains(brains: dict, teams: dict[str, "Team"]) -> None:
     """After a goal (World.goal_seq moved): every brain forgets its plan —

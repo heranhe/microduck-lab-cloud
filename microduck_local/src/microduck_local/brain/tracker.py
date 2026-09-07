@@ -109,6 +109,11 @@ class TrackerParams:
     vel_smooth: float = 0.5        # weight of a new velocity sample (hits 0.05-1 s apart)
     vel_min_dt: float = 0.05
     vel_max_dt: float = 1.0
+    # Detection classes the tracker never turns into tracks: landmarks. The
+    # goal posts (`post`) are for the localiser (brain/localize.py), which
+    # reads them off the frame; as tracks they would only cost association
+    # time and shift every other track's id.
+    ignore: tuple[str, ...] = ("post",)
 
 
 class Tracker:
@@ -209,6 +214,7 @@ class Tracker:
         p = self.p
         used: set[int] = set()
         hit: set[int] = set()
+        dets = [d for d in dets if d.cls not in p.ignore]
         body = [math.atan2(math.sin(d.bearing + cam_yaw), math.cos(d.bearing + cam_yaw)) for d in dets]
         # Greedy nearest-first: best pairs first, one detection per track.
         pairs = []

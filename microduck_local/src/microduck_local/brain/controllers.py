@@ -1411,6 +1411,28 @@ class ChaseParams:
     # were standing turns beside an unseen opponent. MEASURED against no
     # rule at all, and THE FALL REDUCTION DID NOT REPLICATE:
     #   seeds 24-35        falls 4.83 -> 3.25   -1.58 +/- 0.92  p = 0.14
+    # SELF-LOCALISATION from the goal posts (brain/localize.py; roadmap Track
+    # 4 s6 C.2 and item 10). The brain's odometry is dead reckoning that
+    # drifts (`OdomNoise`): at `datasheet` two teammates' frames wander
+    # 0.456 m apart over a run, and the goal is "where it was at spawn".
+    # On, a particle filter over the four posts (a `post` detection class)
+    # corrects (x, y, yaw) every tick before anything reads it: the tracker's
+    # placements, the spot, the board's ball and pose all move with it.
+    # MEASURED (scripts/probe_odom_goal.py, 3 seeds x 300 s of 2v2, medians
+    # over the run, raw odometry -> localised):
+    #
+    #   preset      pos err          yaw err        miss at goal line   over half-width   mates disagree
+    #   datasheet   0.215 -> 0.072 m  20.2 -> 2.3 deg  0.663 -> 0.075 m   68% -> 11%       0.295 -> 0.078 m
+    #   hostile     0.706 -> 0.089 m  66.3 -> 5.4 deg  1.034 -> 0.158 m   80% -> 30%       0.958 -> 0.146 m
+    #
+    # "Miss at goal line" is what the heading error costs a shot laid out in
+    # this frame; "mates disagree" is how far apart two teammates put the
+    # SAME ball, which the board (brain/team.py) shares as a bare (x, y).
+    # Off = the shipped brain, bit for bit. The roster default turns it ON
+    # for any duck whose odometry preset is not `ideal` (team.brain_kwargs):
+    # at `ideal` the frames already agree exactly and every soccer number
+    # was measured there.
+    localize: bool = False
     #   seeds 24-35 again  falls 6.17 -> 4.00   -2.17 +/- 1.01  p = 0.060
     #   seeds 200-211      falls 4.08 -> 4.33   +0.25 +/- 1.04  p = 0.88
     #   all 24 DISTINCT layouts             -0.81 +/- 0.69  p = 0.264
@@ -1674,6 +1696,13 @@ class Chase:
         # "striker" / None), which is a different thing from `self.role` — the
         # dynamic attack/support the board hands out every tick. This one says
         # which third of the pitch this duck may take the ball on and where it
+        self.loc = None                    # the goal-post particle filter, when `localize` is on (brain/localize.py)
+        if self.p.localize and self.bounds is not None and self.goal_w > 0:
+            from .localize import (  # noqa: PLC0415  (only a pitch pays for it)
+                Localizer,
+                pitch_posts,
+            )
+            self.loc = Localizer(pitch_posts(self.bounds, self.goal_w))
         # stands when it does not have it; that one says whether it has it now.
         self.job = role
         self.tracker = Tracker()
@@ -1935,6 +1964,8 @@ class Chase:
         self.tof_ball: tuple[float, float] | None = None
         if p.tof_ball_m > 0 and (det_in is None or not any(d.cls == "ball" for d in det_in.detections)):
             tof_fr = senses.fresh_tof(self.TOF_MAX_AGE)
+        if self.loc is not None and senses.odom is not None:
+            odom = self.loc.update(senses.odom, senses.det)     # localised: the pose everything below steers by
             blob = None if tof_fr is None else tof_floor_ball(tof_fr, r_max=p.tof_ball_m)
             if blob is not None:
                 self.tof_ball = blob
