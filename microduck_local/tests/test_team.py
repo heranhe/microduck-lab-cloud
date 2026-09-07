@@ -161,7 +161,7 @@ def test_the_role_moves_only_when_a_challenger_is_clearly_quicker_for_long_enoug
 
 
 def test_the_board_carries_the_balls_own_motion_into_the_cost():
-    """A kicked ball leaves at 1.4 m/s and slows at 0.04 m/s^2 on this floor,
+    """A kicked ball leaves at 1.4 m/s and slows to a stop on this floor,
     so where it IS and where it will BE when a duck arrives are different
     places. The board keeps a velocity from consecutive fixes by the same
     duck (differencing across ducks is noise) and aims at the intercept: of
@@ -1119,3 +1119,22 @@ def test_a_kick_publishes_the_exit_line_only_at_kick_like_speed():
     assert c._hunt_u == pytest.approx(0.3)
     vx, vy = tm2.ball_vel()
     assert math.atan2(vy, vx) == pytest.approx(0.3)
+
+
+def test_the_brains_branch_priority_is_the_one_written_down():
+    """Roadmap F.1: `Chase.PRIORITY` names the `elif` chain of `Chase.step`
+    in the order it runs. Read the chain back out of the source - the
+    condition names that start each branch - and check the order."""
+    import inspect
+    import re
+    src = inspect.getsource(Chase.step)
+    chain = src[src.index("if senses.skill is not None:") - 8:]           # keep the first branch's indent
+    heads = re.findall(r"^\s{8}(?:if|elif) (.+?):\s*(?:#.*)?$", chain, flags=re.M)
+    key = {"senses.skill is not None": "kick", "looking": "look", "retreating": "retreat",
+           "near_duck": "avoid", "block_at is not None": "block", 'self.role == "support"': "support",
+           'yielding and self.state not in ("settle",)': "yield", 'self.state == "push"': "push",
+           'self.state in ("lineup", "settle") and self.spot is not None': "lineup", "seen": "seen",
+           "hunting": "hunt", 'seeking and self.state not in ("look",)': "seek"}
+    order = [key[h] for h in heads if h in key]
+    assert order == list(Chase.PRIORITY[:-1]), order          # every branch, in this order; search is the fall-through
+    assert Chase.PRIORITY[-1] == "search" and "search" in chain

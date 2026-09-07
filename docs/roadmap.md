@@ -3622,9 +3622,15 @@ this stack has none of them.
       `elif` chain in `step` (kick → look → retreat → avoid → block →
       support → yield → push → …) is a priority scheme nobody wrote down.
       The refactor that would pay is exactly that chain as a named
-      priority list, not a new hierarchy. Still not urgent; the moment it
-      becomes urgent is when a keeper needs a different top-level loop
-      from a striker — and the measured keeper does not.
+      priority list, not a new hierarchy — **done (2026-09-07, later):
+      `Chase.PRIORITY`** names the chain in the order it runs (kick, look,
+      retreat, avoid, block, support, yield, push, lineup/settle, seen,
+      hunt, seek, search), each with a line on what owns the tick, and
+      `tests/test_team.py` reads the `elif` heads back out of the source
+      and checks the order — a branch moved by accident is a failing test.
+      Still not a hierarchy; the moment one is needed is when a keeper
+      needs a different top-level loop from a striker — and the measured
+      keeper does not.
 
 **What to read this list as (written 2026-09-06; revised 2026-09-07
 after the survey was worked through).** A.1 was the only item that could

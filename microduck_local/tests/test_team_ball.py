@@ -67,3 +67,15 @@ def test_the_chase_brain_sends_its_tracks_sigma_with_the_claim():
     assert abs(c.ball_sigma - b.predicted_sigma) < 1e-9
     b.step(Senses(t=3.0, det=None, det_age=None, odom=(0.0, 0.0, 0.0), speed=0.0))   # lost it
     assert tm.claims["d0"].ball is None and math.isnan(tm.claims["d0"].ball_sigma)
+
+
+def test_the_fusion_window_drops_claims_much_older_than_the_freshest():
+    tm = Team("cream", fuse=True, fuse_window=0.5)
+    tm.claim("d0", 10.0, 0.5, (0.50, 0.00), ball_sigma=0.02)     # sure, but 1 s older than the freshest
+    tm.claim("d1", 11.0, 1.5, (0.80, 0.30), ball_sigma=0.20)
+    bx, by = tm.ball(11.0)
+    assert abs(bx - 0.80) < 1e-9 and abs(by - 0.30) < 1e-9         # outside the window: the freshest alone
+    assert abs(tm.ball_sigma(11.0) - 0.20) < 1e-9
+    tm.fuse_window = 3.0
+    bx, _ = tm.ball(11.0)
+    assert bx < 0.80                                              # inside it: fused as before

@@ -182,6 +182,10 @@ class Team:
     fuse: bool = False
     sigma_default: float = 0.10
     vel_prior: float = 0.06                  # the tracker's calibrated prior (TrackerParams.vel_prior)
+    # Only claims this close in time to the FRESHEST one are fused with it:
+    # the play-level loss measured with the full 3 x stale_s window was the
+    # board's ball lagging a moving ball toward stale sightings.
+    fuse_window: float = 3.0
     claims: dict[str, Claim] = field(default_factory=dict)
     _attacker: str | None = None
 
@@ -419,6 +423,8 @@ class Team:
             return None
         if not self.fuse:
             return max(seen, key=lambda c: c.t).ball
+        newest = max(c.t for c in seen)
+        seen = [c for c in seen if newest - c.t <= self.fuse_window]
         wx = wy = wsum = 0.0
         for c in seen:
             s = c.ball_sigma if math.isfinite(c.ball_sigma) else self.sigma_default
@@ -436,6 +442,8 @@ class Team:
         inv = 0.0
         for c in seen:
             s = c.ball_sigma if math.isfinite(c.ball_sigma) else self.sigma_default
+            if newest - c.t > self.fuse_window:
+                continue
             inv += 1.0 / max(s * s + (self.vel_prior * max(0.0, t - c.t)) ** 2, 1e-6)
         return math.sqrt(1.0 / inv)
 
@@ -564,7 +572,8 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     # The shared ball (roadmap C.3): the board fuses sightings when the
     # brain's knob says so - every teammate writes the same value.
     if team is not None:
-        team.fuse = bool((out.get("p") or ChaseParams.from_env()).fuse_ball)
+        pf = out.get("p") or ChaseParams.from_env()
+        team.fuse, team.fuse_window = bool(pf.fuse_ball), float(pf.fuse_window)
     return out
 
         out["p"] = replace(out.get("p") or ChaseParams.from_env(), localize=True)

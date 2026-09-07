@@ -1024,6 +1024,7 @@ class ChaseParams:
     # when the ball MOVES the board's ball lags toward where teammates
     # last saw it, and a supporter walks to a point it has left. Off.
     fuse_ball: bool = False
+    fuse_window: float = 3.0         # s: only claims this close to the freshest are fused (Team.fuse_window)
     push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
     push_dir_sd: float = 0.5         # rad of spread across the side offsets the walk meets the ball at
     # THE FIELD (roadmap Track 4 s6 D.2, brain/field.py): with `support_field`
@@ -2263,6 +2264,28 @@ class Chase:
             return False
         along = (spot[0] - odom[0]) * math.cos(u) + (spot[1] - odom[1]) * math.sin(u)
         lat = -(odom[0] - spot[0]) * math.sin(u) + (odom[1] - spot[1]) * math.cos(u)
+    # THE PRIORITY (roadmap Track 4 s6 F.1). `step` is one flat machine, and
+    # its `elif` chain IS the behaviour's priority scheme: the first branch
+    # whose condition holds owns the tick. Written down here, in the order
+    # the chain runs, and locked by a test that reads the chain back out of
+    # the source - so a branch moved by accident is a failing test, not a
+    # battery three weeks later.
+    #   kick     a kick skill is running: the reflex tier owns the body
+    #   look     the look after a kick, for the ball ahead
+    #   retreat  backing out of a contact (stuck_s)
+    #   avoid    a duck too near and ahead: turn away, never into it
+    #   block    the ball is heading for OUR mouth and I am the one to stand in it
+    #   support  the board says a teammate has the ball (a kickoff wait counts)
+    #   yield    a clearly nearer duck is on the ball: stand off it
+    #   push     a walk through the ball, until push_s runs out
+    #   lineup / settle   on the line-up with a spot: the two-stage line-up and the swing
+    #   seen     the ball is in the track: lineup / turn / chase toward it
+    #   hunt     the ball rolled off: follow the kick line
+    #   seek     walk to where it last was
+    #   search   nothing seen: circle, sweep the head
+    PRIORITY = ("kick", "look", "retreat", "avoid", "block", "support", "yield", "push",
+                "lineup", "seen", "hunt", "seek", "search")
+
         return (p.lineup_tol < along <= p.approach_back and abs(lat) <= p.lineup_lat
                 and abs(heading_err) <= p.aim_tol)
 
