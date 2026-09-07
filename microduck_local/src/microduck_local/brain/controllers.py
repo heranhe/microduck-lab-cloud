@@ -998,7 +998,14 @@ class ChaseParams:
     # passes within `kick_select_obs_r` of one stops at its feet, BLOCKED,
     # and is valued there less BLOCK_COST. So a line through an opponent
     # scores as what it is, and the selector turns the kick (or the push)
-    # away from the body in the way. Off until measured.
+    # away from the body in the way.
+    # MEASURED OFF (3v3 with roles, discovery block 0-23 then fresh block
+    # 100-123, controls forked with each): the discovery block's progress
+    # gain (+0.068, p=0.027) did not replicate (fresh -0.050, p=0.13;
+    # pooled 48 +0.009, p=0.70); pooled, spread -0.086 (p=0.054), depth
+    # +0.067 (p=0.026), falls 5 -> 12, and the kicks it takes - more of
+    # them, 2.0 -> 2.5 a run - carry LESS (0.225 -> 0.159 m a kick):
+    # a line that misses the body is a shorter, wider line. Ships off.
     kick_select_opps: bool = False
     kick_select_obs_r: float = 0.15
     # THE SHARED BALL (roadmap Track 4 s6 C.3): with `fuse_ball` on, the
@@ -1052,6 +1059,11 @@ class ChaseParams:
     field_goal_pull: float = 0.3
     field_hyst: float = 0.1
     field_mid_ahead: float = 0.0
+    # The ROLE-LESS supporter (eval-pitch's roster) measured null under the
+    # field (2v2, 24 seeds: advance -0.04 p=0.19, ball in view -1.9%
+    # p=0.09, nothing else moved), so it keeps its post unless this says
+    # otherwise; `support_field` is for the roles it was measured on.
+    field_plain: bool = False
     # THE HEAD. `_gaze` is a law that puts a floor ball at range `rng` on the
     # camera's axis; `head_down` clamps the command it may ask for, and the
     # gaze is applied while WALKING at a ball inside `head_range`.
@@ -2770,7 +2782,8 @@ class Chase:
         allowed to take the ball are the same geometry (`Team.zone_ok`)."""
         p = self.p
         t = self._senses.t
-        if p.support_field and self.job not in ("defender", "keeper"):
+        og = self._own_goal(odom)
+        if p.support_field and (self.job in ("striker", "midfielder") or (self.job is None and p.field_plain)):
             spot = self._field_spot(bxy, odom)          # the FIELD: already inside the zone and the boards
             if spot is not None:
                 return spot

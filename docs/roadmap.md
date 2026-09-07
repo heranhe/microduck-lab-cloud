@@ -3310,13 +3310,25 @@ this stack has none of them.
       and it shows on progress under kicks and on advance under
       push-first; the one caution is falls under kicks (3 → 10 in 24
       runs, p=0.096), which is a duck now kicking beside another one
-      rather than into it. A fresh block (seeds 100–123, kicks) is
-      running before anything ships. Not built, and still the second
-      half of this item: the duel itself — what a duck does when the
-      opponent is nearer the ball than it is (B-Human's Zweikampf:
-      shield, block, or contest), which needs the colour vote or the
-      board to say who is who at contact range. The interception work
-      (4d) found "the lever is elsewhere"; with a keeper (B.2) and an
+      rather than into it.
+
+      **Fresh block (seeds 100–123, kicks): it did not replicate.**
+      Progress −0.050 (p=0.13, worse on 17 of 24), advance −0.020, spread
+      −0.140 (p=0.018), depth +0.078 (p=0.08); pooled over 48 seeds:
+      progress +0.009 (p=0.70), advance +0.017 (p=0.40), possession +1.24
+      (p=0.082), spread −0.086 (p=0.054), depth +0.067 (p=0.026), falls
+      5 → 12 (p=0.14), and the kicks it takes — more of them, 2.0 → 2.5 a
+      run — carry LESS, 0.225 → 0.159 m a kick: a line that misses the
+      body is a shorter, wider line, and on a 3 m pitch the body is
+      usually between the ball and the goal. The discovery block's
+      p=0.027 was the kind of number a second block exists to catch.
+      **`kick_select_opps` ships off.** The opponent list itself
+      (`Chase._opponents`) stays — the field uses it. Not built, and
+      still the second half of this item: the duel — what a duck does
+      when the opponent is nearer the ball than it is (B-Human's
+      Zweikampf: shield, block, or contest), which needs the colour vote
+      or the board to say who is who at contact range. The interception
+      work (4d) found "the lever is elsewhere"; with a keeper (B.2) and an
       opponent list this is the next place to look.
 
 #### D. Team play — after C, not before
@@ -3519,11 +3531,18 @@ this stack has none of them.
       often (progress and advance up) — and a little more turning in
       place from supporters standing wide of a lane the ball crosses. So
       for the shipped brain the field with the mid behind is a possession
-      gain with no shape cost that survives a fresh block. One
-      measurement was still missing before it could ship on by default:
-      every field battery was 3v3 with roles, and the field also stands
-      the ROLE-LESS supporter of `eval-pitch` (behind the ball, wide of
-      the lane) — that 2v2 arm is running.
+      gain with no shape cost that survives a fresh block.
+
+      **The role-less supporter** (`eval-pitch`'s own roster, 2v2, 24
+      seeds, field on — it stands behind the ball, wide of the lane — v
+      the shipped post): possession 13.14 → 12.86 (p=0.79), advance 0.200
+      → 0.158 (p=0.19), ball in view 24.1% → 22.1% (p=0.088), goals 11 →
+      8, nothing significant either way. Null, leaning the wrong way. So
+      the field is for the ROLES it was measured on: `field_plain` (off)
+      keeps the role-less supporter on its post, and `support_field`
+      concerns the striker and the midfielder. Last arm before the
+      default flips: 2v2 with roles (defender + striker, the lab's
+      `pitch-2v2`), which no field battery had run — running.
 #### E. Learning — where the field found it pays, and where it did not
 
 - [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**

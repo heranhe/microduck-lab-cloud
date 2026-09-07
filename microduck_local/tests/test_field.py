@@ -145,6 +145,26 @@ def test_opponents_come_from_duck_tracks_that_the_board_does_not_own():
     assert y1 < 0, (x1, y1)
 
 
+def test_a_role_less_supporter_keeps_its_post_unless_field_plain_says_otherwise():
+    ball = (0.2, -0.3)
+    spots = {}
+    for plain in (False, True):
+        tm = Team("left")
+        b = Chase(ChaseParams(support_field=True, field_plain=plain), goal=(1.75, 0.0), team=tm, duck_id="d1",
+                  bounds=BOUNDS, goal_w=0.7)
+        b._senses = Senses(t=10.0)
+        tm.claim("d0", 10.0, 0.2, ball, (0.1, -0.3, 0.0))
+        tm.claim("d1", 10.0, 2.0, None, (-0.5, 0.4, 0.0))
+        spots[plain] = b._hold_target(ball, (-0.5, 0.4, 0.0))
+    post = Chase(ChaseParams(), goal=(1.75, 0.0), team=Team("left"), duck_id="d1", bounds=BOUNDS, goal_w=0.7)
+    post._senses = Senses(t=10.0)
+    post.team.claim("d0", 10.0, 0.2, ball, (0.1, -0.3, 0.0))
+    post.team.claim("d1", 10.0, 2.0, None, (-0.5, 0.4, 0.0))
+    assert spots[False] == post._hold_target(ball, (-0.5, 0.4, 0.0))          # the shipped post, byte for byte
+    assert spots[True] != spots[False] and spots[True][0] < ball[0]           # the field: behind the ball
+    assert ChaseParams().field_plain is False
+
+
 def test_field_params_are_read_off_the_environment():
     p = ChaseParams.from_env("support_field=1,field_wide=0.4,field_lane=0.25,field_mid_ahead=-0.5")
     assert p.support_field is True and p.field_wide == 0.4 and p.field_lane == 0.25
