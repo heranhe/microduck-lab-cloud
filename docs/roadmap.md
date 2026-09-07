@@ -3152,13 +3152,53 @@ this stack has none of them.
 
 #### D. Team play — after C, not before
 
-- [ ] **D.1 Passing.** B-Human scores candidate pass targets by goal angle,
-      teammate accessibility and opponent blocking, picks the best, and
-      executes it with an in-walk kick. We have zero passing, and cannot
-      have any until a teammate's "I am here" means the same place to both
-      ducks (C.2/C.3). Then it is A.3's simulator with a teammate attractor
-      in the potential field — which is precisely what Mellmann's paper
-      names as its own future work.
+- [x] **D.1 Passing — BUILT and MEASURED (2026-09-07): a kick cannot pass
+      on this pitch, and the formations rarely offer a target.** The
+      selector (A.3) gained pass lines: for every teammate the board places
+      at least `pass_min_ahead` up-pitch of the ball, a candidate line
+      straight at it (both feet), and every candidate — pass, shot, push —
+      is valued with a `pass_bonus` for each sample that stops within
+      `pass_reach` of ANY teammate (Mellmann's own next step, a teammate
+      attractor in the field; B-Human scores pass targets by goal angle,
+      accessibility and blocking — accessibility is what this is). The
+      teammates' positions are the board's, in the shared frame C.2 gave
+      them. Locked by `tests/test_kickselect.py`; the kick probe now
+      records teammates and the ball's end point at every swing so a kick
+      can be scored as RECEIVED.
+
+      Measured, 24 seeds, both arms forked on one tree state, shipped
+      against `kick_select_pass=1`:
+
+      | | shipped | passing |
+      |---|---|---|
+      | kicks that moved the ball | 22 | 21 |
+      | received, ball stops within 0.4 m of a mate | 1 (5%) | 2 (10%), p=0.52 |
+      | received within 0.6 m | 3 (14%) | 5 (24%), p=0.39 |
+      | possession / progress / falls / goals | flat | flat (all p > 0.3) |
+      | verdicts with any received sample | | 6 of 61, max 37% |
+
+      Two mechanisms, both in the data. **The teammate is up-pitch of the
+      ball on 26% of swings** (median offset −0.22 m): in these formations
+      the striker is the duck on the ball and the defender holds behind it
+      on the goal line, so there is rarely anyone ahead to pass to. And
+      **a kick is not a passing instrument on a 3 m pitch**: 1.4 m/s with
+      35° of scatter rolls 3.3 m to the boards, so even a line laid
+      straight at a mate stops within reach of it in a handful of samples.
+      A pass needs a SOFT delivery — which is the push (A.4: 0.64 m of
+      roll, a 30° spread), the action the selector already has and which
+      is waiting on the floor. `kick_select_pass` ships off with these
+      numbers.
+
+      **The push as the passing action, measured the same night** (push-first
+      selector with and without the pass bonus, 24 seeds, one tree state):
+      possession +1.8 s/min (p=0.12, better on 17 of 24), progress, advance,
+      falls, goals, crowd and spread all flat. A direction, not a result,
+      and the formation is why: the receiver is behind the ball three
+      swings in four. → **what would make passing real:** a formation that
+      puts a teammate AHEAD of the ball — the striker's post is 0.8 m ahead
+      of it by design (`strike_ahead`), so a defender+striker pair can pass
+      only when the defender has the ball; a mid that holds ahead of the
+      ball would be the receiver (D.2). Then re-run the push+pass arm.
 - [ ] **D.2 Positioning by potential field or Voronoi.** RoboCup supporters
       stand where a potential field over the pitch (ball, teammates,
       opponents, goals) has a minimum; MSL teams tile the field with a

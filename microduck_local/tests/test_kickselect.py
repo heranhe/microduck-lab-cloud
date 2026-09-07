@@ -145,6 +145,52 @@ def test_the_planner_walks_the_ball_when_the_selector_chooses_the_push():
     assert abs(sx - (0.0 - on.push_behind)) < 0.05 and abs(sy) < 0.05
 
 
+def test_a_kick_a_teammate_receives_is_worth_more_and_a_pass_line_is_offered_up_pitch():
+    """D.1: a sample that stops within `pass_reach` of a teammate counts as
+    received and earns `pass_bonus`; the planner offers a line straight at
+    a teammate up-pitch of the ball, never at one behind it."""
+    from microduck_local.brain.team import Team
+    rng = np.random.default_rng(4)
+    # Two identical lines (a 0.8 m/s kick rolls 1.07 m), one with a teammate where the ball stops.
+    plain = evaluate((0.0, 0.0), 0.0, "kick_left", KickModel(speed=0.8, speed_sd=0.0, dir_sd=0.0, decel=0.3, exit_left=0.0), PITCH, rng, 10)
+    mate_there = evaluate((0.0, 0.0), 0.0, "kick_left", KickModel(speed=0.8, speed_sd=0.0, dir_sd=0.0, decel=0.3, exit_left=0.0), PITCH, rng, 10,
+                          mates=[(1.1, 0.0)], pass_reach=0.4, pass_bonus=0.6)
+    assert plain.p_pass == 0.0 and mate_there.p_pass == 1.0
+    assert abs(mate_there.value - (plain.value + 0.6)) < 1e-9
+    # The planner: a teammate 0.8 m up-pitch adds a pass line; one behind the ball does not.
+    tm = Team("cream")
+    tm.half_x, tm.attack_sign = 1.5, 1.0
+    on = ChaseParams(kick_select=True, kick_select_pass=True)
+    b = Chase(on, goal=(1.5, 0.0), team=tm, duck_id="d0", bounds=(1.5, 1.25), goal_w=0.7)
+    odom = (-0.7, 0.0, 0.0)
+    tm.claim("d0", 0.0, 0.5, (-0.2, 0.0), odom)
+    tm.claim("d1", 0.0, 1.0, (-0.2, 0.0), (0.6, 0.5, 0.0))                  # up-pitch and to the left
+    tm.claim("d2", 0.0, 2.0, (-0.2, 0.0), (-1.2, 0.0, 0.0))                 # behind the ball: no line for it
+    b.step(_senses(0.0, (0.0, 0.5), odom))
+    b.step(_senses(0.1, (0.0, 0.5), odom))
+    ball = b.tracker.best("ball", 0.1, min_hits=1)
+    captured = {}
+    from microduck_local.brain import kickselect
+    orig = kickselect.select
+
+    def spy(ball_xy, lines, *a, **kw):
+        captured["lines"] = list(lines)
+        captured["mates"] = kw.get("mates")
+        return orig(ball_xy, lines, *a, **kw)
+    kickselect.select = spy
+    try:
+        b._plan(odom, ball)
+    finally:
+        kickselect.select = orig
+    bx, by = b._ball_xy(odom, ball)
+    to_d1 = math.atan2(0.5 - by, 0.6 - bx)
+    assert any(abs(_wrap(u - to_d1)) < 1e-9 for u, _ in captured["lines"])          # a line at the up-pitch mate
+    to_d2 = math.atan2(0.0 - by, -1.2 - bx)
+    assert not any(abs(_wrap(u - to_d2)) < 1e-9 for u, _ in captured["lines"])      # none at the one behind
+    assert sorted(captured["mates"]) == [(-1.2, 0.0), (0.6, 0.5)]                    # both count as receivers
+    assert ChaseParams().kick_select_pass is False
+
+
 def _senses(t, ball, odom):
     det = DetectionFrame(t, [Detection("ball", "ball0", ball[0], -0.3, 0.12, ball[1], 0.9)])
     return Senses(t=t, det=det, det_age=0.0, speed=0.3, odom=odom)

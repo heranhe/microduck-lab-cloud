@@ -915,6 +915,31 @@ class ChaseParams:
     # lets the measured push-only result (+3.2 s/min possession, +0.07
     # progress) keep its aim.
     kick_select_shoot: float = 0.3
+    # PASSING (roadmap Track 4 s6 D.1). With this on, every live teammate
+    # the board places at least `pass_min_ahead` metres UP-PITCH of the
+    # ball adds a candidate line straight at it (both feet), and every
+    # candidate - passes, shots, the push - is valued with a bonus of
+    # `pass_bonus` (potential units; the field spans about -1..+2) for each
+    # sample that stops within `pass_reach` of ANY teammate. So a pass is
+    # chosen by the same rule as everything else: never into our own net,
+    # a shot first when one can score, else the line with the best expected
+    # place for the ball - and a ball at a teammate's feet is a better
+    # place than the same spot with nobody there. The teammates' positions
+    # are the board's, in the shared frame (localised when odometry drifts).
+    #
+    # MEASURED OFF 2026-09-07 (24 seeds, one tree state; roadmap D.1): kicks
+    # received within 0.4 m of a mate 1 of 22 -> 2 of 21 (p=0.52), every
+    # ledger number flat. Two reasons, both in the data: a teammate is
+    # up-pitch of the ball on 26% of swings (the striker IS the duck on the
+    # ball; the defender holds behind), and a 1.4 m/s kick with 35 deg of
+    # scatter rolls 3.3 m to the boards - it cannot deliver to a point a
+    # metre away; only 6 of 61 verdicts had any received sample. The
+    # passing instrument on this pitch is the PUSH (0.64 m, 30 deg), which
+    # is waiting on the floor with kick_select_push.
+    kick_select_pass: bool = False
+    pass_min_ahead: float = 0.3
+    pass_reach: float = 0.4
+    pass_bonus: float = 0.6
     push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
     push_dir_sd: float = 0.5         # rad of spread across the side offsets the walk meets the ball at
     # THE HEAD. `_gaze` is a law that puts a floor ball at range `rng` on the
@@ -2730,6 +2755,22 @@ class Chase:
         lines: list[tuple[float, str]] = []
         k = max(1, int(round(p.aim_max / max(p.kick_select_fan, 1e-3))))
         for i in range(-k, k + 1):
+        mates_xy: list[tuple[float, float]] | None = None
+        if p.kick_select_pass and self.team is not None and self._senses is not None:
+            t_now = self._senses.t
+            sign = 1.0 if self.goal[0] >= 0 else -1.0
+            mates_xy = []
+            for _, (mx, my, _) in self.team.mates(self.duck_id, t_now):
+                mates_xy.append((float(mx), float(my)))
+                if sign * (mx - bx) >= p.pass_min_ahead:              # up-pitch of the ball: a pass, not a back-pass
+                    u_m = math.atan2(my - by, mx - bx)
+                    if abs(_wrap(u_m - los)) <= p.aim_max + 1e-9:    # inside the same walk-round the clamp permits
+                        lines += [(u_m, "kick_left"), (u_m, "kick_right")]
+        models = None
+        if p.kick_select_push:
+            from .kickselect import push_model  # noqa: PLC0415
+            lines += [(u_, "push") for u_, act in lines if act == "kick_left"]   # one push per line
+            models = {"push": push_model(p.push_roll, p.push_dir_sd, max(p.ball_decel, 0.02))}
         models = None
         if p.kick_select_push:
             from .kickselect import push_model  # noqa: PLC0415
@@ -2745,7 +2786,8 @@ class Chase:
                           p_whiff=p.kick_select_p_whiff)
         pitch = Pitch(self.bounds[0], self.bounds[1], self.goal_w, 1.0 if self.goal[0] >= 0 else -1.0)
         v = select((bx, by), lines, model, pitch, self._kick_rng, n=p.kick_select_n, t_own=p.kick_select_t_own,
-                   models=models, shoot=p.kick_select_shoot if p.kick_select_push else 0.0)
+                   models=models, shoot=p.kick_select_shoot if p.kick_select_push else 0.0,
+                   mates=mates_xy, pass_reach=p.pass_reach, pass_bonus=p.pass_bonus if p.kick_select_pass else 0.0)
         self.last_select = v
         return None if v is None else (v.heading, v.foot)
 

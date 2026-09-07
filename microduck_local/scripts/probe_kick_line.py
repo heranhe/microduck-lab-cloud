@@ -131,7 +131,13 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
                                 "goal": None if b.goal is None else [round(b.goal[0], 3), round(b.goal[1], 3)],
                                 "select": None if getattr(b, "last_select", None) is None else
                                 {"p_goal": round(b.last_select.p_goal, 3), "p_own": round(b.last_select.p_own, 3),
-                                 "value": round(b.last_select.value, 3)},
+                                 "value": round(b.last_select.value, 3),
+                                 "p_pass": round(getattr(b.last_select, "p_pass", 0.0), 3)},
+                                # Teammates' TRUE positions at the swing, so a kick can be
+                                # scored as RECEIVED (the ball stops within reach of one).
+                                "mates": [[round(float(w.odom(o)[0]), 3), round(float(w.odom(o)[1]), 3)]
+                                          for o in w.ducks.values()
+                                          if o.id != d.id and w.team_of.get(o.id) == w.team_of.get(d.id)],
                                 "ahead": round(ahead, 3), "side": round(side, 3),
                                 "spot_dist": None if sp is None else round(math.dist((ox, oy), sp[:2]), 3),
                                 "spot_ball": None if sp is None else round(math.dist((bx, by), sp[:2]), 3),
@@ -171,7 +177,8 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
             dist = math.hypot(dx, dy)
             rec = {"seed": seed, "t": round(k["t"], 1), "duck": k["duck"], "foot": k["foot"],
                    "ball0": [round(k["ball0"][0], 3), round(k["ball0"][1], 3)], "goal": k["goal"],
-                   "select": k["select"], "u": round(k["u"], 4),
+                   "select": k["select"], "u": round(k["u"], 4), "mates": k.get("mates"),
+                   "ball1": [round(bx, 3), round(by, 3)],
                    "dist": round(dist, 3), "ahead": k["ahead"], "side": k["side"],
                    "moved": k["moved"], "plan_age": k["plan_age"], "head_yaw": k["head_yaw"],
                    "head_jt": k.get("head_jt"), "neck_jt": k.get("neck_jt"), "trunk_pitch": k.get("trunk_pitch"),

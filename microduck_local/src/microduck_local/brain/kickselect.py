@@ -139,21 +139,38 @@ class Verdict:
     p_own: float
     value: float
     n: int
+    p_pass: float = 0.0                          # share of samples that stop within reach of a teammate
 
 
 def evaluate(ball, u: float, action: str, model: KickModel, pitch: Pitch,
-             rng: np.random.Generator, n: int) -> Verdict:
-    """`action` is kick_left / kick_right / push; `model` is that action's."""
+             rng: np.random.Generator, n: int,
+             mates: list[tuple[float, float]] | None = None, pass_reach: float = 0.4,
+             pass_bonus: float = 0.0) -> Verdict:
+    """`action` is kick_left / kick_right / push; `model` is that action's.
+    With `mates` (teammates' positions in the ball's frame) a sample that
+    stops within `pass_reach` of one is RECEIVED, and each such sample adds
+    `pass_bonus` to the potential it is valued at (roadmap Track 4 s6 D.1:
+    Mellmann's own next step was a teammate attractor in the field)."""
     samples = roll_out(ball, u + model.exit(action), model, pitch, rng, n)
     labels = [s[0] for s in samples]
     infield = [s[1] for s in samples if s[0] == INFIELD]
-    value = float(np.mean([potential(px, py, pitch) for px, py in infield])) if infield else 0.0
-    return Verdict(u, action, labels.count(GOALOPP) / n, labels.count(GOALOWN) / n, value, n)
+    received = 0
+    vals = []
+    for px, py in infield:
+        v = potential(px, py, pitch)
+        if mates and any(math.hypot(px - mx, py - my) <= pass_reach for mx, my in mates):
+            received += 1
+            v += pass_bonus
+        vals.append(v)
+    value = float(np.mean(vals)) if vals else 0.0
+    return Verdict(u, action, labels.count(GOALOPP) / n, labels.count(GOALOWN) / n, value, n, received / n)
 
 
 def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: Pitch,
            rng: np.random.Generator, n: int = 30, t_own: float = 0.0,
-           models: dict[str, KickModel] | None = None, shoot: float = 0.0) -> Verdict | None:
+           models: dict[str, KickModel] | None = None, shoot: float = 0.0,
+           mates: list[tuple[float, float]] | None = None, pass_reach: float = 0.4,
+           pass_bonus: float = 0.0) -> Verdict | None:
     """The best of `candidates` (line, action). Mellmann's two-step rule:
     discard anything with more than `t_own` of its samples in our own net,
     then take the most likely to score, ties (within one sample) broken by
@@ -171,7 +188,8 @@ def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: P
     if not candidates:
         return None
     per = dict(models or {})
-    verdicts = [evaluate(ball, u, act, per.get(act, model), pitch, rng, n) for u, act in candidates]
+    verdicts = [evaluate(ball, u, act, per.get(act, model), pitch, rng, n, mates, pass_reach, pass_bonus)
+                for u, act in candidates]
     safe = [v for v in verdicts if v.p_own <= t_own]
     if not safe:
         return None
