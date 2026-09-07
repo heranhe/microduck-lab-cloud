@@ -3208,7 +3208,28 @@ this stack has none of them.
       while the ball itself is standing still. A conservative σ is the
       right side for a gate to err on; the two refinements that would
       tighten it — 0.8 × the sensor σ, and no growth by `vel_sig` inside a
-      second — are each one probe run and are left. At the swing itself
+      second — were each one probe run, **and were run (later the same
+      night)**: alone on the discovery block (0.8×: fresh hits 37 / 40%
+      inside 1σ, calibrated, old hits unchanged; no `vel_sig` growth: the
+      old hits 38 / 56%, r 0.62–0.73), together on the fresh block:
+
+      | hit age | median σ | median err | in 1σ | in 2σ | r(σ, err) |
+      |---|---|---|---|---|---|
+      | 0.0–0.1 s | 0.047 | 0.054 | 34% | 85% | 0.40 |
+      | 0.1–0.3 s | 0.043 | 0.056 | 29% | 80% | 0.45 |
+      | 0.3–0.6 s | 0.042 | 0.057 | 23% | 78% | 0.70 |
+      | 0.6–1.0 s | 0.059 | 0.057 | 48% | 81% | 0.75 |
+      | all | 0.047 | 0.056 | 32% | 82% | **0.57** |
+
+      From a fifth too wide (55 / 95%) to a little too tight (32 / 82%),
+      with the σ tracking the error far better (r 0.41 → 0.57; 0.70–0.75
+      on older hits). Both ship (`TrackerParams.meas_scale` 0.8,
+      `vel_sig_after_s` 1.0). What is left is the floor: a ball unseen for
+      0.3–0.6 s is usually NEAR, so its range-proportional σ shrinks to
+      0.042 while its error stays 0.057 — the near-ball error is the
+      frame's age and the body's motion, not the range (the tracker's own
+      `_place` note measured 5.5 cm inside 0.6 m). A 4 cm `meas_floor` is
+      the next probe run. At the swing itself
       (10 of 51 kicks had a fresh estimate — 20%, item 7's coverage
       limit unchanged) σ 0.048 against a side error of 0.021, r 0.89.
       Also out of this: the shot-gate probe's own estimate-error figure

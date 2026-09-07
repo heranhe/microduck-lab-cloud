@@ -65,13 +65,14 @@ class Track:
     sig_meas: float = 0.0
     vel_sig: float = 0.0
 
-    def sigma(self, t: float, vel_prior: float = 0.06) -> float:
+    def sigma(self, t: float, vel_prior: float = 0.06, vel_sig_after_s: float = 0.0) -> float:
         """The 1-sigma position uncertainty (m) of `predict(t)`: the last
         hit's own error, plus how far an uncertain velocity may have
         carried the ball since - the measured scatter of the velocity when
-        the track has one, `vel_prior` when it does not."""
+        the track has one and the hit is older than `vel_sig_after_s`,
+        `vel_prior` otherwise."""
         dt = max(0.0, t - self.xy_t) if self.xy is not None else 0.0
-        sv = self.vel_sig if self.vel_hits >= 2 else vel_prior
+        sv = self.vel_sig if (self.vel_hits >= 2 and dt > vel_sig_after_s) else vel_prior
         return math.hypot(self.sig_meas, sv * dt)
 
     def age(self, t: float) -> float:
@@ -152,6 +153,23 @@ class TrackerParams:
     meas_range_frac: float = 0.10
     meas_floor: float = 0.02
     vel_prior: float = 0.06
+    # The two refinements the calibration named (roadmap C.1): the sensor
+    # sigma times `meas_scale`, and the velocity's own scatter used to grow
+    # the sigma only once the hit is older than `vel_sig_after_s` (before
+    # that the prior: a track WITH a velocity was growing by its samples'
+    # scatter while the ball stood still). MEASURED (each alone on the
+    # discovery block, both together on the fresh block, 15 694 samples):
+    # against the first model's 55% inside 1 sigma / 95% inside 2 (a
+    # calibrated radial error: 39 / 86) and r(sigma, error) 0.41, the pair
+    # gives 32% / 82% and r 0.57 - from a fifth too wide to a little too
+    # tight, with the sigma tracking the error far better (r 0.70-0.75
+    # on hits older than 0.3 s). What is left is the floor: a ball unseen
+    # for 0.3-0.6 s is usually NEAR, its range-proportional sigma shrinks
+    # to 0.042 while its error stays 0.057 - the near-ball error is the
+    # frame's age and the body's motion, not the range. A 4 cm floor is
+    # the next probe run.
+    meas_scale: float = 0.8
+    vel_sig_after_s: float = 1.0
     # Detection classes the tracker never turns into tracks: landmarks. The
     # goal posts (`post`) are for the localiser (brain/localize.py), which
     # reads them off the frame; as tracks they would only cost association
@@ -265,7 +283,8 @@ class Tracker:
         # This placement's own error (roadmap C.1): the detector's bearing
         # and range noise at this range, never under the floor. Not shrunk
         # by the smoothing: measured, it does not reduce the error.
-        tr.sig_meas = max(p.meas_floor, math.hypot(p.meas_bearing_sigma * tr.range, p.meas_range_frac * tr.range))
+        tr.sig_meas = max(p.meas_floor,
+                          p.meas_scale * math.hypot(p.meas_bearing_sigma * tr.range, p.meas_range_frac * tr.range))
 
     def _associate(self, dets: list[Detection], t: float, cam_yaw: float = 0.0) -> list[Track]:
         """Detections come in the CAMERA's frame; tracks are kept in the

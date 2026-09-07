@@ -29,12 +29,13 @@ def test_the_tracker_is_built_for_the_detectors_datasheet():
 
 def test_a_hit_carries_the_datasheets_error_at_its_range_however_many_hits_it_has():
     tk = Tracker(TrackerParams.for_detector("datasheet"))
+    scale = tk.p.meas_scale                                                  # 0.8, calibrated
     tr = tk.update(_frame(0.0, 0.0, 0.6), 0.0, 0.0, (0.0, 0.0))[0]
-    assert abs(tr.sig_meas - math.hypot(math.radians(1.0) * 0.6, 0.06)) < 1e-6   # 6.1 cm, range-dominated
+    assert abs(tr.sig_meas - scale * math.hypot(math.radians(1.0) * 0.6, 0.06)) < 1e-6   # ~4.9 cm, range-dominated
     for k in range(1, 4):
         tk.update(_frame(0.1 * k, 0.0, 0.6), 0.1 * k, 0.0, (0.0, 0.0))
     # Not shrunk by the smoothing (calibrated: it does not reduce the error).
-    assert abs(tr.sig_meas - math.hypot(math.radians(1.0) * 0.6, 0.06)) < 1e-6
+    assert abs(tr.sig_meas - scale * math.hypot(math.radians(1.0) * 0.6, 0.06)) < 1e-6
     # A perfect detector still carries the floor.
     tk0 = Tracker(TrackerParams.for_detector("ideal"))
     tr0 = tk0.update(_frame(0.0, 0.0, 0.6), 0.0, 0.0, (0.0, 0.0))[0]
@@ -49,6 +50,11 @@ def test_sigma_grows_with_the_age_of_the_hit_by_the_velocitys_scatter_or_a_prior
     assert abs(tr.sigma(1.0) - math.hypot(0.05, 0.06)) < 1e-9                     # the calibrated default
     tr.vel, tr.vel_hits, tr.vel_sig = (0.5, 0.0), 3, 0.04
     assert abs(tr.sigma(1.0) - math.hypot(0.05, 0.04)) < 1e-9                     # a measured scatter instead
+    # ...unless the hit is younger than `vel_sig_after_s`: then the prior again.
+    assert abs(tr.sigma(1.0, vel_sig_after_s=2.0) - math.hypot(0.05, 0.06)) < 1e-9
+    tk = Tracker(TrackerParams.for_detector("datasheet", meas_scale=0.5))
+    (tr3,) = tk.update(_frame(0.0, 0.0, 0.6), 0.0, 0.0, (0.0, 0.0))
+    assert abs(tr3.sig_meas - 0.5 * math.hypot(math.radians(1.0) * 0.6, 0.06)) < 1e-9
     # A rolling ball seen three times: the velocity's scatter is measured,
     # and forgotten with the velocity when the hits are too far apart.
     tk = Tracker(TrackerParams.for_detector("datasheet"))
@@ -65,9 +71,10 @@ def test_the_chase_brain_reports_the_sigma_of_its_estimate_and_takes_its_detecto
     assert b.tracker.p.meas_range_frac == 0.3
     b.step(Senses(t=1.0, det=_frame(1.0, 0.0, 0.6), det_age=0.0, odom=(0.0, 0.0, 0.0), speed=0.0))
     assert b.predicted is not None and b.predicted_sigma is not None
-    assert abs(b.predicted_sigma - math.hypot(math.radians(3.0) * 0.6, 0.18)) < 1e-6
+    hostile = b.tracker.p.meas_scale * math.hypot(math.radians(3.0) * 0.6, 0.18)
+    assert abs(b.predicted_sigma - hostile) < 1e-6
     b.step(Senses(t=1.5, det=_frame(1.0, 0.0, 0.6), det_age=0.5, odom=(0.0, 0.0, 0.0), speed=0.0))
-    assert b.predicted_sigma > math.hypot(math.radians(3.0) * 0.6, 0.18)         # half a second older
+    assert b.predicted_sigma > hostile                                            # half a second older
     from microduck_local.world import World, make_pitch
     sc = make_pitch()
     w = World(sc, seed=1)

@@ -2316,6 +2316,7 @@ class Chase:
         seen = ball is not None and ball.age(t) < p.lost_s
         # Where the ball is going: its predicted position, and the bearing
         # to it from here (the head looks there; the search opens there).
+            self.predicted_sigma = ball.sigma(t, self.tracker.p.vel_prior, self.tracker.p.vel_sig_after_s)
             self.predicted_sigma = ball.sigma(t, self.tracker.p.vel_prior)
         self.predicted: tuple[float, float] | None = None
         pred_bearing: float | None = None
@@ -2334,7 +2335,8 @@ class Chase:
         if self.team is not None:
             self.team.claim(self.duck_id, t, ball.range if seen else math.inf,
                             self._ball_xy(odom, ball) if seen else None, (odom[0], odom[1], odom[2]),
-                            ball.sigma(t, self.tracker.p.vel_prior) if seen else math.nan)   # how surely (C.3)
+                            ball.sigma(t, self.tracker.p.vel_prior, self.tracker.p.vel_sig_after_s)
+                            if seen else math.nan)                                      # how surely (C.3)
             self.role = self.team.role(self.duck_id, t)
             # The GameController (roadmap B.3): the other side's kickoff -
             # we all support, in our own half, until the ball leaves the spot.
