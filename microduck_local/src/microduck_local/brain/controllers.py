@@ -1076,6 +1076,16 @@ class ChaseParams:
     # p=0.09, nothing else moved), so it keeps its post unless this says
     # otherwise; `support_field` is for the roles it was measured on.
     field_plain: bool = False
+    # THE SUPPORTER LOOKS AT THE BALL (2026-09-07, the owner watching /sim:
+    # "their necks are still straight"). The gaze law only ever ran while a
+    # duck was chasing or lining up; a supporter FACES the ball with its
+    # head level, and a duck is a supporter for ~60% of a match - which is
+    # what the straight necks are. With this on, a supporter (and a duck
+    # standing off a kickoff) that has a fresh sighting inside `head_range`
+    # and `gaze_bearing_max` gazes at it, standing or walking, head level
+    # again for a turn in place (the walker cannot turn head-down). Off
+    # until measured: the ledger and the ball-in-view fraction.
+    support_gaze: bool = False
     # THE HEAD. `_gaze` is a law that puts a floor ball at range `rng` on the
     # camera's axis; `head_down` clamps the command it may ask for, and the
     # gaze is applied while WALKING at a ball inside `head_range`.
@@ -2457,6 +2467,9 @@ class Chase:
             if bdist <= p.intercept_tol:
                 b = self.blocker.ball
                 bb = 0.0 if b is None else _wrap(math.atan2(b[1] - odom[1], b[0] - odom[0]) - odom[2])
+            if p.support_gaze and fresh and ball is not None and ball.range < p.head_range \
+                    and abs(ball.bearing) < p.gaze_bearing_max:
+                gaze_at = ball.range                        # a supporter that looks at the ball (support_gaze)
                 vx, wz = (0.0, 0.0) if abs(bb) < 0.3 else turn(bb, cold)[::2]
                 if wz != 0.0 and self._beside(t):
                     vx, wz = 0.0, 0.0                  # a body beside us: never a turn in place
@@ -2724,7 +2737,8 @@ class Chase:
         turning = wz != 0.0 and vx <= TURN_KICK
         if gaze_at is not None and not (p.gaze_still and turning) \
                 and (vx > 0 or self.state in ("look", "search")
-                     or (p.gaze_still and wz == 0.0)):
+                     or (p.gaze_still and wz == 0.0)
+                     or (p.support_gaze and self.state in ("support", "wait") and not turning)):
             # The gaze YAW is gated on forward clearance exactly like the look
             # yaw below, and for the same measured reason: the ToF is on the
             # head, so a yawed head is honestly blind ahead. The gaze PITCH is

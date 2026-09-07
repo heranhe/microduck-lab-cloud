@@ -205,3 +205,26 @@ def test_the_midfielders_field_spot_follows_field_mid_ahead():
         spots[a] = on["d1"]._hold_target(ball, (-0.2, 0.5, 0.0))
     assert spots[-0.5][0] < spots[0.0][0] <= ball[0] + 0.15                # level with the ball, then behind it
     assert all(abs(s[1]) >= 0.3 for s in spots.values())                    # beside the lane either way
+
+
+def test_a_supporter_gazes_at_a_ball_it_sees_only_with_support_gaze():
+    """`support_gaze`: a supporter with a fresh sighting inside `head_range`
+    pitches its head at the ball, standing or walking; off, the head stays
+    level as it always did (bit for bit)."""
+    from microduck_local.sensors.detector import Detection, DetectionFrame
+    heads = {}
+    for on in (False, True):
+        tm = Team("left", half_x=1.75)
+        tm.jobs = {"d0": "defender", "d2": "striker"}
+        b = Chase(ChaseParams(support_gaze=on), goal=(1.75, 0.0), team=tm, duck_id="d2",
+                  bounds=BOUNDS, goal_w=0.7, role="striker")
+        tm.claim("d0", 10.0, 0.15, (-0.6, 0.0), (-0.7, 0.0, 0.0))           # the defender is on a ball in its own half
+        odom = (-0.6, 0.6, -math.pi / 2)                                      # the striker, 0.6 m off, facing it
+        det = DetectionFrame(t=10.0, detections=[Detection("ball", "", 0.0, -0.3, 0.12, 0.6, 0.9)])
+        for k in range(3):
+            intent = b.step(Senses(t=10.0 + 0.02 * k, det=det, det_age=0.0, odom=odom, speed=0.0))
+        assert b.role == "support"
+        heads[on] = intent.head
+    assert heads[False][1] == 0.0 and heads[False][0] == 0.0                # off: level, as shipped
+    assert heads[True][1] > 0.05                                            # on: the head pitched at the ball (the law gives 0.116 at 0.6 m)
+    assert ChaseParams().support_gaze is False
