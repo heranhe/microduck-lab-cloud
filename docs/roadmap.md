@@ -2624,6 +2624,275 @@ running into: **the score.** Goals need 136 seeds to move 25% and own goals
 wrong; whether it wins games is a question this benchmark cannot answer at
 any sane cost, and saying so is the honest end of the track.
 
+### 6. What the field does that this stack does not — a survey (2026-09-06)
+
+Jonathan asked what a robot-soccer stack has that ours is missing, after the
+basics (a brain, positions, tracking). This is a read of the RoboCup
+literature — the Standard Platform League (NAO) and Humanoid League code
+releases and symposium papers, plus the recent learned-soccer work on small
+humanoids — mapped onto what is actually in this repo. Every item says what
+we have, what the field does, what it would take here, and what number
+would settle it. They are ordered by how directly each one addresses a
+problem this track has already measured, not by how impressive it sounds.
+
+One framing fact first. The RoboCup Humanoid League's smallest class,
+KidSize, requires a robot **40–100 cm** tall; the Microduck is ~25 cm. This
+is not a competition robot and never will be, so nothing below is about
+rules or eligibility. It is about which ideas transfer. Most of them do,
+because the NAO (58 cm, two cameras in the head, 25 DOF) has the same
+problems this duck has — it just solved some of them a decade ago.
+
+#### A. The kick — what the field does about the exact limit 4b/4c/item 7 hit
+
+Item 7 closed with: the kick is a **sensing** limit. The camera sits 23 cm
+up pointing forward, so the ball on the kick spot is inside a 23 cm blind
+radius, and every rule for placing, aiming and choosing the swing failed for
+that one reason. The field has met this limit and has four answers, and
+this stack has none of them.
+
+- [ ] **A.1 A second, downward camera — the NAO's answer, and it is
+      hardware.** The NAO carries two identical cameras in the forehead: the
+      top one pitched **1.2°** down, the bottom one pitched **39.7°** down,
+      each 60.9° × 47.6°. The bottom camera exists for one reason: to see the
+      ground in front of the feet. Our whole 4c/4e/item-7 investigation — the
+      head that cannot pitch far enough, the gaze that cannot reach 37°, the
+      ToF that is wrong 2 in 3 at the feet, the gate that can see 34% of
+      swings — is the work of a robot with one forward camera. **This is the
+      single highest-leverage change to the kick and it is not software.**
+      → **what settles it:** `docs/camera-hardware.md` §3 already has the
+      geometry; add a second camera pose at 40° down to the sim detector
+      (`sensors/detector.py` takes a mount pose), re-run
+      `scripts/probe_shot_gate.py` and read "swings it can see at all" — 34%
+      today. If it is above ~90%, re-run `kick_side_max` and `refresh_min`,
+      both of which were killed by coverage, not by their mechanism.
+- [ ] **A.2 In-walk kicks — kick inside the gait instead of stop, settle,
+      swing.** B-Human's `WalkKickEngine` defines every kick as a set of
+      relative ball positions converted into **walk step sizes**: a pre-step
+      that does not touch the ball, then a kick step, interpolated inside one
+      gait cycle, with `maxXDeviation`/`maxYDeviation` bounds that refuse a
+      kick the ball has drifted out of and a `maxClipBeforeAbort` that aborts
+      one the step cannot reach. NimbRo's 2023 AdultSize winner does the same
+      with parametric waveform kicks blended into the walk. The advantage is
+      exactly our failure mode: our duck plans a spot, walks to it, **stands
+      for `settle_s` and swings at a plan that is 3.0 s old and 0.21 m stale**
+      (4b). An in-walk kick has no settle and no separate kick policy; the
+      decision is made on the last step, with the freshest sighting there is.
+      Ours cannot do this today: the two shipped kicks are separate ONNX
+      skills that run from standing. **What it would take:** a walking policy
+      with a kick command channel — the 61-obs contract has zero-padded
+      command slots for exactly this (AGENTS.md) — trained on the local
+      harness with the ball in the curriculum, then ported to `microduck_rl`.
+      A real training track, not a knob. → **what settles it:** plan age at
+      the swing (3.0 s) and ball-drift-since-plan (0.21 m) from
+      `probe_kick_line.py`, which an in-walk kick should cut to under a step.
+- [ ] **A.3 Choose the kick by simulating its outcomes — and stop kicking
+      out.** Mellmann, Schlotter & Blum (Berlin United, RoboCup 2016):
+      before every kick, each candidate action (long, short, sidekick left,
+      sidekick right, turn) is forward-simulated **30 times**, sampling the
+      kick's velocity and direction from Gaussians fitted to real kicks and
+      the ball from the tracker's uncertainty; each sample rolls out under a
+      rolling-resistance model (d_max = v₀²/2c_R·g) until it stops or hits
+      the goal box or an obstacle; each is labelled INFIELD / OUT / GOALOPP /
+      GOALOWN / COLLISION; actions with p(INFIELD ∪ GOALOPP) < 0.85 or any
+      own-goal sample are discarded, and the rest are scored by a potential
+      field (linear slope to the opponent goal, Gaussian attractor at it,
+      Gaussian repulsor at own goal). On labelled video of real games it cut
+      kicks out at the opponent goal line **5× (6.1% → 1.2%)** and raised
+      strategically-good kicks from 67% to 78%. **We already own every number
+      this needs**: v₀ = 1.4 m/s and decel 0.04 m/s² (`predict_s` note), the
+      per-foot exit angles +23.6°/−28.7° AND their sd 33–49° (4b), the goal
+      geometry, and now +1.90°/cm of side offset. Our `aim_mode="clamp"` is a
+      one-line deterministic version of the potential field with no notion
+      of risk; the ledger's `kicksBack` (34% after the clamp) and out-of-play
+      counts are exactly what this would move. → **what settles it:**
+      `kicksBack` as a proportion over kick events (24 seeds), plus a new
+      `kicksOut` in `PitchMetrics`. Cheap: it is a function over numbers the
+      brain has, called once per settle.
+- [ ] **A.4 Dribbling — carry the ball rather than stop and strike it.**
+      B-Human ships a `Dribble` behaviour beside kicks; Dribble Master (2025)
+      learns dribbling with RL using **a virtual camera in the simulator that
+      models the field of view**, plus rewards for *active sensing* — keeping
+      the ball in view — and transfers to hardware. The point for us:
+      dribbling keeps the ball in continuous contact inside the walk, so
+      there is never a 3 s blind approach to a stale spot. Our `push` mode
+      (`push_beyond`, a "push spot squarely behind the ball") is a crude
+      dribble that nothing has ever measured against the kick. → **what
+      settles it:** signed `ballProgress` and `possession`, push-only vs
+      kick-only vs shipped, 24 seeds. If push moves the ball as far forward
+      with fewer falls, the kick is not the right primitive for this robot.
+
+#### B. Things that are simply not modelled
+
+- [ ] **B.1 A get-up.** Every RoboCup humanoid must recover from a fall
+      unaided; the KidSize rules require it. DeepMind's OP3 soccer agent
+      (Science Robotics 2024) trained a get-up as one of its two stage-1
+      skills and distilled it in with KL regularisation gated on "is the
+      agent upright"; the classical teams use keyframe sequences (B-Human
+      "Fall Motions", 95% success rates reported). **Ours respawns.**
+      `arena.py` teleports a fallen duck and increments `falls`; the shipped
+      policies have no floor-to-stand (`alpha_sitstand` is sit↔stand). So
+      every falls number in this track is a count of events that, on a
+      robot, each cost ~10–20 s of a duck lying down. The `behaviors/` track
+      has the pieces (poses, a physics ladder, `train-behavior`). → **what
+      settles it:** a `getup` behaviour that stands from the two common fall
+      poses (`open-loop-holds-topple` says which: the level squat, not the
+      spawn fold), then an eval-pitch flag that replaces respawn with the
+      get-up so falls cost time instead of nothing. Then `possession` moves
+      for the right reason.
+- [ ] **B.2 A goalkeeper.** The review "RoboCupSoccer Review: The Goalkeeper,
+      a Distinctive Player" (2023) lists the role: hold the ball–goal line,
+      track the ball continuously, block or dive on a shot, clear when in
+      possession, decide when to leave the goal, return. We have three roles
+      and none is this. Most of the pieces exist: `block` state, the threat
+      geometry in `brain/intercept.py` (4d, 18 tests), the ledger's
+      `goalsAgainst`. → **what settles it:** `ownGoals` and `goalsAgainst`
+      need 347/136 seeds, so do NOT judge it on those. Judge it on the
+      deflection-agent's measures: shots on target reaching the line, and
+      the keeper's time-on-line.
+- [ ] **B.3 Game state and set plays.** Every league runs a GameController
+      with `initial / ready / set / playing / penalized`: in *ready* the
+      robots walk to legal kickoff positions, in *set* they stand still, and
+      teams script set plays off it. We have `kickoff_brains` (a reset) and
+      nothing else; there is no notion of a duck being penalised, a
+      kick-in, or a formation to return to. Small, and it makes 3v3 look
+      like a game: a `GameState` on the World that the roles read. → **what
+      settles it:** it is a correctness feature, so tests, plus `depth` and
+      `spread` at t=0 after each goal.
+
+#### C. The world model — what "tracking is working" leaves out
+
+- [ ] **C.1 A ball model with uncertainty.** Berlin United's selector (A.3)
+      runs on a *multi-hypothesis extended Kalman filter* for the ball;
+      B-Human's ball model carries covariance. Our `Track` is an
+      exponentially-smoothed point with a velocity from consecutive hits and
+      **no covariance**. That is why nothing in this track could reason
+      about risk, and why the shot gate (item 7) had a fresh estimate on 34%
+      of swings and no way to say how much to trust it on the rest. → the
+      prerequisite for A.3 and C.3; settle it with the estimate error
+      `probe_shot_gate.py` already prints (median 2.3 cm, 90th 8.3 cm) and
+      whether the covariance predicts it.
+- [ ] **C.2 Self-localisation from the pitch.** SPL teams localise with
+      particle filters over field lines, goals and corners; the survey
+      literature calls the limited unique landmarks the hard part. **Our
+      detector has no landmark class at all** — `DETECT_CLASSES` is duck,
+      person, ball, marker, toy, basket; there is no goal, post or line — so
+      the duck is pure dead reckoning and the goal is "where it was at
+      spawn" (4.4.3). Item 10 measured the cost: at `datasheet` drift,
+      teammates' frames wander **0.456 m** apart. Two steps: a `goal`
+      detection class (the pitch has two distinct goal mouths; the sim
+      detector is pinhole + noise so this is an afternoon), then a particle
+      filter on odometry + goal sightings. → **what settles it:**
+      `probe_odom_goal.py` at `datasheet` and `hostile`: miss-at-goal-line
+      and mates-disagree, both of which it already prints.
+- [ ] **C.3 A shared world model, not a shared point.** SPL teams fuse
+      teammates' ball estimates weighted by their covariances into a team
+      ball; B-Human 2022 ("More Team Play with Less Communication") rebuilt
+      the behaviour to play pass-oriented soccer while *sending fewer
+      messages*, because the league capped team traffic. Our blackboard
+      sends one point estimate a second with no confidence and no frame
+      correction. After C.1 and C.2 it can carry covariance and a frame.
+- [ ] **C.4 An opponent model and a duel.** B-Human has a `Zweikampf`
+      (one-on-one) behaviour; every stack tracks opponents as first-class
+      objects. Ours has duck tracks, a colour vote that failed confirmation
+      (4.2), and `avoid`/`blocked`/`yield`. The interception work (4d) found
+      "the lever is elsewhere". Low priority until a keeper exists.
+
+#### D. Team play — after C, not before
+
+- [ ] **D.1 Passing.** B-Human scores candidate pass targets by goal angle,
+      teammate accessibility and opponent blocking, picks the best, and
+      executes it with an in-walk kick. We have zero passing, and cannot
+      have any until a teammate's "I am here" means the same place to both
+      ducks (C.2/C.3). Then it is A.3's simulator with a teammate attractor
+      in the potential field — which is precisely what Mellmann's paper
+      names as its own future work.
+- [ ] **D.2 Positioning by potential field or Voronoi.** RoboCup supporters
+      stand where a potential field over the pitch (ball, teammates,
+      opponents, goals) has a minimum; MSL teams tile the field with a
+      weighted Voronoi tessellation and assign robots to cells. Our roles
+      stand at fixed posts (`defend_depth`, `strike_ahead`, `strike_side`)
+      that do not see opponents at all. The measured win of item 3 (crowd
+      13% → 1.8%, spread +0.95 m) came from posts; a field would let the
+      posts move. → `crowd`, `spread`, `depth` resolve at 11 seeds.
+
+#### E. Learning — where the field found it pays, and where it did not
+
+- [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**
+      Three results say the same thing. "Learning Vision-Driven Reactive
+      Soccer Skills for Humanoid Robots" (2025) trains search / chase /
+      multidirectional-kick **with only onboard vision**, exposing the policy
+      to *perceptual noise and detection failures during training*, and
+      reports ball-estimate error −46% and time-to-kick −64% against a
+      rule-based baseline with ~90% kick success. Dribble Master adds an
+      explicit *active-sensing reward*. And DeepMind's OP3 agent — the
+      closest published robot to ours, 20 joints, 40 Hz, egocentric 2-D
+      observations, zero-shot sim2real — **perceived the ball and opponent
+      through a motion-capture system**, not its camera, which is the one
+      part of that result that does not transfer here. Our `StrikerEnv`
+      already feeds the policy the *tracker's* ball (`striker.py`: "the
+      TRACK's odometry position, not the truth"), through the simulated
+      detector with noise presets — so `striker-v1` faced the same blind
+      radius the scripted brain does and lost for the same reason. The
+      recipe the field converged on: keep the honest perception, **add a
+      reward for keeping the ball in view**, and train the approach as a
+      closed loop on the sighting. → item 4's own bar: possession 11.8 →
+      5.9 s/min was the loss; a striker that reaches the ball as often as
+      `Chase` is the gate.
+- [ ] **E.2 RL for the decision layer only.** WisTex United (SPL Challenge
+      Shield 2024, 7 wins of 8, 39–7 on goals) kept B-Human's perception,
+      localisation and motion and replaced only the high-level behaviour
+      with four RL sub-policies (mid-field walk-and-kick angle, ball duel,
+      near-goal precision, defensive positioning), selected by a heuristic,
+      trained across a low-fidelity full-field sim and a high-fidelity one.
+      Their lesson — decomposition plus heuristic selection beat one
+      monolithic policy, and end-to-end was "prohibitively expensive" — is
+      the split this repo already has (scripted `Chase` + learned skills),
+      so the natural first RL decision here is the kick choice in A.3 or the
+      supporter position in D.2, not the whole brain.
+- [ ] **E.3 Learning from recordings.** SoccerDiffusion (2025) learns joint
+      trajectories from RoboCup gameplay logs (vision + proprioception +
+      game state) and runs on hardware after distillation, with "high-level
+      tactical behaviour" still limited. We record every run (the replay
+      ring, `runs/*.jsonl`). Far off; noted so it is not re-discovered.
+
+#### F. Architecture, for when the above lands
+
+- [ ] **F.1 A behaviour hierarchy.** B-Human writes behaviour in CABSL
+      (hierarchical state machines) organised as skills and cards; NimbRo
+      runs a two-layer FSM (game FSM over behaviour FSM). `Chase` is one
+      flat 13-state machine in a 2 300-line file with roles bolted on as a
+      post and a zone. It has held up through this track because every
+      change was measured, but B.2 + B.3 + D.1 will not fit in it. Not
+      urgent; the moment it becomes urgent is when a keeper needs a
+      different top-level loop from a striker.
+
+**What to read this list as.** A.1 is the only item that removes the
+limit item 7 hit; A.2–A.4 route around it; B and C are the parts of a
+soccer stack that were never started; D depends on C; E says the field's
+learned results *kept the honest camera and rewarded looking*, which is the
+opposite of the shortcut that would make a striker look good in sim. If
+one thing gets built next it should be A.1 in the simulator — a day of
+work — because its number ("swings it can see") decides whether A.2–A.4
+and items 7's dead knobs are worth reopening at all.
+
+Sources: [B-Human 2024 code release](https://docs.b-human.de/coderelease2024/)
+and its [WalkKickEngine](https://docs.b-human.de/coderelease2024/motion/motion-walkkickengine/);
+[Mellmann et al., Simulation Based Selection of Actions for a Humanoid Soccer-Robot, RoboCup 2016](https://www.ais.uni-bonn.de/robocup.de/2016/papers/RoboCup_Symposium_2016_Mellmann.pdf);
+[Haarnoja et al., Learning agile soccer skills for a bipedal robot with deep RL](https://arxiv.org/abs/2304.13653);
+[RL Within the Classical Robotics Stack: A Case Study in Robot Soccer (WisTex United)](https://arxiv.org/html/2412.09417v1);
+[Learning Vision-Driven Reactive Soccer Skills for Humanoid Robots](https://arxiv.org/abs/2511.03996);
+[Dribble Master](https://arxiv.org/abs/2505.12679);
+[NimbRo RoboCup 2023 AdultSize winner: NimbRoNet3 and waveform in-walk kicks](https://arxiv.org/abs/2401.05909);
+[A Hierarchical, Model-Based System for High-Performance Humanoid Soccer](https://arxiv.org/abs/2512.09431);
+[RoboCupSoccer Review: The Goalkeeper, a Distinctive Player](https://arxiv.org/pdf/2303.12635);
+[A Reliability-Based Particle Filter for Humanoid Robot Self-Localization in RoboCup SPL](https://pmc.ncbi.nlm.nih.gov/articles/PMC3871090/);
+[Voronoi Based Strategic Positioning for Robot Soccer](https://ceur-ws.org/Vol-1032/paper-23.pdf);
+[B-Human 2022 – More Team Play with Less Communication](https://link.springer.com/chapter/10.1007/978-3-031-28469-4_24);
+[SoccerDiffusion](https://arxiv.org/abs/2504.20808);
+[NAO camera geometry (Aldebaran docs)](https://fileadmin.cs.lth.se/robot/nao/doc/family/robots/video_robot.html);
+[RoboCup Humanoid League call for participation (KidSize 40–100 cm)](https://humanoid.robocup.org/robocup-2025/call-for-participation/);
+[RoboCup SPL GameController](https://github.com/RoboCup-SPL/GameController3).
+
 ## Later / parked
 
 - **Port `find_ball` to an mjlab cfg** and retrain on GPU in upstream
