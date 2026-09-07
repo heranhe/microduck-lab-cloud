@@ -2592,8 +2592,8 @@ class Chase:
                 vx, _, wz = turn(1.0, cold)
             else:
                 self.state = "lineup"
-                if vx > 0 and fresh and ball.range < p.head_range and abs(ball.bearing) < 0.6:
-                    gaze_at = ball.range
+                if vx > 0 and fresh and ball.range < p.head_range and abs(ball.bearing) < p.gaze_bearing_max:
+                    gaze_at = ball.range                  # the walking gaze, inside the same bearing window as the line-up's
             # …and keep looking at it through the settle and the square-up,
             # which is where the swing is decided and where the old gate
             # (`vx > 0`, below) dropped the head. Aimed at the ball's last
