@@ -2252,7 +2252,9 @@ class Chase:
             self._bump_t = t
         if self.team is not None:
             self.team.claim(self.duck_id, t, ball.range if seen else math.inf,
-                            self._ball_xy(odom, ball) if seen else None, (odom[0], odom[1], odom[2]))
+                            self._ball_xy(odom, ball) if seen else None, (odom[0], odom[1], odom[2]),
+                            ball.sigma(t, self.tracker.p.vel_prior) if seen else math.nan)   # how surely (C.3)
+            self.role = self.team.role(self.duck_id, t)
             # The GameController (roadmap B.3): the other side's kickoff -
             # we all support, in our own half, until the ball leaves the spot.
             self._kickoff_wait = bool(p.kickoff_wait and self.team.waits(

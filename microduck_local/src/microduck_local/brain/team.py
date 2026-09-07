@@ -62,6 +62,7 @@ class Claim:
     ball: tuple[float, float] | None         # where I put the ball (odom frame; the pitch's frame at spawn)
     pos: tuple[float, float, float] | None = None   # where I am (x, y, yaw; the same frame)
     cost: float = math.inf                   # my predicted TIME to reach it (s), filled in by `Team.claim`
+    ball_sigma: float = math.nan             # my own 1-sigma error of `ball` (Track.sigma; nan = not said)
 
 
 # The thirds a static role owns, in ATTACK coordinates: a = +1 at the goal
@@ -171,6 +172,16 @@ class Team:
     half_x: float = 0.0
     attack_sign: float = 1.0
     claims: dict[str, Claim] = field(default_factory=dict)
+    # --- the shared ball (roadmap Track 4 s6 C.3) -----------------------------
+    # The board's ball was the FRESHEST sighting, whoever sent it and
+    # however poor. With `fuse` it is the inverse-variance mean of every
+    # live sighting - each weighed by its sender's own sigma (`Track.sigma`,
+    # which the chase brain sends with the claim; `sigma_default` for a
+    # sender that did not say) grown by the claim's age at `vel_prior` -
+    # the SPL team-ball. Off until the odometry probe says it is closer.
+    fuse: bool = False
+    sigma_default: float = 0.10
+    vel_prior: float = 0.15
     _attacker: str | None = None
 
     # --- the game state (roadmap Track 4 s6 B.3) ------------------------------
@@ -223,15 +234,16 @@ class Team:
         return b is None or math.dist(b, self._kick_ball) < self._kick_moved
     # -- what a duck sends ---------------------------------------------------
     def claim(self, duck_id: str, t: float, dist: float, ball: tuple[float, float] | None,
-              pos: tuple[float, float, float] | None = None) -> None:
-        """One duck's message: how far it puts the ball, where, and where it
-        is. The cost it will be judged on is worked out here, from that
-        message alone — every duck can do the same arithmetic on every
-        message it receives, which is what keeps this a blackboard and not
-        a coordinator."""
+              pos: tuple[float, float, float] | None = None, ball_sigma: float = math.nan) -> None:
+        """One duck's message: how far it puts the ball, where (and how
+        surely: `ball_sigma`, roadmap C.3), and where it is. The cost it
+        will be judged on is worked out here, from that message alone —
+        every duck can do the same arithmetic on every message it
+        receives, which is what keeps this a blackboard and not a
+        coordinator."""
         if ball is not None:
             self._fold_ball(duck_id, t, ball)
-        self.claims[duck_id] = Claim(t, dist, ball, pos, self._cost(t, dist, ball, pos))
+        self.claims[duck_id] = Claim(t, dist, ball, pos, self._cost(t, dist, ball, pos), float(ball_sigma))
 
     def _fold_ball(self, duck_id: str, t: float, ball: tuple[float, float]) -> None:
         """A sighting: the board's freshest fix, and a velocity sample against
@@ -398,11 +410,33 @@ class Team:
         return self.jobs.get(duck_id)
 
     def ball(self, t: float) -> tuple[float, float] | None:
-        """The freshest teammate sighting of the ball."""
+        """The board's ball: the freshest teammate sighting - or, with
+        `fuse`, the inverse-variance mean of every live sighting, each
+        weighed by its sender's sigma grown by its age (roadmap C.3)."""
         seen = [c for c in self.claims.values() if c.ball is not None and t - c.t <= 3 * self.stale_s]
         if not seen:
             return None
-        return max(seen, key=lambda c: c.t).ball
+        if not self.fuse:
+            return max(seen, key=lambda c: c.t).ball
+        wx = wy = wsum = 0.0
+        for c in seen:
+            s = c.ball_sigma if math.isfinite(c.ball_sigma) else self.sigma_default
+            w = 1.0 / max(s * s + (self.vel_prior * max(0.0, t - c.t)) ** 2, 1e-6)
+            wx += w * c.ball[0]
+            wy += w * c.ball[1]
+            wsum += w
+        return (wx / wsum, wy / wsum)
+
+    def ball_sigma(self, t: float) -> float | None:
+        """The fused ball's own sigma (the same weights); None without a ball."""
+        seen = [c for c in self.claims.values() if c.ball is not None and t - c.t <= 3 * self.stale_s]
+        if not seen:
+            return None
+        inv = 0.0
+        for c in seen:
+            s = c.ball_sigma if math.isfinite(c.ball_sigma) else self.sigma_default
+            inv += 1.0 / max(s * s + (self.vel_prior * max(0.0, t - c.t)) ** 2, 1e-6)
+        return math.sqrt(1.0 / inv)
 
     def publish_kick(self, t: float, origin: tuple[float, float], heading: float, speed: float) -> None:
         """The kicker's known exit line: the ball leaves `origin` along

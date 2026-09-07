@@ -52,6 +52,10 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
     # The same four columns for the brain's LOCALISED pose, when the chase
     # brain runs the goal-post particle filter (`MICRODUCK_CHASE=localize=1`).
     loc_pos, loc_yaw, loc_miss, loc_disagree = [], [], [], []
+    # The shared ball (roadmap C.3): the board's freshest sighting and its
+    # inverse-variance fusion, both against the true ball, plus the fused
+    # ball's own sigma - does it predict its error?
+    board_err, fused_err, fused_sig = [], [], []
     goal_seq = 0
     while w.t < seconds:
         for d in w.ducks.values():
@@ -101,13 +105,26 @@ def run(seed: int, seconds: float, preset: str, per_side: int) -> dict:
             for i in range(len(errs)):
                 for j in range(i + 1, len(errs)):
                     disagree.append(math.dist(errs[i], errs[j]))
+            tb = w.ball_xy()
+            for tm in teams.values():
+                was = tm.fuse
+                tm.fuse = False
+                b0 = tm.ball(w.t)
+                tm.fuse = True
+                b1, s1 = tm.ball(w.t), tm.ball_sigma(w.t)
+                tm.fuse = was
+                if b0 is not None and b1 is not None:
+                    board_err.append(math.dist(b0, tb))
+                    fused_err.append(math.dist(b1, tb))
+                    fused_sig.append(s1)
         if w.goal_seq != goal_seq:
             goal_seq = w.goal_seq
-            kickoff_brains(brains, teams)
+            kickoff_brains(brains, teams, w)
     return {"pos": np.array(pos_err), "yaw": np.array(yaw_err), "miss": np.array(miss),
             "disagree": np.array(disagree),
             "loc_pos": np.array(loc_pos), "loc_yaw": np.array(loc_yaw), "loc_miss": np.array(loc_miss),
-            "loc_disagree": np.array(loc_disagree)}
+            "loc_disagree": np.array(loc_disagree),
+            "board_err": np.array(board_err), "fused_err": np.array(fused_err), "fused_sig": np.array(fused_sig)}
 
 
 def main() -> None:
@@ -116,6 +133,7 @@ def main() -> None:
     ap.add_argument("--seconds", type=float, default=300.0)
     ap.add_argument("--per-side", type=int, default=1)
     ap.add_argument("--presets", default="ideal,datasheet,hostile")
+    ap.add_argument("--jobs", type=int, default=1)
     args = ap.parse_args()
     print(f"{args.per_side}v{args.per_side}, {args.seeds} seeds x {args.seconds:g} s; "
           f"the goal's half-width is {GOAL_HALF_W} m\n")
@@ -123,8 +141,25 @@ def main() -> None:
           f"{'miss at goal med':>18}{'95%':>8}{'over half-width':>17}{'mates disagree':>16}")
     import os
     print(f"MICRODUCK_CHASE={os.environ.get('MICRODUCK_CHASE', '')!r}")
+    shared = []
     for preset in args.presets.split(","):
-        got = [run(s, args.seconds, preset, args.per_side) for s in range(args.seeds)]
+        todo = [(s, args.seconds, preset, args.per_side) for s in range(args.seeds)]
+        if args.jobs > 1 and len(todo) > 1:
+            import multiprocessing as mp
+            ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "spawn")
+            with ctx.Pool(min(args.jobs, len(todo))) as pool:
+                got = pool.starmap(run, todo)
+        else:
+            got = [run(*a) for a in todo]
+        be = np.concatenate([g["board_err"] for g in got])
+        fe = np.concatenate([g["fused_err"] for g in got])
+        fs = np.concatenate([g["fused_sig"] for g in got])
+        if len(be):
+            differ = np.abs(fe - be) > 1e-9                     # one sighting: the two are the same point
+            closer = float((fe < be)[differ].mean()) if differ.any() else float("nan")
+            shared.append((preset, len(be), np.median(be), np.percentile(be, 95), np.median(fe), np.percentile(fe, 95),
+                           float(differ.mean()), closer, float((fe <= fs).mean()), float((fe <= 2 * fs).mean()),
+                           float(np.corrcoef(fs, fe)[0, 1]) if fs.std() > 1e-9 else float("nan")))
         for tag, keys in (("", ("pos", "yaw", "miss", "disagree")),
                           (" localised", ("loc_pos", "loc_yaw", "loc_miss", "loc_disagree"))):
             out = {k[4:] if k.startswith("loc_") else k: np.concatenate([g[k] for g in got]) for k in keys}
@@ -136,6 +171,14 @@ def main() -> None:
                   f"{np.median(out['miss']):>17.3f}m{np.percentile(out['miss'], 95):>7.3f}"
                   f"{over:>16.0%}"
                   f"{np.median(out['disagree']) if len(out['disagree']) else 0.0:>15.3f}m")
+    if shared:
+        print("\nTHE SHARED BALL (roadmap C.3): the board's freshest sighting against the fused one, "
+              "both against the true ball, sampled once a second when the board has one")
+        print(f"{'odom':<12}{'n':>7}{'freshest med':>14}{'95%':>8}{'fused med':>11}{'95%':>8}"
+              f"{'two saw it':>12}{'fused closer':>14}{'in 1s':>7}{'in 2s':>7}{'r(sig,err)':>12}")
+        for preset, n, bm, b95, fm, f95, two, closer, in1, in2, r in shared:
+            print(f"{preset:<12}{n:>7}{bm:>13.3f}m{b95:>7.3f}{fm:>10.3f}m{f95:>7.3f}{two:>12.0%}{closer:>14.0%}"
+                  f"{in1:>7.0%}{in2:>7.0%}{r:>12.2f}")
 
 
 if __name__ == "__main__":
