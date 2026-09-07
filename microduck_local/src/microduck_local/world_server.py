@@ -73,6 +73,11 @@ from .brain.mapping import GridSpec, OccupancyGrid
 from .brain.tether import Tether
 from .sensors import DetectorNoise, TofNoise
 from .world import Ball, Duck, Person, Scenario, Wall, World, make_pitch, make_playroom, make_room
+
+# The lab's pitches play under the ball-out rule (`World.ball_out_s`): a ball
+# at rest against the boards for this long is placed back in play. eval-pitch
+# defaults to 0 (the benchmark's baseline) and takes --ball-out-s.
+PITCH_BALL_OUT_S = 5.0
 from .world.scenario import NAME_RE, TOF_PRESETS, ScenarioError, validate_scenario
 
 TICK_HZ = 50
@@ -249,6 +254,8 @@ class WorldState:
             if f is not None:
                 infer[d.id] = f
         world = World(scenario, infer_for=infer)
+        if world.goal_width > 0:
+            world.ball_out_s = PITCH_BALL_OUT_S      # the referee's throw-in (arena.py, roadmap Track 4 item 11b)
         self.brains = {}
         self.teams = {}
         self.goal_seq = world.goal_seq

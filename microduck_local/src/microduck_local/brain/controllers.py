@@ -528,6 +528,27 @@ class ChaseParams:
     # before the settle does, and bump it. Whiff 39 -> 44/50%, on-spot
     # 14 -> 7/9%, all the wrong way. Roadmap Track 4 item 7.
     kick_ahead: float = 0.08
+    # THE BOARDS (roadmap Track 4 item 11b). A kick spot laid closer than
+    # this to the boards - inside them, or inside the walker's own
+    # `tof_stop` of them - is never reached: the line-up stands against
+    # the wall for `lineup_s` and times out (measured: the ball is at the
+    # boards 72% of a 3v3 run and 0 of 36 kicks were taken there, every
+    # boards line-up a timeout). With this the spot is laid on the line
+    # ALONG the wall instead (up the pitch on a side board, toward the
+    # middle on an end board), the foot chosen so the body stands on the
+    # open side. The margin is what the body can stand at: a ball AGAINST
+    # the wall (radius 0.035) with the kick_side offset (0.06) puts the
+    # trunk 0.095 m from it, so a margin above that never fires for the
+    # ball that matters (0.12 was measured first: kicks 2.9 -> 4.2 a run
+    # at p = 0.056, firing only for balls 8 cm or more off the wall).
+    # MEASURED OFF on the ball-out floor (World.ball_out_s, the lab's
+    # pitches): 12 seeds of 3v3, kicks 7.7 -> 7.9 at 0.08 (p = 0.79) and
+    # -> 8.7 at 0.12 (p = 0.38), dead ball, possession, progress all flat -
+    # the referee's placement already takes the ball off the wall, and a
+    # kick along it adds nothing. Kept, off, for a pitch without the rule
+    # (eval-pitch's baseline), where it is the only thing that ever kicks
+    # a ball at the boards. Roadmap Track 4 item 11b.
+    board_margin: float = 0.0
     kick_side: float = 0.06
     # The kick map (a standing duck, the ball swept over (ahead, side) of
     # the trunk, kick_left; the right kick checked mirrored): the ball
@@ -1570,6 +1591,16 @@ class ChaseParams:
     # against us: stand until it moves.
     duck_keepout: float = 0.4
     duck_touch: float = 0.22
+    # THE DUEL, first form (roadmap Track 4 item 11c): on a line-up with the
+    # ball nearer than the other duck, the keep-out shrinks to this so the
+    # attacker finishes its line-up unless the other is about to touch.
+    # In the open 263 of 508 3v3 line-ups die to `avoid` at 0.4 s with the
+    # ball 0.43 m away and an OPPONENT 0.33 m ahead. MEASURED OFF, 12 seeds
+    # of 3v3 on the ball-out floor at 0.25: kicks 8.7 -> 8.9 (p = 0.85),
+    # dead ball -5 s (p = 0.66), progress +0.08 (p = 0.51), falls 1 -> 2 -
+    # a null; the two attackers meet at the ball whatever the radius, and
+    # the survey's colour sense (C.4) is still what the duel needs. 0 = off.
+    lineup_keepout: float = 0.0
     duck_bearing: float = 1.2      # rad off the nose that counts as "ahead"
     # Standing against something (avoid, blocked) longer than `stuck_s`:
     # two ducks meeting at the ball otherwise stand and wait for each
@@ -2207,8 +2238,37 @@ class Chase:
         # The body heading that sends the kick along u (the map's deflection
         # is in the body frame, so the spot is laid out in that heading too).
         h = _wrap(u - (p.kick_deflect_left if foot == "kick_left" else p.kick_deflect_right))
-        return (bx - p.kick_ahead * math.cos(h) - side * math.sin(h),
-                by - p.kick_ahead * math.sin(h) + side * math.cos(h), foot, h, "kick")
+        sx, sy = (bx - p.kick_ahead * math.cos(h) - side * math.sin(h),
+                  by - p.kick_ahead * math.sin(h) + side * math.cos(h))
+        if p.board_margin > 0 and self.bounds is not None and not self._clear_of_boards(sx, sy):
+            along = self._along_the_boards(bx, by)
+            if along is not None:
+                return along
+        return sx, sy, foot, h, "kick"
+
+    def _clear_of_boards(self, x: float, y: float) -> bool:
+        return (self.bounds[0] - abs(x) >= self.p.board_margin
+                and self.bounds[1] - abs(y) >= self.p.board_margin)
+
+    def _along_the_boards(self, bx: float, by: float) -> tuple[float, float, str, float, str] | None:
+        """A kick spot for a ball at the boards (`board_margin`): the line
+        along the nearer wall - up the pitch on a side board, toward the
+        middle on an end board - with whichever foot puts the body on the
+        open side. None if neither foot's spot is clear (a tight corner)."""
+        p = self.p
+        att = 1.0 if (self.goal is None or self.goal[0] >= 0) else -1.0
+        if self.bounds[1] - abs(by) < self.bounds[0] - abs(bx):
+            u = 0.0 if att > 0 else math.pi                          # the side board: up the pitch
+        else:
+            u = -math.pi / 2 if by > 0 else math.pi / 2               # the end board: toward the middle
+        for foot in ("kick_left", "kick_right"):
+            side = -p.kick_side if foot == "kick_left" else p.kick_side
+            h = _wrap(u - (p.kick_deflect_left if foot == "kick_left" else p.kick_deflect_right))
+            x = bx - p.kick_ahead * math.cos(h) - side * math.sin(h)
+            y = by - p.kick_ahead * math.sin(h) + side * math.cos(h)
+            if self._clear_of_boards(x, y):
+                return x, y, foot, h, "kick"
+        return None
         if foot_sel is not None:
             foot = foot_sel                                       # kick_select chose the foot for its exit angle
 
@@ -2367,6 +2427,9 @@ class Chase:
             # stranger is not, so they are not the same obstacle.
             keep = (p.opp_keepout if (p.use_color and p.opp_keepout > 0 and not self._is_mate(other))
                     else p.duck_keepout)
+            if p.lineup_keepout > 0 and self.state in ("lineup", "settle") and seen \
+                    and ball is not None and ball.range < other.range:
+                keep = min(keep, p.lineup_keepout)                 # the duel's first form (measured off)
             if other.range < keep:
                 threats.append((other.range, other.bearing))
         duck_rb = min(threats) if threats else None

@@ -120,11 +120,11 @@ ROW_FIELDS = METRIC_FIELDS + GOAL_FIELDS + SHAPE_FIELDS
 
 
 def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = None,
-            getup_s: float = 0.0) -> dict:
+            getup_s: float = 0.0, ball_out_s: float = 0.0) -> dict:
     from .brain.team import brain_kwargs, kickoff_brains
     sc = make_pitch(per_side=per_side)
     infer = onnx_infer(Path(walker) if walker else POLICIES_DIR / "alpha_walking.onnx")
-    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, getup_s=getup_s)
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, getup_s=getup_s, ball_out_s=ball_out_s)
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
     # A little seed-dependent asymmetry: nudge the ball off centre.
@@ -154,6 +154,7 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
     score = w.soccer_score()
     return {"seed": seed, "perSide": per_side, "left": score["left"], "right": score["right"],
             "kickGoals": score["kicked"], "bumpGoals": score["bumped"],   # attributed by the World (KICK_GOAL_S)
+            "ballOuts": score["ballOuts"],                                 # the ball-out rule's placements (0 unless --ball-out-s)
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()}, "simSeconds": round(w.t, 1),
             "seconds": seconds,
@@ -324,6 +325,10 @@ def main() -> None:
     ap.add_argument("--getup-s", type=float, default=0.0, metavar="S",
                     help="a fallen duck lies where it fell for S seconds before it respawns (roadmap B.1: "
                          "falls cost time, the stand-in for a get-up policy); 0 = respawn at once, the baseline")
+    ap.add_argument("--ball-out-s", type=float, default=0.0, metavar="S",
+                    help="the referee's throw-in (roadmap Track 4 item 11b): a ball at rest against the boards for "
+                         "S seconds is placed 0.45 m in; the lab's pitches play at 5. 0 = off, the benchmark's baseline "
+                         "(the ball is at the boards 72%% of a 3v3 run and unkickable there: kicks 2.9 -> 7.7 a run at 5)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--out", help="append each seed's result here as a JSON line AND resume from it: "
                                   "seeds already in the file are not re-run")
@@ -351,7 +356,7 @@ def main() -> None:
         if not args.json:
             print(_seed_line(r), flush=True)
 
-    args_list = [(sd, args.seconds, args.per_side, args.walker, args.getup_s) for sd in todo]
+    args_list = [(sd, args.seconds, args.per_side, args.walker, args.getup_s, args.ball_out_s) for sd in todo]
     try:
         if args.jobs > 1 and len(todo) > 1:
             import multiprocessing as mp

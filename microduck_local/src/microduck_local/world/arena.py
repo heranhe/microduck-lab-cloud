@@ -302,7 +302,8 @@ class WorldPerson:
 
 class World:
     def __init__(self, scenario: Scenario, infer_for: dict[str, Infer] | None = None,
-                 max_episode_s: float | None = None, seed: int | None = None, getup_s: float = 0.0):
+                 max_episode_s: float | None = None, seed: int | None = None, getup_s: float = 0.0,
+                 ball_out_s: float = 0.0):
         # No episode timeout by default: a world is a place, not an episode
         # (a 30 s default once respawned a duck mid-delivery, toy and all).
         # Training envs pass their own horizon.
@@ -318,6 +319,20 @@ class World:
         # floor-to-stand yet), which on a robot costs 10-20 s. 0: the
         # respawn as it always was, and every number measured before this.
         self.getup_s = float(getup_s)
+        # BALL OUT (roadmap Track 4 item 11b): what a referee does on a
+        # walled table. A ball at rest within `ball_out_m` of the boards for
+        # `ball_out_s` seconds is placed `ball_out_in` in from that wall
+        # (velocity zeroed, `ball_outs` counted, `soccer_score["ballOuts"]`).
+        # Measured, 12 seeds x 300 s of 3v3: the ball is at the boards 72%
+        # of a run and no kick is ever taken there; with this, kicks 2.9 ->
+        # 7.7 a run, dead-ball time -72 s, possession +8 s/min, progress
+        # +0.19 (all p < 0.005), falls flat. 0 = off, bit for bit every
+        # number measured before it; eval-pitch takes --ball-out-s and the
+        # lab's pitch builtins turn it on (world_server).
+        self.ball_out_s = float(ball_out_s)
+        self.ball_out_m, self.ball_out_in = 0.20, 0.45
+        self._ball_rest_t0: float | None = None
+        self.ball_outs = 0
         self.tick = 0
         self.rng = np.random.default_rng(scenario.seed if seed is None else seed)
         infer_for = infer_for or {}
@@ -462,6 +477,7 @@ class World:
         self.kickoff_team = None
         self.kickoff_ball = None
         self.goals_kicked = self.goals_bumped = 0
+        self.ball_outs, self._ball_rest_t0 = 0, None
         for p in self.persons.values():
             p.reset(self.data)
         for d in self.ducks.values():
@@ -526,6 +542,29 @@ class World:
                 self.goals_bumped += 1
                 self.goal_credit_duck = None
             self.kickoff()
+
+    def _check_ball_out(self) -> None:
+        """The ball-out rule (see `ball_out_s` in `__init__`): a ball at rest
+        against the boards for long enough is placed back in play."""
+        j = self._ball_joint
+        q, v = int(self.model.jnt_qposadr[j]), int(self.model.jnt_dofadr[j])
+        x, y = float(self.data.qpos[q]), float(self.data.qpos[q + 1])
+        speed = float(np.hypot(self.data.qvel[v], self.data.qvel[v + 1]))
+        hx, hy = self.scenario.floor[0] / 2 - 0.25, self.scenario.floor[1] / 2 - 0.25
+        if not (min(hx - abs(x), hy - abs(y)) < self.ball_out_m and speed < 0.05):
+            self._ball_rest_t0 = None
+            return
+        if self._ball_rest_t0 is None:
+            self._ball_rest_t0 = self.t
+            return
+        if self.t - self._ball_rest_t0 < self.ball_out_s:
+            return
+        m = self.ball_out_in
+        self.data.qpos[q:q + 3] = [float(np.clip(x, -hx + m, hx - m)), float(np.clip(y, -hy + m, hy - m)),
+                                   self.scenario.balls[0].radius + 0.005]
+        self.data.qvel[v:v + 6] = 0.0
+        self.ball_outs += 1
+        self._ball_rest_t0 = None
 
     def kickoff(self) -> None:
         """Restart play: the ball on the centre spot (a few centimetres of
@@ -618,7 +657,8 @@ class World:
                 "ball": [round(float(self.data.qpos[q]), 3), round(float(self.data.qpos[q + 1]), 3)],
                 "lastGoal": self.last_goal, "kickoff": round(max(0.0, self.kickoff_until - self.t), 2),
                 "kicked": self.goals_kicked, "bumped": self.goals_bumped,
-                "state": self.game_state, "kickoffTeam": self.kickoff_team}
+                "state": self.game_state, "kickoffTeam": self.kickoff_team,
+                "ballOuts": self.ball_outs}
 
     # -- odometry (roadmap 1.7) ---------------------------------------------
     def _odom_reset(self, d: WorldDuck, x: float, y: float, yaw: float) -> None:
@@ -909,6 +949,8 @@ class World:
             self._odom_step(d)
         if self._ball_joint is not None:
             self._check_goal()
+            if self.ball_out_s > 0 and self._ball_joint is not None:
+                self._check_ball_out()
         t1 = time.perf_counter()
         for d in self.ducks.values():
             if d.tof is not None:

@@ -3084,6 +3084,32 @@ What is left, in the order it is worth doing:
    2.4 a run) at the same PROPORTION of kicks (29% -> 31%): more play,
    not worse play.
 
+   **Landed (2026-09-07, later the same day, "complete all the
+   suggestions").** `World(ball_out_s=)` / `soccer_score["ballOuts"]`,
+   `eval-pitch --ball-out-s` (0 by default: the benchmark's baseline is
+   bit for bit what it was), and `world_server.PITCH_BALL_OUT_S = 5.0` for
+   every pitch the lab builds — so `/sim` and `record-world` play under
+   the rule and `eval-pitch` does not unless asked. `ChaseParams.
+   board_margin` landed too, and was re-measured ON the ball-out floor,
+   which is what the bead asked (12 seeds of 3v3, paired against the rule
+   alone):
+
+   | ball-out + … | kicks a run | dead-ball s | possession | progress | goals | falls |
+   |---|---|---|---|---|---|---|
+   | rule alone | 7.7 | 175 | 42.8 | 0.31 | 0.42 | 0.25 |
+   | + boards line, margin 0.12 | 8.7 (p=0.38) | 179 | 41.6 | 0.28 | 0.42 | 0.08 |
+   | + boards line, margin 0.08 | 7.9 (p=0.79) | 183 | 42.3 | 0.43 (p=0.21) | 0.83 (p=0.27) | 0.33 |
+
+   A null both ways (and 0.12 could never fire for a ball actually
+   against the wall: ball radius 0.035 + `kick_side` 0.06 puts the trunk
+   0.095 m from it, so the 0.12 arm only ever re-laid spots for balls 8 cm
+   or more off the boards). The referee's placement already takes the
+   ball off the wall; a kick along it adds nothing on top. **Ships off**
+   (`board_margin` 0), kept for a pitch without the rule, where it is the
+   only thing that ever kicks a ball at the boards (+1.3 a run, p=0.056).
+   `tests/test_ball_out.py` locks the rule's default, its placement, the
+   lab's on-switch, and the along-the-boards spot at a margin.
+
    **(c) In the open, line-ups die to `avoid` in 0.4 s** — 263 of 508
    3v3 exits, with the ball 0.43 m away and another duck 0.33 m ahead,
    70% of them an OPPONENT (87% in 2v2). Two attackers meet at the ball,
@@ -3091,6 +3117,16 @@ What is left, in the order it is worth doing:
    (C.4, bead mdl-23b) said needs a colour sense that survives contact
    range. Not attempted here; after (b) it is the largest remaining
    share of the dead clock (175 s of 300 with the ball-out rule).
+
+   The first form of a lever was measured on the ball-out floor
+   (`ChaseParams.lineup_keepout`, ships 0): on a line-up with the ball
+   nearer than the other duck the keep-out shrinks to 0.25 m so the
+   attacker finishes unless the other is about to touch. 12 seeds of 3v3
+   against the rule + boards line: kicks 8.7 → 8.9 (p=0.85), dead ball
+   −5 s (p=0.66), progress +0.08 (p=0.51), falls 1 → 2 — a null. The two
+   attackers meet at the ball whatever the radius; what the duel needs is
+   to know WHICH duck is at the ball (the colour sense, bead mdl-23b),
+   not a smaller circle around it.
 
    **What this says about the track.** The ledger metrics all read
    "flat" for three sessions of brain knobs because the game they measure
