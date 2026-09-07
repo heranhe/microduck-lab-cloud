@@ -3493,9 +3493,37 @@ this stack has none of them.
       0.30 → 0.25, spread +0.14) and moves no ball number; the mid behind
       moves the ball (progress +0.067, advance +0.079, goals 3 → 11 with
       own goals 1 → 5) and gives no shape back. `field_mid_ahead` is a
-      real dial, not a fix. The kick-side possession result is a discovery
-      block (seeds 0–23); a fresh block (100–123) is running before
-      anything ships for the shipped brain.
+      real dial, not a fix.
+
+      **Fresh block (seeds 100–123) for the kick-side field with the mid
+      behind, and the two blocks pooled:**
+
+      | | fresh: kicks | kicks + field | | pooled 48: kicks | kicks + field | |
+      |---|---|---|---|---|---|---|
+      | possession s/min | 14.02 | 15.30 | p=0.26, better 14/24 | 13.93 | **16.07** | **p=0.004**, better 30/48 |
+      | ball advance | 0.206 | 0.255 | p=0.17 | 0.191 | 0.243 | p=0.032 |
+      | ball progress | 0.089 | 0.093 | flat | 0.059 | 0.091 | p=0.19 |
+      | crowd | 0.211 | 0.193 | p=0.46 | 0.199 | 0.217 | p=0.31 |
+      | spread | 1.511 | 1.498 | flat | 1.509 | 1.477 | p=0.36 |
+      | depth | 0.568 | 0.657 | p=0.005 | 0.570 | 0.649 | p<0.001 |
+      | goals, both mouths / own | 5 / 1 | 10 / 2 | | 8 / 1 | 14 / 2 | |
+      | falls | 2 | 3 | | 4 | 4 | |
+      | turning in place (spinFrac) | 0.568 | 0.594 | p=0.002 | | | |
+
+      The possession gain replicates in direction and shrinks in size
+      (+3.0 then +1.3, pooled +2.1 s/min, +15%, p=0.004 over 48 seeds);
+      the crowd cost of the discovery block does not replicate (pooled
+      flat); what is consistent is a deeper back line (+0.08 m, p<0.001)
+      — which, both teams running the same brain, is the OTHER side's
+      defender pulled off its post by a ball that reaches its third more
+      often (progress and advance up) — and a little more turning in
+      place from supporters standing wide of a lane the ball crosses. So
+      for the shipped brain the field with the mid behind is a possession
+      gain with no shape cost that survives a fresh block. One
+      measurement was still missing before it could ship on by default:
+      every field battery was 3v3 with roles, and the field also stands
+      the ROLE-LESS supporter of `eval-pitch` (behind the ball, wide of
+      the lane) — that 2v2 arm is running.
 #### E. Learning — where the field found it pays, and where it did not
 
 - [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**
