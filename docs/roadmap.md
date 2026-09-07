@@ -3082,6 +3082,25 @@ this stack has none of them.
       spawn fold), then an eval-pitch flag that replaces respawn with the
       get-up so falls cost time instead of nothing. Then `possession` moves
       for the right reason.
+
+      **The second half was built first (2026-09-07, later): falls cost
+      time.** `World.getup_s` (0 = the respawn as it always was) makes a
+      fallen duck lie where it fell on a zero command, the fall counted
+      once, and respawn only after `getup_s` — the stand-in for the get-up
+      policy until `Mjlab-StandUp-Flat-MicroDuck` is trained (a GPU run,
+      bead mdl-0ad; the smoke submission on 2026-09-07 was refused for
+      want of HF Jobs credits). `eval-pitch --getup-s` and
+      `probe_search.py --getup-s` carry it; locked in
+      `tests/test_gamestate.py`; eval-pitch's chase arm byte-for-byte
+      unchanged at 0. **Measured, and inert where it was measured:** 3v3
+      with roles, 24 seeds × 300 s, 0 v 15 s forked on one package copy —
+      **one fall in 24 runs**, 23 seeds bit-identical, every ledger number
+      the same to three decimals. The shipped roster no longer falls (41
+      falls over 48 seeds of 3v3 at item 3; 1 in 24 tonight), so a fall's
+      price has nothing to price. It will matter on the day a
+      configuration falls again (the fused-ball arm fell 8 times in 24,
+      push-first 4) and on the day the get-up costs its real 10–20 s; the
+      knob is there for both.
 - [x] **B.2 A goalkeeper — BUILT, and measured off in 2v2 (2026-09-07).**
       A fourth static role, `keeper`: its zone is the last fifth in front of
       its own mouth (`Team.ROLE_ZONES`, the field players share the rest as
