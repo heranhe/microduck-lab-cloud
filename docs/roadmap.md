@@ -1432,6 +1432,42 @@ costs about as many seeds as `kicks` (62 for a 25% shift), not goals' 146.
 Cost of a seed on this Mac: 300 s of 1v1 in ~10 s, of 2v2 in ~27 s, eight
 in parallel — a 24-seed 2v2 battery is under two minutes at `--jobs 8`.
 
+**The floor under this table had no rolling resistance (found 2026-09-06).**
+The ball geom carried upstream's `friction="0.5 0.005 0.0001"` on a
+condim-3 contact, and MuJoCo applies the rolling coefficient only on
+condim 6 — so a ball a duck barely brushed rolled until a wall stopped it
+(measured on an open floor: 12 m from a 0.2 m/s nudge, 84 m from a kick,
+never stopping). Upstream's `ball.xml` has the same silent bug. Fixed:
+condim 6 and `Ball.rolling` (0.002 — a short carpet; a 0.2 m/s nudge stops
+in 0.25 m, a walked-into ball at 0.45 m/s in 0.7 m, a 1.4 m/s kick in
+3.5 m; the table of floors is on the dataclass, `tests/test_world.py`
+guards it). The same four seeds re-run on the new floor:
+
+| roster | floor | goals (kicked / walked in) | own goals | kicks | back-kicks | falls |
+|---|---|---:|---:|---:|---:|---:|
+| 1v1 | frictionless (above) | 6 (0 / 6) | 2 (+2 unplaced) | 26 | 12 (46%) | 4 |
+| 1v1 | rolling 0.002 | 1 (1 / 0) | 1 | 14 | 6 (43%) | 4 |
+| 2v2 | frictionless (above) | 8 (1 / 7) | 6 (+2 unplaced) | 27 | 18 (67%) | 16 |
+| 2v2 | rolling 0.002 | 1 (1 / 0) | 0 | 11 | 4 (36%) | 19 |
+
+Read it against this track's premises. *Every walked-in goal was the
+frictionless ball* — a shove at the halfway line that used to trickle
+over a goal line now stops a stride later — and the own goals went with
+them (7 of 8 in 2v2 were exactly that shove at the duck's own mouth), so
+"a defender parked on its own line is the duck most likely to score an
+own goal" (3.2) was a property of the old floor, not of the defender.
+Kicks halve (a ball that stops near the kicker is re-acquired less often
+than one that comes back off the boards), and the back-kick PROPORTION
+holds at 36–43% on 25 kicks, so 2.x (the aim clamp) is still the
+mechanism to fix; goals on a real floor are now rarer still (2 in eight
+runs), which makes `goals` even less of a metric than 1.5 already said.
+Every soccer number older than this paragraph — README, brain
+docstrings, the `ChaseParams` measurements — was taken on the
+frictionless ball; `ball_decel` (tracker prediction) moves from 0.04 (the
+tracker's noise on a ball that never slowed) to 0.3 (the first two
+seconds of a kick on the new floor, where the decay is speed-proportional:
+1.4, 1.08, 0.75, 0.47, 0.28 m/s second by second).
+
 ### 1. A benchmark that can see an own goal, a back-kick and a pile-up
 
 - [x] **1.1 Goals per TEAM: for, against, own — DONE (2026-09-05).**
@@ -2916,42 +2952,6 @@ this stack has none of them.
       learns dribbling with RL using **a virtual camera in the simulator that
       models the field of view**, plus rewards for *active sensing* — keeping
       the ball in view — and transfers to hardware. The point for us:
-- [ ] **B.3 Game state and set plays.** Every league runs a GameController
-      with `initial / ready / set / playing / penalized`: in *ready* the
-      robots walk to legal kickoff positions, in *set* they stand still, and
-      teams script set plays off it. We have `kickoff_brains` (a reset) and
-      nothing else; there is no notion of a duck being penalised, a
-      kick-in, or a formation to return to. Small, and it makes 3v3 look
-      like a game: a `GameState` on the World that the roles read. → **what
-      settles it:** it is a correctness feature, so tests, plus `depth` and
-      `spread` at t=0 after each goal.
-
-#### C. The world model — what "tracking is working" leaves out
-
-- [ ] **C.1 A ball model with uncertainty.** Berlin United's selector (A.3)
-      runs on a *multi-hypothesis extended Kalman filter* for the ball;
-      B-Human's ball model carries covariance. Our `Track` is an
-      exponentially-smoothed point with a velocity from consecutive hits and
-      **no covariance**. That is why nothing in this track could reason
-      about risk, and why the shot gate (item 7) had a fresh estimate on 34%
-      of swings and no way to say how much to trust it on the rest. → the
-      prerequisite for A.3 and C.3; settle it with the estimate error
-      `probe_shot_gate.py` already prints (median 2.3 cm, 90th 8.3 cm) and
-      whether the covariance predicts it.
-- [x] **C.2 Self-localisation from the pitch — DONE (2026-09-06, late).**
-      Built as the goal-post particle filter in `brain/localize.py`, with a
-      `post` detection class (fixed-position landmarks; the pitch's goal
-      was a scored line with no geometry) and an auto-on rule for any duck
-      whose odometry is declared to drift. Numbers and mechanism in item 10
-      above: `datasheet` position error 0.215 → 0.072 m, yaw 20° → 2.3°,
-      miss at the goal line 0.663 → 0.075 m; `hostile` 0.706 → 0.089 m. The
-      one honest gap: the landmarks are the four posts and nothing else
-      (no lines, no corners), so a duck facing the side boards for a long
-      stretch is on dead reckoning until a post comes back into the 62°
-      lens — the cloud reports its own spread (`Localizer.spread`) for a
-      brain that wants to know.
-- [ ] **C.3 A shared world model, not a shared point.** SPL teams fuse
-      teammates' ball estimates weighted by their covariances into a team
       dribbling keeps the ball in continuous contact inside the walk, so
       there is never a 3 s blind approach to a stale spot. Our `push` mode
       (`push_beyond`, a "push spot squarely behind the ball") is a crude
@@ -3012,6 +3012,42 @@ this stack has none of them.
       with a defender in front of it. The numbers above are on the parallel
       session's uncommitted floor, forked together, so they are paired but
       provisional like everything after item 7's baseline note.
+- [ ] **B.3 Game state and set plays.** Every league runs a GameController
+      with `initial / ready / set / playing / penalized`: in *ready* the
+      robots walk to legal kickoff positions, in *set* they stand still, and
+      teams script set plays off it. We have `kickoff_brains` (a reset) and
+      nothing else; there is no notion of a duck being penalised, a
+      kick-in, or a formation to return to. Small, and it makes 3v3 look
+      like a game: a `GameState` on the World that the roles read. → **what
+      settles it:** it is a correctness feature, so tests, plus `depth` and
+      `spread` at t=0 after each goal.
+
+#### C. The world model — what "tracking is working" leaves out
+
+- [ ] **C.1 A ball model with uncertainty.** Berlin United's selector (A.3)
+      runs on a *multi-hypothesis extended Kalman filter* for the ball;
+      B-Human's ball model carries covariance. Our `Track` is an
+      exponentially-smoothed point with a velocity from consecutive hits and
+      **no covariance**. That is why nothing in this track could reason
+      about risk, and why the shot gate (item 7) had a fresh estimate on 34%
+      of swings and no way to say how much to trust it on the rest. → the
+      prerequisite for A.3 and C.3; settle it with the estimate error
+      `probe_shot_gate.py` already prints (median 2.3 cm, 90th 8.3 cm) and
+      whether the covariance predicts it.
+- [x] **C.2 Self-localisation from the pitch — DONE (2026-09-06, late).**
+      Built as the goal-post particle filter in `brain/localize.py`, with a
+      `post` detection class (fixed-position landmarks; the pitch's goal
+      was a scored line with no geometry) and an auto-on rule for any duck
+      whose odometry is declared to drift. Numbers and mechanism in item 10
+      above: `datasheet` position error 0.215 → 0.072 m, yaw 20° → 2.3°,
+      miss at the goal line 0.663 → 0.075 m; `hostile` 0.706 → 0.089 m. The
+      one honest gap: the landmarks are the four posts and nothing else
+      (no lines, no corners), so a duck facing the side boards for a long
+      stretch is on dead reckoning until a post comes back into the 62°
+      lens — the cloud reports its own spread (`Localizer.spread`) for a
+      brain that wants to know.
+- [ ] **C.3 A shared world model, not a shared point.** SPL teams fuse
+      teammates' ball estimates weighted by their covariances into a team
       ball; B-Human 2022 ("More Team Play with Less Communication") rebuilt
       the behaviour to play pass-oriented soccer while *sending fewer
       messages*, because the league capped team traffic. Our blackboard
@@ -3164,6 +3200,41 @@ test, and the measurement that moved.**
 5. `_sense_bumps` reads only the last substep's contact list (a touch under
    four substeps is invisible). Low.
 
+**Shipped for 1–5** (`world/scenario.py`, `compose.py`, `arena.py`; tests in
+`test_world.py` ×7, `test_arena.py` ×2):
+- `Scenario.collision` defaults to `"all"`; the "all" variant's inertials
+  are pinned to the walk file's (upstream hand-rounds three bodies
+  differently per export, so the walker was NOT bit-identical as shipped —
+  it is now: max |Δqpos| 0.000 over 10 s × 3 seeds). Shoe-shell hulls in
+  the ankle bodies are masked off the floor so the sole stays the ground
+  contact. Measured after: a trunk-height ball bounces off the jaw/trunk
+  (was: through, touching nothing); walkers head-on stop at 11.2 cm with
+  no fall (6.7 cm and a fall); a wall stops the beak at −0.2 cm (8.7 cm
+  inside, fell).
+- `Person.yield_m` defaults to 0.55 (never touches, 34 cm surface gap at
+  0.3–1.5 m/s). There is NO safe speed for a yield-0 person against a duck
+  with a body (0.10 m/s shoves it 0.22 m, ≥0.15 broadside topples it), so
+  speed is documented, not clamped; a respawn now steps clear of a person
+  capsule (the 5 m/s "fling" was a respawn inside one).
+- Toys get `priority=1`, so μ = 0.8 applies (slide 0.51–0.57 cm from a
+  0.3 m/s nudge, the μ = 0.8 prediction; was 0.41, the μ = 1.0 one). A
+  jaw–toy contact exclude beside each grasp weld: under "all" the jaw's
+  rigid hull sat on a 4 cm block and the tidy pick behind the basket fell
+  from 8/8 seeds to 3/8; the exclude restores 7/8 (seed 7 picks at 78 s
+  under walk and past the 90 s window under all).
+- Ball restitution: negative result. Best e = 0.22 at solref (0.01, 0.1)
+  and it shortens roll-outs 20%; not shipped, written on the geom.
+- Bumps are sensed on every substep (+3–8% on a 0.2–0.35 ms world step).
+- `World.step` now refreshes kinematics/COM/sensors after the substep loop,
+  the same four calls as the walk env's fix for item 6 below, so the
+  one-duck world still matches the env step for step.
+- Paired benchmarks, same seeds: eval-pitch 4 seeds — goals 1 → 1, own
+  goals 1 → 0, kicks 14 → 15, back-kicks 6 → 7, **falls 4 → 1**;
+  eval-tidy 16 seeds — **0.82 → 0.90 tidied, 0.44 → 0.31 falls a run**
+  (9 seeds better, 3 worse, 4 tied). Saved scenes that pin
+  `"collision": "walk"` (`scenarios/follow-me-edit*.json`,
+  `pitch-roles-2v2.json`) keep the old bodiless duck until re-saved.
+
 Clean, measured: solver/integrator options equal `scene_walk.xml` (and
 upstream's implicitfast/10-iteration choice makes zero difference to the
 trajectory); every duck body mass/inertia bit-identical to upstream; box
@@ -3200,41 +3271,6 @@ XL330-M288 datasheet. The gaps are fidelity, not errors:
 9. **Domain randomisation missing vs upstream**: velocity pushes (±0.3 m/s
    every 3–6 s), trunk/head CoM offsets, armature ±10%, IMU misalignment
    ≤6°, encoder bias, 0–1 step sensor delay, joint-limit penalty; trunk
-**Shipped for 1–5** (`world/scenario.py`, `compose.py`, `arena.py`; tests in
-`test_world.py` ×7, `test_arena.py` ×2):
-- `Scenario.collision` defaults to `"all"`; the "all" variant's inertials
-  are pinned to the walk file's (upstream hand-rounds three bodies
-  differently per export, so the walker was NOT bit-identical as shipped —
-  it is now: max |Δqpos| 0.000 over 10 s × 3 seeds). Shoe-shell hulls in
-  the ankle bodies are masked off the floor so the sole stays the ground
-  contact. Measured after: a trunk-height ball bounces off the jaw/trunk
-  (was: through, touching nothing); walkers head-on stop at 11.2 cm with
-  no fall (6.7 cm and a fall); a wall stops the beak at −0.2 cm (8.7 cm
-  inside, fell).
-- `Person.yield_m` defaults to 0.55 (never touches, 34 cm surface gap at
-  0.3–1.5 m/s). There is NO safe speed for a yield-0 person against a duck
-  with a body (0.10 m/s shoves it 0.22 m, ≥0.15 broadside topples it), so
-  speed is documented, not clamped; a respawn now steps clear of a person
-  capsule (the 5 m/s "fling" was a respawn inside one).
-- Toys get `priority=1`, so μ = 0.8 applies (slide 0.51–0.57 cm from a
-  0.3 m/s nudge, the μ = 0.8 prediction; was 0.41, the μ = 1.0 one). A
-  jaw–toy contact exclude beside each grasp weld: under "all" the jaw's
-  rigid hull sat on a 4 cm block and the tidy pick behind the basket fell
-  from 8/8 seeds to 3/8; the exclude restores 7/8 (seed 7 picks at 78 s
-  under walk and past the 90 s window under all).
-- Ball restitution: negative result. Best e = 0.22 at solref (0.01, 0.1)
-  and it shortens roll-outs 20%; not shipped, written on the geom.
-- Bumps are sensed on every substep (+3–8% on a 0.2–0.35 ms world step).
-- `World.step` now refreshes kinematics/COM/sensors after the substep loop,
-  the same four calls as the walk env's fix for item 6 below, so the
-  one-duck world still matches the env step for step.
-- Paired benchmarks, same seeds: eval-pitch 4 seeds — goals 1 → 1, own
-  goals 1 → 0, kicks 14 → 15, back-kicks 6 → 7, **falls 4 → 1**;
-  eval-tidy 16 seeds — **0.82 → 0.90 tidied, 0.44 → 0.31 falls a run**
-  (9 seeds better, 3 worse, 4 tied). Saved scenes that pin
-  `"collision": "walk"` (`scenarios/follow-me-edit*.json`,
-  `pitch-roles-2v2.json`) keep the old bodiless duck until re-saved.
-
    mass DR is mass-only (upstream scales inertia too), and
    `body_subtreemass` goes stale after the write (dynamics unaffected).
 10. **Open hardware questions** (not sim bugs): the 1.75 A current clamp
@@ -3244,6 +3280,41 @@ XL330-M288 datasheet. The gaps are fidelity, not errors:
     register read settles it. And `robotd.toml` now defaults to
     `action_scale 0.9` with low-pass filters that the pinned upstream sha
     and this harness never train with.
+
+**Shipped for 6–9** (`walk_env.py`, `train.py`, `vec_env.py`,
+`behaviors/env.py`, `eval_onnx.py`; `tests/test_walk_env_physics.py`, 13
+tests):
+- Obs are fresh: after the substep loop the env runs
+  kinematics + comPos + comVel + sensorVel (3.5 µs; `mj_forward` is 18.8
+  and `mj_step1` rebuilds constraint rows the BAM friction scan reads).
+  Gyro/gravity/height staleness 0.767 rad/s / 0.0098 / 6.9 mm → 0.000.
+  Cost +3% a step, −1.5% ctrl steps/s at 32 envs. `infer_policy.py` on the
+  robot side keeps the 5 ms lag; it is now the sim that is fresh, which is
+  the direction mjlab trains in.
+- Solver: implicitfast / 10 / 20 as mjlab's velocity cfg. Bit-identical to
+  Euler/100/50 on the walker (the solver converges in ≤6 iterations);
+  `ls_iterations` moves BAM by 1e-17, chaos-amplified to 4e-3 by step 300,
+  no fall either way. Training parity wins; the deployment runtime's XML
+  default is identical under the xml servo.
+- `train-walk` trains on BAM by default (`--actuator xml` opts out,
+  `MICRODUCK_ACTUATOR` still honoured): 56.4k → 42.4k ctrl steps/s at 32
+  envs (−25%) for the honest servo.
+- DR added with upstream's ranges: mass AND inertia ×U[0.95, 1.05] with
+  `mj_setConst` (subtree mass consistent to 1e-16); trunk/head CoM ±3 mm
+  ramping to ±15/±10 mm on upstream's step ladder; armature ×[0.9, 1.1];
+  velocity pushes ±0.3 m/s every 3–6 s (measured 44 pushes in 200 s,
+  intervals [3.02, 5.96] s, |Δv| ≤ 0.296). Every field lands and restores
+  to the bit with DR off; the in-process shared-model path replays all 12
+  fields. Pushes are OFF for every behavior env (a push in a headstand
+  curriculum is an experiment, not a fix) and OFF in `eval-walk` unless
+  `--push`, so eval numbers stay comparable. Skipped: IMU misalignment,
+  encoder bias, 0–1 step sensor delay, the joint-limit penalty — each an
+  obs/reward change to measure on its own.
+- The shipped `alpha_walking.onnx` under the new env: 0/10 falls, tracking
+  0.171 m/s (unchanged); with pushes on, ~1 fall per 120 pushes.
+- **The Linux x86_64 goldens in `tests/goldens/` are invalidated** (obs
+  bytes and RNG draw order moved); re-record with
+  `MICRODUCK_RECORD_GOLDENS=1` on Linux before CI goes green.
 
 ## Later / parked
 
@@ -3281,41 +3352,6 @@ XL330-M288 datasheet. The gaps are fidelity, not errors:
      training has ever lied to it.
 
   The fully honest version — render the head camera and run the actual
-**Shipped for 6–9** (`walk_env.py`, `train.py`, `vec_env.py`,
-`behaviors/env.py`, `eval_onnx.py`; `tests/test_walk_env_physics.py`, 13
-tests):
-- Obs are fresh: after the substep loop the env runs
-  kinematics + comPos + comVel + sensorVel (3.5 µs; `mj_forward` is 18.8
-  and `mj_step1` rebuilds constraint rows the BAM friction scan reads).
-  Gyro/gravity/height staleness 0.767 rad/s / 0.0098 / 6.9 mm → 0.000.
-  Cost +3% a step, −1.5% ctrl steps/s at 32 envs. `infer_policy.py` on the
-  robot side keeps the 5 ms lag; it is now the sim that is fresh, which is
-  the direction mjlab trains in.
-- Solver: implicitfast / 10 / 20 as mjlab's velocity cfg. Bit-identical to
-  Euler/100/50 on the walker (the solver converges in ≤6 iterations);
-  `ls_iterations` moves BAM by 1e-17, chaos-amplified to 4e-3 by step 300,
-  no fall either way. Training parity wins; the deployment runtime's XML
-  default is identical under the xml servo.
-- `train-walk` trains on BAM by default (`--actuator xml` opts out,
-  `MICRODUCK_ACTUATOR` still honoured): 56.4k → 42.4k ctrl steps/s at 32
-  envs (−25%) for the honest servo.
-- DR added with upstream's ranges: mass AND inertia ×U[0.95, 1.05] with
-  `mj_setConst` (subtree mass consistent to 1e-16); trunk/head CoM ±3 mm
-  ramping to ±15/±10 mm on upstream's step ladder; armature ×[0.9, 1.1];
-  velocity pushes ±0.3 m/s every 3–6 s (measured 44 pushes in 200 s,
-  intervals [3.02, 5.96] s, |Δv| ≤ 0.296). Every field lands and restores
-  to the bit with DR off; the in-process shared-model path replays all 12
-  fields. Pushes are OFF for every behavior env (a push in a headstand
-  curriculum is an experiment, not a fix) and OFF in `eval-walk` unless
-  `--push`, so eval numbers stay comparable. Skipped: IMU misalignment,
-  encoder bias, 0–1 step sensor delay, the joint-limit penalty — each an
-  obs/reward change to measure on its own.
-- The shipped `alpha_walking.onnx` under the new env: 0/10 falls, tracking
-  0.171 m/s (unchanged); with pushes on, ~1 fall per 120 pushes.
-- **The Linux x86_64 goldens in `tests/goldens/` are invalidated** (obs
-  bytes and RNG draw order moved); re-record with
-  `MICRODUCK_RECORD_GOLDENS=1` on Linux before CI goes green.
-
   `duck_detect` ONNX — subsumes all three and is far slower per step. Worth it
   only once the behavior is otherwise settled.
 - **Other things to find.** The slot layout is not ball-specific: the same
