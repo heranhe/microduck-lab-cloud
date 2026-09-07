@@ -3156,16 +3156,64 @@ this stack has none of them.
 
 #### C. The world model — what "tracking is working" leaves out
 
-- [ ] **C.1 A ball model with uncertainty.** Berlin United's selector (A.3)
-      runs on a *multi-hypothesis extended Kalman filter* for the ball;
-      B-Human's ball model carries covariance. Our `Track` is an
-      exponentially-smoothed point with a velocity from consecutive hits and
-      **no covariance**. That is why nothing in this track could reason
-      about risk, and why the shot gate (item 7) had a fresh estimate on 34%
-      of swings and no way to say how much to trust it on the rest. → the
-      prerequisite for A.3 and C.3; settle it with the estimate error
-      `probe_shot_gate.py` already prints (median 2.3 cm, 90th 8.3 cm) and
-      whether the covariance predicts it.
+- [x] **C.1 A ball model with uncertainty — BUILT and CALIBRATED
+      (2026-09-07).** Berlin United's selector (A.3) runs on a
+      *multi-hypothesis extended Kalman filter* for the ball; B-Human's
+      ball model carries covariance. Our `Track` was an exponentially-
+      smoothed point with a velocity and **no covariance**. Now each hit
+      carries `sig_meas`, the detector's DECLARED noise at that range
+      (bearing σ × range, and the width-ranged distance's own fraction —
+      range is radius / tan(width/2), so a 10% width error is a 10% range
+      error; `TrackerParams.for_detector` reads the duck's detector preset
+      off the scenario, and the default IS the datasheet, so no existing
+      caller changed), and `vel_sig`, the scatter of the velocity samples;
+      `Track.sigma(t)` grows them by the age of the hit. The chase brain
+      reports `predicted_sigma` beside `predicted` and sends it with its
+      claim (C.3). Locked by `tests/test_ball_sigma.py`.
+
+      **Does it predict the error?** `scripts/probe_shot_gate.py` now
+      samples every 25th live estimate against the true ball (2v2, 24
+      seeds × 300 s, ~15 700 samples a block). The error of a 2-D estimate
+      is *radial*, so a calibrated per-axis σ holds 39% of errors inside
+      1σ and 86% inside 2σ — not 68 / 95, which is what the first table
+      was read against. Discovery block (seeds 0–23), first draft (sensor
+      σ shrunk by the polar smoothing's √(k/(2−k)), 0.15 m/s prior):
+
+      | hit age | n | median σ | median err | in 1σ | in 2σ | r(σ, err) |
+      |---|---|---|---|---|---|---|
+      | 0.0–0.1 s | 6055 | 0.041 | 0.054 | 30% | 77% | 0.49 |
+      | 0.1–0.3 s | 5927 | 0.050 | 0.057 | 35% | 83% | 0.46 |
+      | 0.3–0.6 s | 2101 | 0.076 | 0.057 | 61% | 92% | 0.42 |
+      | 0.6–1.0 s | 1647 | 0.125 | 0.058 | 79% | 92% | 0.33 |
+
+      Two things in it: the smoothing does NOT reduce the placement error
+      (the tracker's own `smooth` note says why — the body frame lags), and
+      **the error does not grow with the age of the hit at all**: a ball
+      not seen for a second has mostly not moved. Fresh block (seeds
+      100–123) with the raw sensor σ and a 0.06 m/s prior:
+
+      | hit age | n | median σ | median err | in 1σ | in 2σ | r(σ, err) |
+      |---|---|---|---|---|---|---|
+      | 0.0–0.1 s | 5654 | 0.060 | 0.054 | 51% | 96% | 0.40 |
+      | 0.1–0.3 s | 6312 | 0.062 | 0.056 | 50% | 95% | 0.40 |
+      | 0.3–0.6 s | 2078 | 0.075 | 0.057 | 62% | 94% | 0.48 |
+      | 0.6–1.0 s | 1650 | 0.111 | 0.057 | 78% | 92% | 0.31 |
+      | all | 15694 | 0.067 | 0.056 | 55% | 95% | 0.41 |
+
+      **It predicts the error** (r 0.40–0.48 within every age bin, median σ
+      within 10% of the median error on fresh hits) and it errs on the
+      conservative side — 51–62% inside 1σ against a calibrated 39% for
+      hits under 0.6 s, and the oldest bin still over-dispersed because a
+      track WITH a velocity grows by its samples' scatter (0.1–0.2 m/s)
+      while the ball itself is standing still. A conservative σ is the
+      right side for a gate to err on; the two refinements that would
+      tighten it — 0.8 × the sensor σ, and no growth by `vel_sig` inside a
+      second — are each one probe run and are left. At the swing itself
+      (10 of 51 kicks had a fresh estimate — 20%, item 7's coverage
+      limit unchanged) σ 0.048 against a side error of 0.021, r 0.89.
+      Also out of this: the shot-gate probe's own estimate-error figure
+      (median 5.4–5.7 cm on this floor) is what the selector's `dir_sd`
+      already prices at +1.90°/cm.
 - [x] **C.2 Self-localisation from the pitch — DONE (2026-09-06, late).**
       Built as the goal-post particle filter in `brain/localize.py`, with a
       `post` detection class (fixed-position landmarks; the pitch's goal
@@ -3389,11 +3437,23 @@ this stack has none of them.
 - [ ] **F.1 A behaviour hierarchy.** B-Human writes behaviour in CABSL
       (hierarchical state machines) organised as skills and cards; NimbRo
       runs a two-layer FSM (game FSM over behaviour FSM). `Chase` is one
-      flat 13-state machine in a 2 300-line file with roles bolted on as a
+      flat state machine in a 3 000-line file with roles bolted on as a
       post and a zone. It has held up through this track because every
-      change was measured, but B.2 + B.3 + D.1 will not fit in it. Not
-      urgent; the moment it becomes urgent is when a keeper needs a
-      different top-level loop from a striker.
+      change was measured. **Revisited 2026-09-07, after B.2, B.3, C.1–C.4
+      and D.1–D.2 landed in it:** they fit — each as a knob and a hook
+      (the keeper is a post plus a block; the game state is a role
+      override and one more support state, "wait"; the field, the
+      selector's opponents, the fused ball and the ball's sigma live in
+      their own modules, `field.py`, `kickselect.py`, `team.py`,
+      `tracker.py`, and the brain only calls them). What did NOT fit, and
+      is the honest reason this item stays open, is legibility: `_plan`
+      and `step` each carry a dozen gated branches, and the order of the
+      `elif` chain in `step` (kick → look → retreat → avoid → block →
+      support → yield → push → …) is a priority scheme nobody wrote down.
+      The refactor that would pay is exactly that chain as a named
+      priority list, not a new hierarchy. Still not urgent; the moment it
+      becomes urgent is when a keeper needs a different top-level loop
+      from a striker — and the measured keeper does not.
 
 **What to read this list as.** A.1 is the only item that removes the
 limit item 7 hit; A.2–A.4 route around it; B and C are the parts of a
