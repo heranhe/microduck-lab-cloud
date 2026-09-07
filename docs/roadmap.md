@@ -3076,11 +3076,10 @@ What is left, in the order it is worth doing:
    the benchmark under every number in this track, so it goes in as a
    World knob (0 = off, bit for bit what was measured) and ON for the
    lab's pitch builtins, the way `getup_s` and the kickoff rule went in.
-   Both patches are in `docs/patches/` (`soccer-ball-out.patch`,
-   `soccer-board-margin.patch`), against the tree state above, because
+   Both were first kept as patches under `docs/patches/` because
    `arena.py` and `controllers.py` were open in the parallel session when
-   this was measured and the hunks are theirs to land beside; the numbers
-   are the ones to beat. Back-kicks rise with the ball-out rule (0.8 ->
+   this was measured; they landed later the same day (below) and the
+   patches are gone. Back-kicks rise with the ball-out rule (0.8 ->
    2.4 a run) at the same PROPORTION of kicks (29% -> 31%): more play,
    not worse play.
 
