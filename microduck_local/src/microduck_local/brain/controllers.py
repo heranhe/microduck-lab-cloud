@@ -586,18 +586,28 @@ class ChaseParams:
     # absolute error moves the WRONG way (+2.7, +5.3), and kicks fall 1.88 a
     # seed at 0.09 (p = 0.002). Rule 6 again: a better rate on fewer touches.
     #
-    # THE DIAGNOSTIC that settles it, and the reason not to rebuild this with
-    # a different threshold: **the side offset of the kicks that survived did
-    # not change** (-0.002 m, p = 0.83; +0.004 m, p = 0.75). A selector that
-    # refuses 15% of swings and leaves the distribution of what it was
-    # selecting ON untouched is refusing at random. `Chase.predicted` is the
-    # only fresh estimate the brain has at the swing, and it does not know
-    # where the ball is well enough to price the shot — see
-    # `scripts/probe_shot_gate.py`, which measures exactly that signal.
+    # THE DIAGNOSTIC: the side offset of the kicks that survived did not
+    # change (-0.002 m, p = 0.83; +0.004 m, p = 0.75). The obvious reading is
+    # that the estimate is junk and the gate refuses at random. That reading
+    # was written here first and it is WRONG — `scripts/probe_shot_gate.py`
+    # measures the signal directly, over 162 kicks on 24 seeds:
     #
-    # Kept, off, with the numbers: the mechanism is sound and the ESTIMATE is
-    # what is missing, so this becomes worth re-running the day the brain can
-    # see the ball inside 0.35 m. That is 4c's geometry problem, not this.
+    #   |predicted side| vs |actual side|   r = +0.48 (p = 7e-5)
+    #   the estimate's own error            median 0.023 m, 90th 0.083
+    #   as a gate at 0.12 m                 refuses 31% of the swings it can
+    #                                       see, and 88% of those really were
+    #                                       wide
+    #
+    # The estimate is GOOD. What it is not is AVAILABLE: the brain has a
+    # fresh fix on **34% of swings**. So the gate can only assess a third of
+    # the population, refuses about a tenth of all swings, and cannot move a
+    # pooled statistic that the other two thirds still dominate — while
+    # paying the full price in touches for the ones it does refuse.
+    #
+    # Kept, off, with the numbers. The mechanism is sound and the precision
+    # is there; COVERAGE is what is missing, and coverage is the camera's
+    # blind radius (4c), not a threshold to retune. Re-run this the day the
+    # brain can see the ball inside 0.35 m — and not before.
     kick_side_max: float = 0.0
     # Plan the kick spot for where the ball WILL be when the duck gets there,
     # not where it was last seen: at most this many seconds of lead, from the

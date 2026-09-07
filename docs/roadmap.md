@@ -2525,20 +2525,49 @@ What is left, in the order it is worth doing:
    improves, mean absolute error moves the wrong way, and touches fall. Rule
    6 again.
 
-   **The diagnostic that settles it:** the side offset of the kicks that
-   SURVIVED the gate did not change (−0.002 m, p=0.83; +0.004 m, p=0.75). A
-   selector that refuses 15% of swings and leaves the distribution of the
-   thing it selects on untouched is refusing at random. The mechanism is
-   sound; the ESTIMATE is missing. `Chase.predicted` is the only fresh fix
-   the brain has at the swing and it cannot price the shot —
-   `scripts/probe_shot_gate.py` measures exactly that signal, so the next
-   person can check it in one run rather than rebuilding the gate.
+   **The diagnostic, and a correction.** The side offset of the kicks that
+   SURVIVED the gate did not change (−0.002 m, p=0.83; +0.004 m, p=0.75).
+   The obvious reading is that the estimate is junk and the gate refuses at
+   random. That reading went into this item first and it is **wrong** —
+   `scripts/probe_shot_gate.py` measures the signal directly, over 162 kicks
+   on 24 seeds:
 
-   → **which leaves ONE lever, and it is 4c's:** the duck cannot see the ball
-   inside 0.35 m. Placement, aim compensation and shot selection have each
-   now been measured out, and all three failed for the same underlying
-   reason. The kick does not need a better rule. It needs the ball to still
-   be visible when the swing is decided.
+   | | |
+   |---|---|
+   | \|predicted side\| vs \|actual side\| | r = +0.48 (p = 7e-5) |
+   | the estimate's own error | median 2.3 cm, 90th 8.3 cm |
+   | as a gate at 0.12 m | refuses 31% of the swings it can see, and **88% of those really were wide** |
+   | **swings it can see at all** | **34%** |
+
+   The estimate is good. What it is not is AVAILABLE. The gate assesses a
+   third of the population, refuses about a tenth of all swings, and cannot
+   move a pooled statistic the other two thirds still dominate — while
+   paying the full price in touches for the ones it does refuse. **Precision
+   is fine; coverage is the problem**, and coverage is the camera's blind
+   radius, not a threshold to retune.
+
+   → **which leaves ONE lever, and it is not a brain rule.** Placement, aim
+   compensation and shot selection have each now been measured out, and all
+   three failed for the same underlying reason: the duck cannot see the ball
+   when the swing is decided. Every route to seeing it has also been
+   measured, and this is the place to record that the list is now closed:
+
+   | route | verdict |
+   |---|---|
+   | pitch the head down (`gaze_still`, the search dip) | cannot reach — on the spot the ball is 37° off the nose, the camera's horizontal half-field is 31° |
+   | yaw the head at it (`gaze_yaw`) | measured off 2026-09-06 — reaches the endpoint, fixes nothing, adds +12.4° of bias |
+   | read it off the ToF (`tof_ball_m`) | measured off twice — redundant on 88–94% of the ticks it fires, and wrong 2 times in 3 in the blind case it exists for |
+   | predict it (`predict_s`, `spot_lead`) | `spot_lead` measured off; the prediction exists on under half of swings and cannot price a shot |
+   | re-plan later (`refresh_min`) | fixes the staleness, costs 58% of the touches, confirmed on fresh seeds |
+
+   The camera sits 23 cm above the floor pointing forward, which puts a
+   blind radius of 23 cm under the duck's nose at a level head and 6.9 cm
+   fully dipped (`docs/camera-hardware.md` §3). The kick spot is inside it.
+   **This is a sensing limit, not a control one** — "it does not remove the
+   blind zone, nothing does". The next real move on the kick is a sensor
+   that sees the last 20 cm, not another rule for deciding when to swing.
+   Everything above is worth keeping because it says, with numbers, that the
+   rules have been tried.
 8. ~~**`gaze_yaw`**~~ (4c) — **MEASURED OFF (2026-09-06).** Two corrections
    and a result, all measured.
 
