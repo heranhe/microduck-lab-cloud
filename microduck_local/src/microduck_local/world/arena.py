@@ -134,6 +134,7 @@ class WorldDuck:
     step_count: int = 0
     bumped_t: float = -1e9             # when a body of this duck last touched another duck or a person
     episodes: int = 0
+    down_until: float = -1.0           # lying where it fell until then (World.getup_s); -1: up
     _hold_yaw: float | None = None
 
     # -- state readers (all straight off mjData, no caching) -------------------
@@ -298,7 +299,7 @@ class WorldPerson:
 
 class World:
     def __init__(self, scenario: Scenario, infer_for: dict[str, Infer] | None = None,
-                 max_episode_s: float | None = None, seed: int | None = None):
+                 max_episode_s: float | None = None, seed: int | None = None, getup_s: float = 0.0):
         # No episode timeout by default: a world is a place, not an episode
         # (a 30 s default once respawned a duck mid-delivery, toy and all).
         # Training envs pass their own horizon.
@@ -307,6 +308,13 @@ class World:
         self.model = compose(scenario)
         self.data = mujoco.MjData(self.model)
         self.t = 0.0
+        # FALLS COST TIME (roadmap Track 4 s6 B.1, the second half): with
+        # `getup_s` > 0 a fallen duck lies where it fell, on a zero command,
+        # for that long before it is respawned - the stand-in for a get-up
+        # policy (every RoboCup humanoid must recover unaided; ours has no
+        # floor-to-stand yet), which on a robot costs 10-20 s. 0: the
+        # respawn as it always was, and every number measured before this.
+        self.getup_s = float(getup_s)
         self.tick = 0
         self.rng = np.random.default_rng(scenario.seed if seed is None else seed)
         infer_for = infer_for or {}
@@ -488,6 +496,7 @@ class World:
         d.policy_id = policy_id
 
     # -- one 50 Hz control step -----------------------------------------------
+        d.down_until = -1.0
     # -- manipulation (roadmap 12.2 / 12.3) ------------------------------------
     def mouth_tip(self, d: WorldDuck) -> np.ndarray:
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, d.adr.prefix + "mouth_tip")
@@ -823,7 +832,7 @@ class World:
         m, data = self.model, self.data
         hold = self.in_kickoff
         for d in self.ducks.values():
-            if hold:                          # kickoff: stand, whatever the brain asked
+            if hold or d.down_until > self.t:  # kickoff, or lying where it fell: stand, whatever the brain asked
                 d.set_cmd(data, (0.0, 0.0, 0.0))
             skill = self._skill_cmd(d)
             obs = d.obs(data)
@@ -888,8 +897,17 @@ class World:
         return out
 
     def sensors_payload(self, duck_id: str) -> dict | None:
+            if d.down_until >= 0.0:
+                if self.t >= d.down_until:    # the get-up (its stand-in: lying for getup_s) is over
+                    self._respawn(d)
+                    mujoco.mj_forward(m, data)
+                    d.prev_joint_vel = d.joint_vel(data)
+                continue                      # still down: counted at the fall, nothing more to do
         d = self.ducks[duck_id]
         out: dict = {}
+                if self.getup_s > 0.0:
+                    d.down_until = self.t + self.getup_s
+                    continue
         if d.tof is not None and d.tof.last is not None:
             out["tof"] = {**d.tof.last.as_payload(), "age": round(self.t - d.tof.last.t, 4)}
         if d.detector is not None and d.detector.last is not None:

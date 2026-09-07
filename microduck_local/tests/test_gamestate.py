@@ -120,3 +120,41 @@ def test_a_waiting_duck_supports_in_its_own_half_and_plays_once_the_ball_leaves_
     b.kickoff()
     assert b._kickoff_wait is False
     assert ChaseParams.from_env("kickoff_wait=1,kickoff_circle=0.25").kickoff_circle == 0.25
+
+
+def test_with_a_getup_time_a_fallen_duck_lies_where_it_fell_and_respawns_after_it():
+    """Roadmap B.1, the second half: `World.getup_s` makes a fall cost time.
+    The fall is counted once, the duck lies on a zero command where it fell,
+    and it is back on its spawn only after `getup_s`; at 0 the respawn is
+    immediate, as every earlier number was measured."""
+    import math
+
+    import numpy as np
+
+    from microduck_local import contract as C
+    for getup in (2.0, 0.0):
+        sc = make_pitch()
+        w = World(sc, seed=5, getup_s=getup)
+        d0 = w.ducks[sc.ducks[0].id]
+        q = d0.adr.root_qpos
+        w.data.qpos[q + 3:q + 7] = [math.cos(math.pi / 4), math.sin(math.pi / 4), 0.0, 0.0]   # rolled 90 deg: down
+        mujoco.mj_forward(w.model, w.data)
+        assert d0.fallen(w.data)
+        d0.set_cmd(w.data, (0.5, 0.0, 0.0))
+        w.step()
+        assert d0.falls == 1
+        if getup > 0:
+            assert d0.down_until > w.t and d0.fallen(w.data)                 # still down where it fell
+            d0.set_cmd(w.data, (0.5, 0.0, 0.0))
+            w.step()                                                          # the next tick: on a zero command
+            assert float(d0.twist_cmd[0]) == 0.0
+            n = 1
+            while d0.down_until >= 0.0:
+                d0.set_cmd(w.data, (0.5, 0.0, 0.0))
+                w.step()
+                n += 1
+            assert abs(n * C.CTRL_DT - getup) <= 2 * C.CTRL_DT and d0.falls == 1   # counted once, up after getup_s
+            pos = d0.trunk_pos(w.data)
+            assert np.hypot(pos[0] - d0.spawn[0], pos[1] - d0.spawn[1]) < 0.05
+        else:
+            assert d0.down_until < 0.0 and not d0.fallen(w.data)             # respawned at once

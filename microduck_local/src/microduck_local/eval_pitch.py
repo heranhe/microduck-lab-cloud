@@ -119,11 +119,12 @@ from .world.metrics import (  # noqa: F401  (re-exported: tooling imports these 
 ROW_FIELDS = METRIC_FIELDS + GOAL_FIELDS + SHAPE_FIELDS
 
 
-def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = None) -> dict:
+def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = None,
+            getup_s: float = 0.0) -> dict:
     from .brain.team import brain_kwargs, kickoff_brains
     sc = make_pitch(per_side=per_side)
     infer = onnx_infer(Path(walker) if walker else POLICIES_DIR / "alpha_walking.onnx")
-    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed)
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, getup_s=getup_s)
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
     # A little seed-dependent asymmetry: nudge the ball off centre.
@@ -320,6 +321,9 @@ def main() -> None:
     ap.add_argument("--walker", default=None, metavar="PATH",
                     help="run this walk policy instead of the shipped alpha_walking.onnx "
                          "(roadmap 3.7: comparing two LOCALLY trained walkers, never one against the shipped one)")
+    ap.add_argument("--getup-s", type=float, default=0.0, metavar="S",
+                    help="a fallen duck lies where it fell for S seconds before it respawns (roadmap B.1: "
+                         "falls cost time, the stand-in for a get-up policy); 0 = respawn at once, the baseline")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--out", help="append each seed's result here as a JSON line AND resume from it: "
                                   "seeds already in the file are not re-run")
@@ -347,7 +351,7 @@ def main() -> None:
         if not args.json:
             print(_seed_line(r), flush=True)
 
-    args_list = [(sd, args.seconds, args.per_side, args.walker) for sd in todo]
+    args_list = [(sd, args.seconds, args.per_side, args.walker, args.getup_s) for sd in todo]
     try:
         if args.jobs > 1 and len(todo) > 1:
             import multiprocessing as mp
