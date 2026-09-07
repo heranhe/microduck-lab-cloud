@@ -275,6 +275,9 @@ export interface SimFrame {
    *  ~2.5 a run and cannot resolve a change (146 seeds for a 25% shift),
    *  while possession takes 9 and ballAdvance 43. */
   soccer: ({ left: number; right: number; ball: [number, number]; lastGoal: "left" | "right" | null; kickoff: number; kicked?: number; bumped?: number;
+    /** The game state (roadmap Track 4 §6 B.3): "set" during the hold, "kickoff" while the
+     *  conceding side's ball is still on the spot, else "playing"; and who kicks off. */
+    state?: "set" | "kickoff" | "playing"; kickoffTeam?: string | null;
     /** Goals neither the kicker nor the last touch could be pinned to. */
     goalsUnattributed?: number }
     & Partial<Record<"ballAdvance" | "ballProgress" | "possession" | "possessionWide"

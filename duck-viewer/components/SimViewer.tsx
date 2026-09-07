@@ -1921,7 +1921,9 @@ export default function SimViewer() {
           {/* The kickoff banner survives a minimize: it is live state you need
               at the moment it appears, and it is one line. */}
           {soc.kickoff > 0 ? (
-            <div style={{ color: "#ffd166" }}>GOAL in the {soc.lastGoal} mouth · kickoff in {soc.kickoff.toFixed(1)} s</div>
+            <div style={{ color: "#ffd166" }}>GOAL in the {soc.lastGoal} mouth · kickoff in {soc.kickoff.toFixed(1)} s{soc.kickoffTeam ? ` · ${soc.kickoffTeam} kicks off` : ""}</div>
+          ) : soc.state === "kickoff" ? (
+            <div style={{ color: "#ffd166" }}>{soc.kickoffTeam ?? "the side that conceded"} kicks off · the ball is on the spot</div>
           ) : scoreOpen ? (
             <div style={{ color: "#9aa5b1" }}>one ball · a goal restarts from the spawns</div>
           ) : null}
