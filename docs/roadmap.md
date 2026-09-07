@@ -3517,14 +3517,26 @@ this stack has none of them.
       becomes urgent is when a keeper needs a different top-level loop
       from a striker — and the measured keeper does not.
 
-**What to read this list as.** A.1 is the only item that removes the
-limit item 7 hit; A.2–A.4 route around it; B and C are the parts of a
-soccer stack that were never started; D depends on C; E says the field's
-learned results *kept the honest camera and rewarded looking*, which is the
-opposite of the shortcut that would make a striker look good in sim. If
-one thing gets built next it should be A.1 in the simulator — a day of
-work — because its number ("swings it can see") decides whether A.2–A.4
-and items 7's dead knobs are worth reopening at all.
+**What to read this list as (written 2026-09-06; revised 2026-09-07
+after the survey was worked through).** A.1 was the only item that could
+remove the limit item 7 hit, and it was measured: the one real camera CAN
+see the kick spot, the gaze puts the ball on it, and the shipped kick
+skill whiffs with the head down — so the limit is the kick skill's, and
+the fix is upstream (`docs/patches/microduck_rl-kick-head-down.patch`).
+A.3 (outcome-simulated kick selection) shipped on; A.4 (the push) is the
+best ball-side result in the track and waits on the rolling-resistance
+floor being committed; B.2 (a keeper) and B.3 (a game state) are built,
+the keeper off and the game state on; C.1–C.3 (the ball's sigma, the
+goal-post localiser, the fused team ball) are built and measured against
+the truth; C.4's opponent list and D.2's field are built and measured in
+play, each paying in one configuration and not the other. What is left
+needs a GPU (A.2 a learned kick, B.1 a get-up, E.1–E.3) or a colour sense
+that survives contact range (the duel, C.4's second half). E still says
+the field's learned results *kept the honest camera and rewarded looking*,
+which is the opposite of the shortcut that would make a striker look good
+in sim. If one thing gets built next it should be A.2 on the official
+stack with the head-down patch applied: the swing is the limit, and the
+survey's every route around it has now been measured.
 
 Sources: [B-Human 2024 code release](https://docs.b-human.de/coderelease2024/)
 and its [WalkKickEngine](https://docs.b-human.de/coderelease2024/motion/motion-walkkickengine/);
