@@ -3240,9 +3240,36 @@ this stack has none of them.
       not opponents; it is a defender-with-ball rule — push to the
       nearest up-pitch teammate (the receiver D.1 found nobody offered) or
       clear, then return to depth — and only then a supporter position
-      that reacts to the ball's carrier. → judge on `depth`, `spread`,
-      `crowd` (resolve at 11 seeds) with push-first on, against the
-      3v3 numbers above. Not built tonight.
+      that reacts to the ball's carrier.
+
+      **The first job was built and measured the same night, and it is not
+      the fix.** `ChaseParams.defender_clears`: with the push on offer, a
+      defender or keeper is not offered it, kicks clear, and returns to its
+      post. 3v3 with roles, push-first with and without, 24 seeds on one
+      tree state:
+
+      | | shipped (kicks) | push-first, defender carries | push-first, defender clears | clears − carries |
+      |---|---|---|---|---|
+      | depth from own goal | 0.571 | 0.769 | 0.723 | −0.046 (p=0.24) |
+      | spread | 1.507 | 1.233 | 1.310 | +0.077 (p=0.10) |
+      | crowd | 0.186 | 0.304 | 0.288 | −0.016 (p=0.54) |
+      | possession / progress | 13.8 / 0.029 | 17.5 / 0.102 | 17.2 / 0.112 | flat |
+      | back-kicks a run | 0.71 | 0.00 | 0.21 | +0.21 (**p=0.045**) |
+      | own goals a run | 0.00 | 0.04 | 0.17 | +0.13 (p=0.17) |
+
+      A quarter of the depth and a third of the spread come back, neither
+      resolving, and the defender's clearing kicks bring back-kicks and
+      own-goal risk with them (4b's geometry: a kick from our own third
+      goes the wrong way some of the time). The carrying defender was a
+      minor part of the shape cost. **What the numbers say the cost is:**
+      a team compresses around a WALKED ball because every post — the
+      striker's 0.8 m ahead, the mid's half-way, the supporter's 0.7 m
+      behind — is laid out relative to the ball, and under push-first the
+      ball moves with a duck attached. The lever is a supporter position
+      that anticipates the carrier (holds a lane ahead and wide of it,
+      rather than a distance from the ball), which is the potential-field
+      positioning this item is named for. `defender_clears` ships off.
+      Not built: the field itself.
 #### E. Learning — where the field found it pays, and where it did not
 
 - [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**

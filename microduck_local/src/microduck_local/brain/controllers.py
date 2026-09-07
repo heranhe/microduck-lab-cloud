@@ -921,6 +921,28 @@ class ChaseParams:
     # lets the measured push-only result (+3.2 s/min possession, +0.07
     # progress) keep its aim.
     kick_select_shoot: float = 0.3
+    # The back line CLEARS rather than carries (roadmap Track 4 s6 D.2's
+    # first job): with the push on offer, a defender or keeper is not
+    # offered it - the selector picks its kick line as usual, the ball
+    # leaves the defensive third, and the duck returns to its post. Measured
+    # reason: under push-first in 3v3 a defender that got the ball walked it
+    # up the pitch and left its post (depth 0.57 -> 0.77 m, spread 1.51 ->
+    # 1.23 m, both p<0.001), because a post says where to stand WITHOUT the
+    # ball and nothing said what to do with it. Only means anything with
+    # `kick_select_push`; the shipped brain is untouched by it.
+    #
+    # MEASURED, and it is not the fix (3v3 with roles, push-first with and
+    # without, 24 seeds, one tree state): depth 0.769 -> 0.723 (p=0.24),
+    # spread 1.23 -> 1.31 (p=0.10), crowd flat - a quarter of the depth and
+    # a third of the spread back, neither resolving - while the defender's
+    # kicks (+0.71 a run, p=0.006) bring back-kicks (0 -> 0.21 a run,
+    # p=0.045) and own goals 1 -> 4 (p=0.17): a clearing kick from our own
+    # third under the exit-angle geometry (4b) goes the wrong way some of
+    # the time. The carrying defender was a minor part of the shape cost; a
+    # team compresses around a WALKED ball because every post is laid out
+    # relative to the ball. Ships off; the lever is a supporter position
+    # that anticipates the carrier, not a rule for the carrier.
+    defender_clears: bool = False
     # PASSING (roadmap Track 4 s6 D.1). With this on, every live teammate
     # the board places at least `pass_min_ahead` metres UP-PITCH of the
     # ball adds a candidate line straight at it (both feet), and every
@@ -2777,7 +2799,7 @@ class Chase:
                     if abs(_wrap(u_m - los)) <= p.aim_max + 1e-9:    # inside the same walk-round the clamp permits
                         lines += [(u_m, "kick_left"), (u_m, "kick_right")]
         models = None
-        if p.kick_select_push:
+        if p.kick_select_push and not (p.defender_clears and self.job in ("defender", "keeper")):
             from .kickselect import push_model  # noqa: PLC0415
             lines += [(u_, "push") for u_, act in lines if act == "kick_left"]   # one push per line
             models = {"push": push_model(p.push_roll, p.push_dir_sd, max(p.ball_decel, 0.02))}

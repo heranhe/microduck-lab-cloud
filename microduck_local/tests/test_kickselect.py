@@ -191,6 +191,49 @@ def test_a_kick_a_teammate_receives_is_worth_more_and_a_pass_line_is_offered_up_
     assert ChaseParams().kick_select_pass is False
 
 
+def test_the_back_line_is_not_offered_the_push_so_it_clears_and_returns():
+    """D.2's first job: with the push on offer, a defender or keeper is not
+    offered it (it kicks clear and returns to its post); a striker is."""
+    from microduck_local.brain import kickselect
+    from microduck_local.brain.team import Team
+    seen = {}
+    orig = kickselect.select
+
+    def spy(ball_xy, lines, *a, **kw):
+        seen["actions"] = sorted({act for _, act in lines})
+        return orig(ball_xy, lines, *a, **kw)
+    assert ChaseParams().defender_clears is False                     # measured off (roadmap D.2); a knob
+    on = ChaseParams(kick_select=True, kick_select_push=True, kick_select_p_whiff=0.5, defender_clears=True)
+    for job, expect_push in (("defender", False), ("keeper", False), ("striker", True), (None, True)):
+        tm = Team("cream")
+        tm.half_x, tm.attack_sign = 1.5, 1.0
+        if job:
+            tm.jobs = {"d0": job}
+        b = Chase(on, goal=(1.5, 0.0), team=tm, duck_id="d0", bounds=(1.5, 1.25), goal_w=0.7, role=job)
+        odom = (-0.9, 0.0, 0.0)
+        b.step(_senses(0.0, (0.0, 0.5), odom))
+        b.step(_senses(0.1, (0.0, 0.5), odom))
+        kickselect.select = spy
+        try:
+            b._plan(odom, b.tracker.best("ball", 0.1, min_hits=1))
+        finally:
+            kickselect.select = orig
+        assert ("push" in seen["actions"]) is expect_push, (job, seen["actions"])
+    # And with the rule off, a defender is offered the push like anyone else.
+    tm = Team("cream")
+    tm.half_x, tm.attack_sign, tm.jobs = 1.5, 1.0, {"d0": "defender"}
+    b = Chase(ChaseParams(kick_select=True, kick_select_push=True, kick_select_p_whiff=0.5, defender_clears=False),
+              goal=(1.5, 0.0), team=tm, duck_id="d0", bounds=(1.5, 1.25), goal_w=0.7, role="defender")
+    b.step(_senses(0.0, (0.0, 0.5), (-0.9, 0.0, 0.0)))
+    b.step(_senses(0.1, (0.0, 0.5), (-0.9, 0.0, 0.0)))
+    kickselect.select = spy
+    try:
+        b._plan((-0.9, 0.0, 0.0), b.tracker.best("ball", 0.1, min_hits=1))
+    finally:
+        kickselect.select = orig
+    assert "push" in seen["actions"]
+
+
 def _senses(t, ball, odom):
     det = DetectionFrame(t, [Detection("ball", "ball0", ball[0], -0.3, 0.12, ball[1], 0.9)])
     return Senses(t=t, det=det, det_age=0.0, speed=0.3, odom=odom)
