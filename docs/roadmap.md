@@ -3233,11 +3233,49 @@ this stack has none of them.
       messages*, because the league capped team traffic. Our blackboard
       sends one point estimate a second with no confidence and no frame
       correction. After C.1 and C.2 it can carry covariance and a frame.
-- [ ] **C.4 An opponent model and a duel.** B-Human has a `Zweikampf`
-      (one-on-one) behaviour; every stack tracks opponents as first-class
-      objects. Ours has duck tracks, a colour vote that failed confirmation
-      (4.2), and `avoid`/`blocked`/`yield`. The interception work (4d) found
-      "the lever is elsewhere". Low priority until a keeper exists.
+- [ ] **C.4 An opponent model and a duel — the first half BUILT and
+      measured (2026-09-07).** B-Human has a `Zweikampf` (one-on-one)
+      behaviour; every stack tracks opponents as first-class objects. Ours
+      had duck tracks, a colour vote that failed confirmation (4.2), and
+      `avoid`/`blocked`/`yield`. Now `Chase._opponents` is the opponent
+      model this stack can honestly have: every duck track seen within
+      `lost_s` that the board does not own — not within 0.35 m of a
+      teammate's own claim of its position, not our colour when the
+      colour sense is on. The field (D.2) uses it to keep a supporter's
+      pass lane open, and with `kick_select_opps` the selector (A.3)
+      rolls every sample through it: a path that passes within 0.15 m of
+      an opponent stops at its feet, BLOCKED, valued there less 0.5
+      potential units. So a line through a body scores as what it is,
+      and the selector turns the kick (or the push) off it. Locked in
+      `tests/test_kickselect.py`.
+
+      Measured, 3v3 with roles, 24 seeds × 300 s, four arms forked on one
+      package copy (the discovery block):
+
+      | | shipped kicks | kicks + opponents | | push-first + field | + opponents | |
+      |---|---|---|---|---|---|---|
+      | ball progress | 0.028 | **0.096** | **p=0.027**, better 15/24 | 0.096 | 0.133 | p=0.26 |
+      | ball advance | 0.172 | 0.226 | p=0.057 | 0.198 | **0.258** | **p=0.041**, better 15/24 |
+      | possession s/min | 13.64 | 15.32 | p=0.099 | 17.46 | 18.47 | p=0.25 |
+      | kick carry, m a kick | 0.178 | 0.203 | (53 → 66 kicks) | 0.32 | 0.50 | (5 → 3 kicks) |
+      | back-kicks a run | 0.75 | 0.54 | p=0.41 | 0 | 0 | |
+      | crowd / spread / depth | 0.177 / 1.514 / 0.574 | 0.210 / 1.482 / 0.630 | all p>0.17 | flat | flat | |
+      | goals / own goals | 2 / 0 | 4 / 1 | | 4 / 0 | 4 / 0 | |
+      | falls a run | 0.125 | 0.417 | p=0.096, worse 8/24 | 0.125 | 0.083 | |
+
+      The direction is the one the model predicts — the ball travels
+      further up the pitch when the lines through a body are priced —
+      and it shows on progress under kicks and on advance under
+      push-first; the one caution is falls under kicks (3 → 10 in 24
+      runs, p=0.096), which is a duck now kicking beside another one
+      rather than into it. A fresh block (seeds 100–123, kicks) is
+      running before anything ships. Not built, and still the second
+      half of this item: the duel itself — what a duck does when the
+      opponent is nearer the ball than it is (B-Human's Zweikampf:
+      shield, block, or contest), which needs the colour vote or the
+      board to say who is who at contact range. The interception work
+      (4d) found "the lever is elsewhere"; with a keeper (B.2) and an
+      opponent list this is the next place to look.
 
 #### D. Team play — after C, not before
 
