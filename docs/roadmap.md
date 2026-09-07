@@ -3269,7 +3269,53 @@ this stack has none of them.
       that anticipates the carrier (holds a lane ahead and wide of it,
       rather than a distance from the ball), which is the potential-field
       positioning this item is named for. `defender_clears` ships off.
-      Not built: the field itself.
+
+      **The field, built and measured (2026-09-07, `brain/field.py`,
+      `ChaseParams.support_field`).** A striker, a midfielder or a plain
+      supporter stands at the minimum of a potential field: the role's
+      `ahead` along the carrier's lane (ball → goal), OUT of that lane (a
+      0.2 m Gaussian repulsor strip), 0.5 m beside it on its own side (a
+      cost of moving picks the near side), away from teammates — the
+      carrier excepted, since the lane and the attacker's room already
+      speak for it — and from opponents on or between the ball and the
+      spot (duck tracks the board does not own), pulled 0.3 × the
+      selector's pitch potential toward the goal, so the wide spot at the
+      goal end is the far post (0.6 m off the mouth), not the corner; zone,
+      boards' margin and attacker's room hard; hysteresis. ~550 spots
+      costed in numpy, 36 µs a call. Defender and keeper posts untouched.
+      Locked by `tests/test_field.py`. Four arms forked together on one
+      package copy, 3v3 with roles, 24 seeds × 300 s:
+
+      | | push-first | push-first + field | | shipped kicks | kicks + field | |
+      |---|---|---|---|---|---|---|
+      | crowd | 0.304 | **0.251** | p=0.023, better 17/24 | 0.186 | 0.226 | p=0.039, worse 16/24 |
+      | spread | 1.233 | **1.374** | p=0.003, better 17/24 | 1.507 | 1.450 | p=0.17 |
+      | depth | 0.769 | 0.708 | p=0.060 | 0.571 | 0.650 | p=0.003, worse |
+      | possession s/min | 17.51 | 17.45 | p=0.93 | 13.83 | 15.59 | p=0.072, better 17/24 |
+      | progress / advance | 0.102 / 0.227 | 0.111 / 0.215 | flat | 0.029 / 0.176 | 0.051 / 0.186 | flat |
+      | goals / own goals | 3 / 1 | 3 / 0 | | 3 / 0 | 5 / 1 | |
+      | falls / back-kicks | 4 / 0 | 3 / 0 | | 2 / 17 | 2 / 13 | |
+
+      **Under push-first the field does what it was built for: it takes
+      back about half of the shape cost with nothing lost on the ball** —
+      crowd 0.30 → 0.25 (the kick baseline is 0.19), spread 1.23 → 1.37 (of
+      1.51), depth 0.77 → 0.71 (of 0.57), possession and progress
+      unchanged. **Under the shipped kicks it is the wrong shape**: crowd
+      +0.04 and depth +0.08 (both p<0.04) against a possession hint of
+      +1.8 s/min (p=0.07). The mechanism is the ball's speed: a walked ball
+      is a carrier with a lane to stand beside; a kicked ball flies 3 m,
+      and a midfielder held level with it and 0.5 m wide is simply nearer
+      a flying ball than its post between the ball and the centre spot.
+      So `support_field` ships OFF for the shipped brain, and is part of
+      the push-first configuration
+      (`kick_select_push=1,kick_select_p_whiff=0.5,support_field=1`) for
+      when the rolling-resistance floor is committed and push-first is
+      flipped. Same night, the shape cost itself re-measured on this tree:
+      push-first crowd +0.118, spread −0.274, depth +0.198 (all p<0.001),
+      possession +3.68 s/min, progress +0.074 (p=0.002), back-kicks 17 → 0
+      — the fourth replication. Open: a midfielder held BEHIND the ball
+      in the field (`field_mid_ahead`) might keep the possession hint
+      under kicks without the crowd; that is the next arm.
 #### E. Learning — where the field found it pays, and where it did not
 
 - [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**

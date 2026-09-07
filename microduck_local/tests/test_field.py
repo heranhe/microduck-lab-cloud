@@ -146,6 +146,20 @@ def test_opponents_come_from_duck_tracks_that_the_board_does_not_own():
 
 
 def test_field_params_are_read_off_the_environment():
-    p = ChaseParams.from_env("support_field=1,field_wide=0.4,field_lane=0.25")
+    p = ChaseParams.from_env("support_field=1,field_wide=0.4,field_lane=0.25,field_mid_ahead=-0.5")
     assert p.support_field is True and p.field_wide == 0.4 and p.field_lane == 0.25
+    assert p.field_mid_ahead == -0.5 and ChaseParams().field_mid_ahead == 0.0
     assert FieldParams().wide == 0.5 and FieldParams().lane_w == 0.2
+
+
+def test_the_midfielders_field_spot_follows_field_mid_ahead():
+    ball = (0.2, 0.0)
+    spots = {}
+    for a in (0.0, -0.5):
+        tm, on = _roster(ChaseParams(support_field=True, field_mid_ahead=a))
+        tm.claim("d2", 10.0, 0.2, ball, (0.1, 0.0, 0.0))                 # the striker has the ball
+        tm.claim("d0", 10.0, 1.5, None, (-1.2, 0.0, 0.0))
+        tm.claim("d1", 10.0, 1.0, None, (-0.2, 0.5, 0.0))
+        spots[a] = on["d1"]._hold_target(ball, (-0.2, 0.5, 0.0))
+    assert spots[-0.5][0] < spots[0.0][0] <= ball[0] + 0.15                # level with the ball, then behind it
+    assert all(abs(s[1]) >= 0.3 for s in spots.values())                    # beside the lane either way

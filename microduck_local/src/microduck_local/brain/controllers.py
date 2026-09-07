@@ -995,11 +995,28 @@ class ChaseParams:
     # defender's and a keeper's posts measured well and are untouched.
     # Why: the 3v3 push-first measurement - the team compresses around a
     # WALKED ball because every post is a distance from the ball.
+    #
+    # MEASURED (2026-09-07, 3v3 with roles, 24 seeds, four arms forked on
+    # one package copy). Under push-first it takes back about half of the
+    # shape cost with nothing lost on the ball: crowd 0.304 -> 0.251
+    # (p=0.023, better on 17 of 24; the kick baseline is 0.186), spread
+    # 1.233 -> 1.374 (p=0.003), depth 0.769 -> 0.708 (p=0.06), possession
+    # 17.5 -> 17.4 and progress 0.102 -> 0.111 (flat). Under the SHIPPED
+    # kicks it is the wrong shape: crowd 0.186 -> 0.226 (p=0.039) and depth
+    # 0.571 -> 0.650 (p=0.003) against a possession hint of +1.8 s/min
+    # (p=0.07) - a kicked ball flies 3 m, and a midfielder held level with
+    # it and 0.5 m wide is nearer a flying ball than its post between the
+    # ball and the centre spot. Ships OFF; it is part of the push-first
+    # configuration (kick_select_push=1,kick_select_p_whiff=0.5,
+    # support_field=1) for when the floor is committed. `field_mid_ahead`
+    # is the midfielder's `ahead` (0 = level with the ball; negative =
+    # behind it), the one number the kick case turns on.
     support_field: bool = False
     field_lane: float = 0.2
     field_wide: float = 0.5
     field_goal_pull: float = 0.3
     field_hyst: float = 0.1
+    field_mid_ahead: float = 0.0
     # THE HEAD. `_gaze` is a law that puts a floor ball at range `rng` on the
     # camera's axis; `head_down` clamps the command it may ask for, and the
     # gaze is applied while WALKING at a ball inside `head_range`.
@@ -2782,7 +2799,7 @@ class Chase:
         if self.job == "striker":
             ahead = p.strike_ahead
         elif self.job == "midfielder":
-            ahead = 0.0
+            ahead = p.field_mid_ahead
         else:
             ahead = p.support_back if p.support_mode == "ahead" else -p.support_back
         # Teammates repel - except the carrier, which is AT the ball: the
