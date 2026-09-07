@@ -3389,9 +3389,33 @@ this stack has none of them.
       flipped. Same night, the shape cost itself re-measured on this tree:
       push-first crowd +0.118, spread −0.274, depth +0.198 (all p<0.001),
       possession +3.68 s/min, progress +0.074 (p=0.002), back-kicks 17 → 0
-      — the fourth replication. Open: a midfielder held BEHIND the ball
-      in the field (`field_mid_ahead`) might keep the possession hint
-      under kicks without the crowd; that is the next arm.
+      — the fourth replication.
+
+      **The midfielder held BEHIND the ball (`field_mid_ahead` = −0.5),
+      measured the same night** (24 seeds, four arms forked together on a
+      package copy; the controls reproduce the earlier arms bit for bit):
+
+      | | shipped kicks | kicks + field, mid behind | | push-first | push-first + field, mid behind | |
+      |---|---|---|---|---|---|---|
+      | crowd | 0.186 | 0.240 | p=0.024, worse | 0.304 | 0.300 | flat |
+      | spread | 1.507 | 1.456 | p=0.34 | 1.233 | 1.333 | p=0.046 |
+      | depth | 0.571 | 0.642 | p=0.026 | 0.769 | 0.787 | flat |
+      | possession s/min | 13.83 | **16.84** | **p=0.001**, better 16/24 | 17.51 | 18.95 | p=0.10 |
+      | progress / advance | 0.029 / 0.176 | 0.089 / 0.231 | p=0.073 / 0.10 | 0.102 / 0.227 | 0.170 / 0.306 | p=0.038 / 0.044 |
+      | goals / own goals | 3 / 0 | 4 / 0 | | 3 / 1 | 11 / 5 | p=0.075 / 0.09 |
+
+      So the crowd under kicks is NOT the midfielder's level position —
+      it is the same +0.05 with the mid behind — and what the field does
+      under kicks is put the ball at our feet more: possession +3.0 s/min
+      (+22%, p=0.001) and progress +0.06, at the price of five points of
+      pile-up time and a deeper back line. Under push-first the two
+      variants split the prize: the level mid gives the shape back (crowd
+      0.30 → 0.25, spread +0.14) and moves no ball number; the mid behind
+      moves the ball (progress +0.067, advance +0.079, goals 3 → 11 with
+      own goals 1 → 5) and gives no shape back. `field_mid_ahead` is a
+      real dial, not a fix. The kick-side possession result is a discovery
+      block (seeds 0–23); a fresh block (100–123) is running before
+      anything ships for the shipped brain.
 #### E. Learning — where the field found it pays, and where it did not
 
 - [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**
