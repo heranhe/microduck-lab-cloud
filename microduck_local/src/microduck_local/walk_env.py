@@ -257,6 +257,11 @@ class MicroduckWalkEnv(gym.Env):
         # Lifetime-ramped reward terms count on this. Seeded from
         # MICRODUCK_RAMP_OFFSET (exported by train_behavior BEFORE the vec-env
         # workers fork) so a warm RESTART resumes ramps at strength: without
+        # The head-pose command range the policy trains under. The contract's
+        # keep-alive range (+-0.05 rad) is why a walker trained here has never
+        # seen a head-down command; pass the gaze poses to train one that has
+        # (roadmap 4c revisit, 2026-09-07: `train-walk --head-range`).
+        head_cmd_ranges: tuple | None = None,
         # it, every lab helper add/remove reset ramped penalties to their
         # gentle stage-0 value and then slammed them back at full strength a
         # few hundred k steps later — whiplash that collapsed a run from
@@ -364,6 +369,15 @@ class MicroduckWalkEnv(gym.Env):
                     "substep). Use the fork-based vec env, or drop "
                     "shared_model_scope(exclusive=False)."
                 )
+        self.head_cmd_ranges = (tuple(tuple(map(float, r)) for r in head_cmd_ranges)
+                                if head_cmd_ranges else C.HEAD_CMD_RANGES)
+        self.mass_scale_range = tuple(mass_scale_range)
+        self.armature_scale_range = tuple(armature_scale_range)
+        self.trunk_com_offset_m = trunk_com_offset_m
+        self.head_com_offset_m = head_com_offset_m
+        self.push_robot = bool(domain_rand if push_robot is None else push_robot)
+        self.push_vel_range = tuple(push_vel_range)
+        self.push_interval_s = tuple(push_interval_s)
             # Own RNG stream so the xml path's draws stay byte-for-byte as they
             # were. The env-level 0/1-ctrl-step action lag is switched OFF under
             # BAM: the actuator models the real 3-6 physics-step bus lag itself,
@@ -418,7 +432,7 @@ class MicroduckWalkEnv(gym.Env):
                 r.uniform(*C.LIN_VEL_Y_RANGE),
                 r.uniform(*C.ANG_VEL_Z_RANGE),
             )
-        self.head_cmd[:] = [r.uniform(lo, hi) for lo, hi in C.HEAD_CMD_RANGES]
+        self.head_cmd[:] = [r.uniform(lo, hi) for lo, hi in self.head_cmd_ranges]
         self.body_cmd[:] = [r.uniform(lo, hi) for lo, hi in C.BODY_CMD_RANGES]
 
     def _apply_domain_rand(self) -> None:

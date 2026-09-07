@@ -75,6 +75,9 @@ def main() -> None:
     ap.add_argument("--no-obs-noise", action="store_true")
     args = ap.parse_args()
 
+    ap.add_argument("--head-range", default=None, metavar="nlo,nhi,hlo,hhi,ylo,yhi,rlo,rhi",
+                    help="head-pose command ranges (neck, head, yaw, roll; rad) the walker trains under; "
+                         "default: the contract's keep-alive +-0.05. The gaze poses: -0.75,0.05,-0.05,0.8,-1.4,1.4,-0.015,0.015")
     out = RUNS_DIR / args.run_name
     out.mkdir(parents=True, exist_ok=True)
     env_kwargs = dict(
@@ -96,6 +99,25 @@ def main() -> None:
 
     configure_torch_cpu(torch)
     venv = VecMonitor(as_sb3_vec_env(venv))
+    if getattr(args, "head_range", None):
+        v = [float(x) for x in args.head_range.split(",")]
+        assert len(v) == 8, "--head-range needs 8 numbers"
+        kw["head_cmd_ranges"] = tuple((v[i], v[i + 1]) for i in range(0, 8, 2))
+    if args.actuator:
+        # An explicit flag is a per-run decision and beats the process env
+        # (MICRODUCK_ACTUATOR hard-overrides `actuator=`, not `actuator_force=`).
+        kw["actuator_force"] = args.actuator
+    else:
+        kw["actuator"] = DEFAULT_ACTUATOR
+    return kw
+
+
+def main() -> None:
+    args = parse_args()
+
+    out = RUNS_DIR / args.run_name
+    out.mkdir(parents=True, exist_ok=True)
+    env_kwargs = env_kwargs_from_args(args)
     batch = ppo_batch_size(N_STEPS, args.envs)
 
     from .symmetry import FastActorCriticPolicy

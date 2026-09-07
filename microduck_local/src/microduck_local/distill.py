@@ -44,7 +44,7 @@ from .train import RUNS_DIR
 
 
 def collect(teacher: str, episodes: int, cmd_lo: float, cmd_hi: float,
-            seed: int = 0, gamma: float = 0.99
+            seed: int = 0, gamma: float = 0.99, head_cmd_ranges: tuple | None = None,
             ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Roll the teacher out and record (raw obs, action, discounted return).
 
@@ -74,7 +74,7 @@ def collect(teacher: str, episodes: int, cmd_lo: float, cmd_hi: float,
     sess = ort.InferenceSession(teacher, providers=["CPUExecutionProvider"])
     inp = sess.get_inputs()[0].name
     env = MicroduckWalkEnv(obs_noise=True, domain_rand=True, action_delay=True,
-                           random_yaw=True, seed=seed)
+                           random_yaw=True, seed=seed, head_cmd_ranges=head_cmd_ranges)
     obs_buf: list[np.ndarray] = []
     act_buf: list[np.ndarray] = []
     ret_buf: list[np.ndarray] = []
@@ -322,6 +322,8 @@ def main() -> None:
     ap.add_argument("--cmd-lo", type=float, default=0.15)
     ap.add_argument("--cmd-hi", type=float, default=0.60)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--head-range", default=None, metavar="nlo,nhi,hlo,hhi,ylo,yhi,rlo,rhi",
+                    help="head-pose command ranges the clone is collected under (train-walk --head-range)")
     ap.add_argument("--no-critic", action="store_true",
                     help="clone only the actor, as before the critic fit existed "
                          "(the A/B baseline: that arm's fine-tune fell 100%% of episodes)")
@@ -329,7 +331,9 @@ def main() -> None:
 
     print(f"collecting from {args.teacher} ...")
     obs, act, ret = collect(args.teacher, args.episodes, args.cmd_lo, args.cmd_hi,
-                            seed=args.seed)
+                            seed=args.seed,
+                            head_cmd_ranges=(tuple((v[k], v[k + 1]) for k in range(0, 8, 2))
+                                             if (v := ([float(x) for x in args.head_range.split(',')] if args.head_range else None)) else None))
     print(f"  {len(obs)} transitions; teacher |action| mean {np.abs(act).mean():.3f}; "
           f"return mean {ret.mean():.1f}")
     out = RUNS_DIR / args.run_name
