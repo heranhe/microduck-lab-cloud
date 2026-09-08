@@ -293,8 +293,8 @@ def test_eval_walk_does_not_push_unless_asked():
     """`eval-walk` is the deployment-contract eval; its numbers are compared
     across months. The training env's pushes (2026-09-06) are opt-in there
     (`--push`), and the behavior env leaves them off for every trick."""
-    from microduck_local.walk_env import MicroduckWalkEnv
     from microduck_local.behaviors.env import BehaviorEnv
+    from microduck_local.walk_env import MicroduckWalkEnv
     assert MicroduckWalkEnv(seed=0, push_robot=False).push_robot is False
     assert MicroduckWalkEnv(seed=0).push_robot is True            # training default
     assert BehaviorEnv("stand", seed=0).push_robot is False
