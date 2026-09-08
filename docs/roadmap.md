@@ -3230,6 +3230,132 @@ What is left, in the order it is worth doing:
    need 136 for, and should be the first row of every soccer battery
    from here.
 
+13. **The re-baseline: every positional knob, re-measured on a pitch where
+   the ball moves (2026-09-08).** Item 11 changed the benchmark under the
+   whole track: the ball-out rule took dead time 247 → 176 s and kicks 2.9
+   → 7.8 a run, so every "null" and "worse" above was measured on a game
+   that was 85% a stationary ball. This re-runs the positional knobs on
+   the new floor. Method throughout: **3v3 with formation roles**, 300 s,
+   `--ball-out-s 5` in every arm, all arms forked from ONE package copy of
+   the tree at `b2ecd72` + the working files of that hour (so before item
+   12a/12c's `kick_ahead_max` and `gaze_still` — the kick has since got
+   *better*, which only sharpens the push verdict below), differing by a
+   single `MICRODUCK_CHASE` name read back off the CONSTRUCTED brain;
+   paired per seed, discovery block 0–23 then a fresh block 100–123 for
+   anything that looked real. Judged on dead-ball seconds, kicks a run,
+   possession and `ballAdvance`; goals and own goals reported and never
+   judged; `kicksBack` as a proportion of kick events.
+   (`scripts/probe_handover.py` shape, extended with a knob echo.)
+
+   **(a) Push-first is dead — and it was the track's strongest shelved
+   candidate.** `kick_select_push=1,kick_select_p_whiff=0.5` was recorded
+   in §6 A.3 as three blocks in agreement (+1.97 s/min possession, +0.068
+   progress) and held back only for the floor. Both blockers are gone, and
+   on a pitch where the ball actually travels it reverses, hard, on both
+   blocks:
+
+   | push-first vs shipped, paired | discovery 0–23 | fresh 100–123 | pooled 48 |
+   |---|---|---|---|
+   | dead-ball s a run | +34.0 (p<0.001, 22/24) | +37.0 (p<0.001, 23/24) | **+35.5 (p<0.001, 45/48)** |
+   | kicks a run | 9.04 → 0.42 | 8.17 → 0.21 | **8.60 → 0.31** |
+   | ballAdvance | −0.284 (p=0.007) | −0.388 (p<0.001) | **−0.336 (p<0.001)** |
+   | ballProgress | −0.124 (p=0.26) | −0.212 (p=0.025) | −0.168 (p=0.019) |
+   | ball carried a kick | 1.01 → 0.04 m | 0.96 → 0.00 m | 0.99 → 0.02 m |
+   | possession s/min | +4.37 (p<0.001) | +4.43 (p<0.001) | +4.40 (p<0.001) |
+   | crowd | +0.070 (p=0.001) | +0.065 (p=0.011) | +0.068 (p<0.001) |
+   | ballOuts a run | 4.92 → 2.67 | — | 4.71 → 2.77 (p<0.001) |
+   | goals a run (reported) | 0.63 → 0.46 | — | 0.73 → 0.40 |
+
+   The possession gain is real and worthless, and it is playbook rule 5
+   ("ask what would inflate your metric") in one line: the pusher stands
+   *on* the ball by construction, so walking it 0.64 m instead of kicking
+   it 3 m books possession while the ball goes nowhere. On the dead pitch
+   possession was the only instrument sensitive enough to move, so the
+   knob measured as a win three times. With dead-ball seconds and
+   `ballAdvance` in the row it is unmistakable: **the ball stops moving.**
+   Looked at, not argued (`record-world pitch-3v3 --seed 3 --seconds 90`,
+   both arms): shipped, the ball crosses the pitch — (0,0) → (−1.44,−0.13)
+   → (−1.78,−0.06) → (−1.52,−1.15) → (+0.23,+0.61), six kicks in
+   `events.txt`; push-first, it crawls (0,0) → (+0.12,+1.15) over 90 s and
+   sits at one spot for 16 s at a time inside a six-duck scrum, **zero
+   kicks**. **Ships off, and the standing instruction in
+   `ChaseParams.kick_select_push`'s comment — "when that floor is
+   committed, one fresh block on it; if it agrees, flip both on" — is
+   hereby retired: the fresh block was run and it disagreed.** With it
+   dies `defender_clears`, which is bit-for-bit inert without the push
+   (`controllers.py` offers the push, and only the push, behind it); it is
+   not re-measured because there is nothing left for it to gate.
+
+   **(b) The supporter field survives, on `ballAdvance` and on the ball it
+   carries.** `support_field` (with `field_mid_ahead=-0.5`) is already ON
+   for a roster with a midfielder, so the arm is the knob turned OFF:
+
+   | field OFF vs the shipped ON, paired | discovery | fresh | pooled 48 |
+   |---|---|---|---|
+   | ballAdvance | −0.239 (p=0.017) | −0.159 (p=0.078) | **−0.199 (p=0.003)** |
+   | ball carried a kick | −0.398 (p=0.072) | −0.449 (p=0.009) | **−0.424 (p=0.002)** |
+   | ballProgress | −0.188 (p=0.100) | −0.136 (p=0.223) | −0.162 (p=0.041) |
+   | dead-ball s a run | +11.6 (p=0.035) | +1.8 (p=0.74) | +6.7 (p=0.087) |
+   | kicks a run | −1.21 (p=0.032) | +0.04 (p=0.96) | −0.58 (p=0.26) |
+   | possession s/min | +0.01 (p=0.99) | +1.40 (p=0.15) | +0.70 (p=0.31) |
+   | crowd | +0.016 (p=0.49) | +0.042 (p=0.047) | +0.029 (p=0.064) |
+   | falls a run | −0.042 | −0.375 (p=0.036) | **−0.208 (p=0.043)** |
+
+   So the discovery block's dead-ball and kick-count gains **did not
+   replicate** and are withdrawn; what did replicate is the ball
+   measurement — with the field on, the ball advances 0.199 more and each
+   kick carries it 0.42 m further, both resolving pooled, in the same
+   direction on both blocks. The shape reading of 2026-09-07 also holds
+   (crowd better with the field on). The cost is falls: 0.17 → 0.38 a run
+   with the field on, p=0.043 over 48 runs — the supporter stands nearer
+   the play. **Ships on, where it already ships** (a roster with a
+   midfielder); no default changed.
+
+   `field_mid_ahead` −0.5 vs 0 is a **null on the new floor**, 24 seeds:
+   advance −0.134 (p=0.14), dead ball +4.7 (p=0.51), kicks −0.13
+   (p=0.88), possession +0.14 (p=0.90), shape flat. The 2026-09-07
+   possession win for holding the midfielder behind the ball (+2.1 s/min
+   pooled) does not reproduce once the ball moves; the shipped −0.5 is
+   kept because nothing argues against it, not because it earns its keep.
+
+   **(c) The fused team ball is still off, and now for a duller reason.**
+   `fuse_ball=1`, 24 seeds: dead ball +7.6 (p=0.20), kicks −0.83 (p=0.33),
+   possession +1.64 (p=0.14), advance −0.138 (p=0.19), progress −0.105
+   (p=0.34), shape flat, `kicksBack` 23% → 22% of kicks (p=0.90). Not the
+   2026-09-07 catastrophe (own goals 0 → 6) and not a win either: a plain
+   null on every instrument that can resolve at this size. Own goals went
+   4 → 0 (p=0.032) which at 24 seeds on a metric needing 347 is a coin.
+   **Stays off** — but the honest new statement is "no measured effect",
+   not "worse in play".
+
+   **(d) Opponents in the roll-out: still off.** `kick_select_opps=1`, 24
+   seeds: dead ball +9.6 (p=0.096), kicks −0.92 (p=0.079), advance −0.065
+   (p=0.52), possession −0.70 (p=0.48); spread +0.112 (p=0.017) and search
+   +2.6 s a duck (p=0.021). Same shape as the 2026-09-06 verdict — it
+   takes fewer kicks and leans worse on the clock — so the floor did not
+   rescue it. **Ships off.**
+
+   **(e) A keeper on 3v3 buys shape and costs nothing that resolves.**
+   `keeper,midfielder,striker` against the shipped `defender,midfielder,
+   striker`, same seeds 0–23 (the `ChaseParams` are identical; the roster
+   is the arm): **depth 0.804 → 0.413 m (p<0.001, on 24 of 24)**, spread
+   1.293 → 1.489 (p<0.001), crowd 0.337 → 0.276 (p=0.003) — the back line
+   stays home, exactly what a keeper is for. The ledger: kicks +0.83
+   (p=0.34), dead ball +7.4 (p=0.22), advance −0.090 (p=0.35), possession
+   −1.71 (p=0.058), falls 0.21 → 0.42 (p=0.12), `kicksBack` 23% → 27% of
+   kicks (p=0.28). **Needs more seeds** before it is a recommendation: the
+   shape is unarguable and free, the possession lean is the one number
+   that would make it a cost and it does not resolve. Not made a default.
+
+   **What the re-baseline says.** One shelved "best result in the track"
+   was an artefact of the dead pitch and is now measured off with 45 of 48
+   seeds against it; one shipped knob survived on a different metric than
+   the one it was sold on, with its discovery-block gains withdrawn; three
+   more stayed off. The two instruments that did all the work are the ones
+   item 11 named — dead-ball seconds and `ballAdvance` — and the metric
+   that produced every wrong verdict on the old pitch is **possession**,
+   which pays a duck for standing next to a ball it is not moving.
+
 And one thing this track did NOT settle, which every item above kept
 running into: **the score.** Goals need 136 seeds to move 25% and own goals
 347 (1.5). Positional play buys shape, safety and a ball that goes less
@@ -4416,7 +4542,15 @@ spawn from the *measured* joint distribution (12a's dump), over the measured ahe
 with the ball given the measured residual velocity, and pay the same terms. Number: the funnel above re-measured with
 the new kick — the target is the 0.08–0.15 m rows under 30 %. Ship rule as always: discovery block, fresh block.
 
-**12c. Close the loop in the last metre.** The plan is made once (median 3.6 s before the swing) and walked to. Re-plan
+**12c. Close the loop in the last metre.** — FIRST HALF SHIPPED 2026-09-08: `kick_ahead_max` 0.15 (a fresh predicted
+ball further ahead than that refuses the swing and lays the line again) together with `gaze_still` (the line-up and
+settle keep the head on the ball's last place, so the track is fresh when the gate reads it — the track was a median
+1.8 s old at the swing before, in 100 % of the far-ball swings, and the gate alone fired on 5 % of swings). Whiff
+44 → 31 % on seeds 0–23 and 51 → 41 % on the fresh block 100–123 (pooled 47 → 36 %), connected kicks a run 3.6 → 3.6
+on the fresh block; the 2v2 ledger over 24 seeds: possession +0.2 s/min (p 0.70), progress +0.03 (p 0.59), goals
+19 → 25 (p 0.27), back-kicks 1.9 → 1.25 (p 0.04), swings 7.8 → 6.0 a run (p 0.01 — the blind ones), own goals and
+falls flat. `gaze_still` alone sees the ball on 54 % of swings and changes nothing (45 % whiff). Still open here: the
+per-tick re-plan inside `approach_back`, and the head's side coverage (the side gate `kick_side_max` stays off). The plan is made once (median 3.6 s before the swing) and walked to. Re-plan
 the spot every tick from the freshest ball while inside `approach_back` (0.22 m), and gate the swing on the ball being
 inside the kick's box *now* (from the tracker, with the sigma the tracker already carries): no swing at a ball the
 tracker has not seen for more than 0.3 s or whose sigma is over 5 cm. Number: spot-to-ball at the swing (0.166 → under
