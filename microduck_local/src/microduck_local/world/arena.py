@@ -560,8 +560,18 @@ class World:
         if self.t - self._ball_rest_t0 < self.ball_out_s:
             return
         m = self.ball_out_in
-        self.data.qpos[q:q + 3] = [float(np.clip(x, -hx + m, hx - m)), float(np.clip(y, -hy + m, hy - m)),
-                                   self.scenario.balls[0].radius + 0.005]
+        nx, ny = float(np.clip(x, -hx + m, hx - m)), float(np.clip(y, -hy + m, hy - m))
+        half = self.goal_width / 2
+        if nx != x and half > 0 and abs(ny) < half:
+            # It came off an END board (the x-clip bound) from inside the
+            # goal's own y-band: a ball that has stopped in the mouth without
+            # crossing (`_check_goal` needs |x| > hx - 0.08). Clipping x alone
+            # would place it on a PENALTY SPOT, squarely in front of the goal
+            # it was about to go into - taking a tap-in away from one side and
+            # handing the other a centred close-range chance, which is not
+            # what a throw-in does. Put it beside the mouth instead.
+            ny = float(np.clip(math.copysign(half + self.ball_out_m, ny or 1.0), -hy + m, hy - m))
+        self.data.qpos[q:q + 3] = [nx, ny, self.scenario.balls[0].radius + 0.005]
         self.data.qvel[v:v + 6] = 0.0
         self.ball_outs += 1
         self._ball_rest_t0 = None

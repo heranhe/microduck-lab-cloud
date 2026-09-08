@@ -1715,6 +1715,8 @@ seconds of a kick on the new floor, where the decay is speed-proportional:
 
 ### 3. Scripted positional play — the brains that make it look like soccer
 
+> **2026-09-08 correction (code review).** The striker's post was on the ball's SIDE for the team attacking −x: `_hold_target` chose the side in the pitch frame and applied it along the lane's left normal, whose sense flips with the attack direction. Every roles battery in this section compared two different strikers (one posting off the ball, one on it). Fixed in `controllers.py` and locked by `test_the_striker_posts_off_the_balls_side_for_both_attack_directions`; the roles numbers here predate it and want a fresh block before they are quoted again.
+
 Scripted first, and over the existing `Chase`, not beside it: every role
 is the same state machine with a different *target* and a different rule
 for when to attack. The README's record is that nothing new at the brain
@@ -2827,6 +2829,8 @@ What is left, in the order it is worth doing:
    under ten. `scripts/bench_kick_headdown.py`, 12 seeds a pose, 1.2 s from
    standing with the ball on the sweet spot:
 
+> **2026-09-08 (code review).** Two corrections to the bench table below: the row labelled "the line-up gaze" is head 1.30 rad ABSOLUTE (an offset of +0.95 on the 0.349 home pitch), 0.35 rad past the gaze the brain actually holds — the +0.60 row (0.95 rad absolute, `head_down` 0.6) is the line-up gaze; the whiff verdict (0% everywhere) stands. And the sidecar exit angles the brain now reads for the local kicks (−0.16 / 0.0 rad) are BENCH numbers; the shipped kicks read +5°/−11° on the bench against +24°/−29° in play, so an in-play measurement (`probe_kick_line.py`) is the number to trust — see the note that follows once it has run.
+
    | head pose at the swing | shipped right | **local right** | shipped left | **local left** |
    |---|---|---|---|---|
    | level | 33% whiff, 1.00 m | 0%, 1.01 m | 25%, 0.84 m | 0%, 1.12 m |
@@ -3064,7 +3068,7 @@ What is left, in the order it is worth doing:
    |---|---|---|---|---|---|---|---|
    | (a) alone | 247 | 2.9 | 34.7 | 0.119 | 0.45 | 0.08 | 0.25 |
    | + kick ALONG the boards (`board_margin` 0.12) | 242 (p=0.44) | 4.2 (p=0.056) | 36.1 | 0.158 | 0.50 | 0.33 (p=0.056) | 0.25 |
-   | + BALL OUT (World: at rest 5 s within 0.20 m of the boards -> placed 0.45 m in) | **175 (p<0.001)** | **7.7 (p<0.001)** | **42.8 (p<0.001)** | **0.31 (p=0.003)** | **1.08 (p<0.001)** | 0.42 (p=0.08) | 0.25 |
+   | + BALL OUT (World: at rest 5 s within 0.20 m of the boards -> placed 0.45 m in) | **176 (p<0.001)** | **7.8 (p<0.001)** | **42.8 (p<0.001)** | **0.32 (p=0.002)** | **1.02 (p<0.001)** | 0.42 (p=0.08) | 0.25 |
 
    The brain rule (a kick line along the side wall up the pitch, or
    along the end wall toward the middle, whenever the spot would land
@@ -3108,6 +3112,40 @@ What is left, in the order it is worth doing:
    only thing that ever kicks a ball at the boards (+1.3 a run, p=0.056).
    `tests/test_ball_out.py` locks the rule's default, its placement, the
    lab's on-switch, and the along-the-boards spot at a margin.
+
+   **Reviewed, and one of these numbers was wrong (2026-09-08).** A code
+   review of the three commits above turned up eight findings; all are
+   fixed, each with a test in `tests/test_ball_out.py` that fails on the
+   code as it was. The one that mattered to the result: **the placement's
+   own 0.45 m was being credited to a team as ball progress.**
+   `PitchMetrics.tick` already excluded the goal recentre for exactly that
+   reason ("that jump is not anybody's progress") and had no equivalent
+   guard for a ball-out, so a ball parked on a team's own end board with one
+   of its ducks inside `POSSESSION_R` booked **+0.400 m of `progress` and
+   `advance`** on the tick the referee moved it — measured directly, not
+   argued. `advance` is the metric this benchmark's own docstring says to
+   judge a variant on, so the arms were re-run on the fixed metric (12 seeds
+   of 3v3, the same seeds, one package copy and a flag rather than two
+   forks):
+
+   | ball-out arm | as first reported | on the fixed metric |
+   |---|---|---|
+   | ballAdvance | +0.627 | **+0.572** (p<0.001) |
+   | ballProgress | +0.193 | **+0.196** (p=0.002) |
+   | dead-ball s | −72.2 | −71.4 |
+   | kicks a run | +4.75 | +4.83 |
+   | kicksBack | +1.58 | +1.58 |
+
+   So about **9% of the advance was the referee** and nothing else moved:
+   most placements are at SIDE boards, where only y changes and `progress`
+   reads x. The rule's verdict stands, on a number that is now the ducks'.
+   The table above carries the corrected figures. The other finding worth
+   naming here: the along-the-boards line aimed **across our own goal
+   mouth** at our own end board (a ball at (−1.45, +0.40) aimed at −90° is
+   in our net after 0.10 m), because the end-board branch read only the sign
+   of `by` and not which end it was; it now clears away from the mouth at
+   our end and across it at theirs. That knob ships off, but the +1.3
+   kicks/run measured for it at 0.12 was taken with the own-goal line live.
 
    **(c) In the open, line-ups die to `avoid` in 0.4 s** — 263 of 508
    3v3 exits, with the ball 0.43 m away and another duck 0.33 m ahead,

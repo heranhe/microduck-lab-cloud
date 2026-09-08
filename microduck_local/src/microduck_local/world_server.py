@@ -73,12 +73,12 @@ from .brain.mapping import GridSpec, OccupancyGrid
 from .brain.tether import Tether
 from .sensors import DetectorNoise, TofNoise
 from .world import Ball, Duck, Person, Scenario, Wall, World, make_pitch, make_playroom, make_room
+from .world.scenario import NAME_RE, TOF_PRESETS, ScenarioError, validate_scenario
 
 # The lab's pitches play under the ball-out rule (`World.ball_out_s`): a ball
 # at rest against the boards for this long is placed back in play. eval-pitch
 # defaults to 0 (the benchmark's baseline) and takes --ball-out-s.
 PITCH_BALL_OUT_S = 5.0
-from .world.scenario import NAME_RE, TOF_PRESETS, ScenarioError, validate_scenario
 
 TICK_HZ = 50
 SEND_EVERY = 2

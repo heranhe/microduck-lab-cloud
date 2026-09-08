@@ -2216,12 +2216,6 @@ class Chase:
                 u = _wrap(los + math.copysign(p.aim_max, detour))
             elif p.aim_mode != "goal":
                 u, far = los, False
-        if far:
-            return bx - p.push_behind * math.cos(u), by - p.push_behind * math.sin(u), None, u, "push"
-        rel = _wrap(math.atan2(by - y, bx - x) - u)
-        foot = "kick_left" if rel >= 0 else "kick_right"
-        if self.spot is not None and self.spot[2] in ("kick_left", "kick_right") and abs(rel) < 0.3:
-            foot = self.spot[2]                                   # hysteresis: nearly on the line, keep the foot
         foot_sel: str | None = None
         if p.kick_select and not far and self.goal is not None and self.bounds is not None and self.goal_w > 0:
             chosen = self._select_kick_line(odom, (bx, by), los, u)
@@ -2229,11 +2223,14 @@ class Chase:
                 u, foot_sel = chosen
                 if foot_sel == "push":
                     far = True                                    # the selector chose to walk the ball
-        foot_sel: str | None = None
-        if p.kick_select and not far and self.goal is not None and self.bounds is not None and self.goal_w > 0:
-            chosen = self._select_kick_line(odom, (bx, by), los, u)
-            if chosen is not None:
-                u, foot_sel = chosen
+        if far:
+            return bx - p.push_behind * math.cos(u), by - p.push_behind * math.sin(u), None, u, "push"
+        rel = _wrap(math.atan2(by - y, bx - x) - u)
+        foot = "kick_left" if rel >= 0 else "kick_right"
+        if self.spot is not None and self.spot[2] in ("kick_left", "kick_right") and abs(rel) < 0.3:
+            foot = self.spot[2]                                   # hysteresis: nearly on the line, keep the foot
+        if foot_sel is not None:
+            foot = foot_sel                                       # kick_select chose the foot for its exit angle
         side = -p.kick_side if foot == "kick_left" else p.kick_side     # stand to the ball's other side
         # The body heading that sends the kick along u (the map's deflection
         # is in the body frame, so the spot is laid out in that heading too).
@@ -2247,6 +2244,12 @@ class Chase:
         return sx, sy, foot, h, "kick"
 
     def _clear_of_boards(self, x: float, y: float) -> bool:
+        """Is a spot far enough off the boards to stand on? True off a pitch
+        (`bounds` is None on every world that is not one) - the guard lives
+        here and not only in the caller, so a second caller cannot inherit a
+        `NoneType is not subscriptable` from this one's homework."""
+        if self.bounds is None:
+            return True
         return (self.bounds[0] - abs(x) >= self.p.board_margin
                 and self.bounds[1] - abs(y) >= self.p.board_margin)
 
@@ -2259,8 +2262,18 @@ class Chase:
         att = 1.0 if (self.goal is None or self.goal[0] >= 0) else -1.0
         if self.bounds[1] - abs(by) < self.bounds[0] - abs(bx):
             u = 0.0 if att > 0 else math.pi                          # the side board: up the pitch
+        elif bx * att < 0.0:
+            # OUR end board. Sideways is the only line the body can reach
+            # here, and toward the middle is an OWN GOAL: a ball on our own
+            # goal line is already inside the scoring band (`_check_goal`
+            # scores at |x| > hx - 0.08), so the moment it reaches the mouth
+            # in y it is in our net. Measured on a 1v1 pitch: a ball at
+            # (-1.45, +0.40) aimed at -90 deg is a goal against us after
+            # 0.10 m of travel. Clear it AWAY from the mouth, toward the
+            # corner - which is what a defender does with it.
+            u = math.pi / 2 if by >= 0 else -math.pi / 2
         else:
-            u = -math.pi / 2 if by > 0 else math.pi / 2               # the end board: toward the middle
+            u = -math.pi / 2 if by >= 0 else math.pi / 2              # their end board: across the mouth is a chance
         for foot in ("kick_left", "kick_right"):
             side = -p.kick_side if foot == "kick_left" else p.kick_side
             h = _wrap(u - (p.kick_deflect_left if foot == "kick_left" else p.kick_deflect_right))
@@ -2269,8 +2282,6 @@ class Chase:
             if self._clear_of_boards(x, y):
                 return x, y, foot, h, "kick"
         return None
-        if foot_sel is not None:
-            foot = foot_sel                                       # kick_select chose the foot for its exit angle
 
     def _board_ball(self, t: float) -> tuple[tuple[float, float] | None, float]:
         """The freshest ball sighting on the team board, and its age. A duck
@@ -2427,9 +2438,13 @@ class Chase:
             # stranger is not, so they are not the same obstacle.
             keep = (p.opp_keepout if (p.use_color and p.opp_keepout > 0 and not self._is_mate(other))
                     else p.duck_keepout)
-            if p.lineup_keepout > 0 and self.state in ("lineup", "settle") and seen \
-                    and ball is not None and ball.range < other.range:
-                keep = min(keep, p.lineup_keepout)                 # the duel's first form (measured off)
+            if p.lineup_keepout > 0 and self.spot is not None and self.spot[4] == "kick" \
+                    and seen and ball is not None and ball.range < other.range:
+                # The duel's first form (measured off). Gated on the SPOT - the
+                # kick line-up this tick is executing - and not on `self.state`,
+                # which at this point in `step` is still the label the PREVIOUS
+                # tick's elif chain wrote, and so answers for the wrong tick.
+                keep = min(keep, p.lineup_keepout)
             if other.range < keep:
                 threats.append((other.range, other.bearing))
         duck_rb = min(threats) if threats else None

@@ -155,19 +155,30 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
     return {"seed": seed, "perSide": per_side, "left": score["left"], "right": score["right"],
             "kickGoals": score["kicked"], "bumpGoals": score["bumped"],   # attributed by the World (KICK_GOAL_S)
             "ballOuts": score["ballOuts"],                                 # the ball-out rule's placements (0 unless --ball-out-s)
+            "ballOutS": ball_out_s, "getupS": getup_s,   # the physics this row was measured under (`load_done` refuses to mix)
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()}, "simSeconds": round(w.t, 1),
             "seconds": seconds,
             **spin.row(), **metrics.row()}
 
 
-def load_done(path: str | None, tag: str, per_side: int, seconds: float) -> dict[int, dict]:
+def load_done(path: str | None, tag: str, per_side: int, seconds: float,
+              knobs: dict[str, float] | None = None) -> dict[int, dict]:
     """Seeds already measured into `path` (JSON lines, one row a seed), for a
     resume. A battery is the best part of an hour and this machine reclaims
     its container mid-run, so a killed run should cost the seed it was on and
     nothing else. Rows written under different settings are REFUSED rather
     than silently mixed: the brain's own parameters do not appear in a row,
     so `--tag` is how a caller says which variant a file belongs to.
+
+    `knobs` are the WORLD's physics for this battery — `--ball-out-s`,
+    `--getup-s` — checked the same way and for a sharper reason than the tag:
+    they change what the ball and the ducks DO, and a caller who resumes with
+    `uv run eval-pitch --seeds 12 --out runs/x.jsonl` after an interrupted
+    `--ball-out-s 5` run would otherwise average seeds measured under a
+    referee against seeds measured without one, in one file, silently. Every
+    row written before a knob existed was measured at its default, so a
+    missing field reads as that default rather than as "unknown".
 
     Resumable, not concurrency-safe: two batteries appending to the same
     file interleave, and a seed can land twice (identically — the loop is
@@ -197,6 +208,12 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float) -> dict
                     f"{path}:{n} was measured with tag={r.get('tag', '')!r} perSide={r.get('perSide')} "
                     f"seconds={r.get('seconds')}, not tag={tag!r} perSide={per_side} seconds={seconds}. "
                     "Write a different variant to a different file.")
+            for k, want in (knobs or {}).items():
+                got = float(r.get(k) or 0.0)              # a row from before the knob: its default
+                if got != float(want):
+                    raise SystemExit(
+                        f"{path}:{n} was measured with {k}={got}, not {k}={float(want)}. That is a different "
+                        "world, not a resume: pass the same flags, or write it to a different file.")
             for f in ROW_FIELDS:
                 r.setdefault(f, None)
             r.setdefault("goalsUnattributed", None)
@@ -340,7 +357,8 @@ def main() -> None:
     # end: a 12-seed 3v3 battery is the best part of an hour, and a machine
     # that reclaims its container mid-run should cost one seed, not all of
     # them (it cost all of them, twice). Resume the rest with --seed0.
-    done = load_done(args.out, args.tag, args.per_side, args.seconds)
+    done = load_done(args.out, args.tag, args.per_side, args.seconds,
+                     {"ballOutS": args.ball_out_s, "getupS": args.getup_s})
     rows = [done[sd] for sd in seeds if sd in done]
     if not args.json:
         for r in rows:

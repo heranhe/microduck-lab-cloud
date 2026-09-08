@@ -194,6 +194,8 @@ class PitchMetrics:
         self._holder: str | None = None       # team credited with the ball right now
         self._holder_t = -1e9                 # when it was last strictly on the ball
         self._goal_seq = world.goal_seq
+        # …and the ball-out counter, for the same reason (see `tick`).
+        self._ball_outs = world.ball_outs
 
     def positions(self) -> dict[str, tuple[float, float]]:
         """Every duck's trunk in the plane, read once a tick (the shape
@@ -325,6 +327,22 @@ class PitchMetrics:
             if self._prev is not None:
                 self._resolve_kicks(self._prev, force=True)
             self._goal_seq = w.goal_seq
+            self._ball_outs = w.ball_outs
+            self._prev, self._holder = ball, None
+        elif w.ball_outs != self._ball_outs:
+            # A BALL-OUT (`World.ball_out_s`): the referee picked the ball off
+            # the boards and placed it back in play. That is the same kind of
+            # jump as the goal recentre above and gets the same treatment —
+            # up to `ball_out_in` (0.45 m) of it, credited to whoever last
+            # touched the ball, would be the referee's progress reported as a
+            # team's. MEASURED before this guard existed: a ball parked on a
+            # team's own end board with one of its ducks inside POSSESSION_R
+            # booked +0.400 m of `progress` AND `advance` on the tick the rule
+            # fired. A kick still in the air is settled at `_prev`, the last
+            # position the ball reached on its own, for the same reason.
+            if self._prev is not None:
+                self._resolve_kicks(self._prev, force=True)
+            self._ball_outs = w.ball_outs
             self._prev, self._holder = ball, None
         elif self._prev is not None and self._holder is not None and w.t - self._holder_t <= CARRY_S:
             dx = self.sign[self._holder] * (ball[0] - self._prev[0])
