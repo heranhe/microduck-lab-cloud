@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from check_staged_python import blob, main, offenders, staged_python  # noqa: E402
+from check_staged_python import blob, in_work_tree, main, offenders, staged_python  # noqa: E402
 
 BROKEN = '''\
 class World:
@@ -104,4 +104,19 @@ def test_main_exits_zero_on_this_repo_or_names_what_is_broken(capsys):
     rc = main()
     out = capsys.readouterr()
     assert rc in (0, 1)
-    assert ("staged python ok" in out.out) if rc == 0 else ("do NOT parse" in out.err)
+    if not in_work_tree():
+        assert rc == 0 and "not a git work tree" in out.out
+    elif rc == 0:
+        assert "staged python ok" in out.out
+    else:
+        assert "do NOT parse" in out.err
+
+
+def test_outside_a_repository_the_gate_is_quiet_instead_of_exploding(tmp_path, monkeypatch):
+    """An extracted source tree (`git archive`, a tarball) has the files and no
+    repository. Verifying a commit by extracting it and running the suite is
+    exactly how this repo now checks its own history, so the gate has to come
+    back clean there rather than with a CalledProcessError."""
+    monkeypatch.chdir(tmp_path)
+    assert not in_work_tree()
+    assert main() == 0

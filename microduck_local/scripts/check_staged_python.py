@@ -31,6 +31,16 @@ import subprocess
 import sys
 
 
+def in_work_tree(cwd: str | None = None) -> bool:
+    """Is there a git index to read at all? A source archive (`git archive`,
+    a release tarball, the extracted tree this repo verifies commits against)
+    has the files and no repository, and the gate has nothing to say there —
+    it must say so and exit clean, not raise a CalledProcessError."""
+    r = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"],
+                       capture_output=True, text=True, cwd=cwd)
+    return r.returncode == 0 and r.stdout.strip() == "true"
+
+
 def staged_python(cwd: str | None = None) -> list[str]:
     """Paths of the .py files in the index (staged for the next commit)."""
     # --full-name: paths from the REPO ROOT, so `git show :path` resolves the
@@ -62,6 +72,9 @@ def offenders(paths: list[str], read) -> list[tuple[str, int | None, str]]:
 
 
 def main() -> int:
+    if not in_work_tree():
+        print("not a git work tree: nothing staged to check")
+        return 0
     paths = staged_python()
     bad = offenders(paths, blob)
     if not bad:
