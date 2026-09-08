@@ -25,6 +25,12 @@ cd "$(dirname "$0")/.."
 # for the test suite (`uv run --with pytest pytest tests/`).
 uv run --with ruff ruff check src/ tests/
 
+# ruff and the import check below both read the WORKING TREE. What gets
+# committed is the INDEX, and the two drift apart whenever a hunk is staged
+# on its own (the shared-checkout rule). Four files in this branch did not
+# parse for twelve commits while every check here was green, so:
+uv run python scripts/check_staged_python.py
+
 # ruff parses; it does not EXECUTE. A module that parses can still fail at
 # import (a bad relative import, a missing name in an `from x import y`), so
 # import the entry points that every battery goes through.
