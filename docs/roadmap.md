@@ -4503,6 +4503,43 @@ tests):
   it memorized a ball-sized blob.
 
 
+## B.1 closed — the get-up is wired, and it costs nothing (2026-09-08)
+
+`alpha_stand` already had a floor get-up (see the B.1 section above), so the
+gap was a controller switch: a fallen duck was still being driven by the
+WALKER, which recovers 0 of 24, and `arena.py` teleported it. `World(
+getup_infer=...)` now drives a downed duck with a get-up policy, and it leaves
+the down state by standing rather than by the clock; `getup_s` becomes the
+timeout. `eval-pitch --getup-policy` runs a battery on it.
+
+**It needed a dwell, and the fall count is what found that.** First cut handed
+the duck back to the walker the tick it first read upright. `fallen()` is a
+threshold on projected gravity and trunk height, so a duck crossing it on the
+way up drops straight back over — and one real fall in seed 0 became **25
+counted falls, 0.1-0.3 s apart**, which is far too close together to be
+separate topples. Across 24 seeds: 3 falls with the teleport, **30** with the
+get-up. `getup_hold_s` (0.3 s upright before the walker gets it back) fixes it
+at the source; it is the get-up's own settle, not a metric patch.
+
+**Measured, 24 seeds x 300 s of 3v3, ball-out on, `getup_s` 5, same seeds:**
+
+| | teleport stand-in | real get-up |
+|---|---|---|
+| falls | 3 | **3** |
+| got up by itself | — | **3** |
+| ran the timeout out | — | **0** |
+| possession s/min | 40.92 | 40.53 |
+| ballAdvance | 1.076 | 1.094 |
+| ballProgress | 0.444 | 0.447 |
+
+**100% in-play recovery, and the ledger does not move.** So the teleport can
+be retired wherever a get-up policy is available, and the honest price of a
+fall on this robot is about a second, not the 10-20 s B.1 assumed. It stays
+OFF by default (`getup_infer=None`), because every number in this roadmap was
+measured with the teleport. What it cannot show on this roster is any EFFECT:
+the shipped brain falls 3 times in 24 runs, so falls remain far too rare to
+move a ledger, exactly as B.1 first concluded.
+
 ## Track 4, item 12 — the last 30 centimetres (2026-09-08): a ball at the feet is lost, then missed — ASKS
 
 **The complaint, from the /sim page.** A duck walks the ball to the boards, has it at its feet, loses track of it,

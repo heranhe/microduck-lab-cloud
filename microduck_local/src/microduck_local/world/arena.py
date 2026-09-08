@@ -138,6 +138,7 @@ class WorldDuck:
     body_cmd: np.ndarray = field(default_factory=lambda: np.zeros(6, np.float32))
     falls: int = 0
     down_until: float = -1.0           # lying where it fell until then (World.getup_s); -1: up
+    up_since: float = -1.0             # …when it first read upright again during a get-up; -1: not yet
     step_count: int = 0
     bumped_t: float = -1e9             # when a body of this duck last touched another duck or a person
     episodes: int = 0
@@ -343,6 +344,17 @@ class World:
         # None = the teleport stand-in, bit for bit every number measured
         # before this.
         self.getup_infer = getup_infer
+        # …and it has to STAY up for this long before the walker gets it back.
+        # Measured the hard way: with no dwell at all, one real fall in seed 0
+        # of a 3v3 battery became TWENTY-FIVE counted falls, 0.1-0.3 s apart -
+        # `fallen()` is a threshold on projected gravity and trunk height, and
+        # a duck handed back to the walker the tick it first crosses that line
+        # is still on its way up, so it drops straight back over it. The fall
+        # count is what exposed it (3 falls with the teleport, 30 with the
+        # get-up on the same 24 seeds); the diagnosis was reading the fall
+        # TIMES, which were tenths of a second apart and so cannot be separate
+        # topples. This is the get-up's own settle, not a metric patch.
+        self.getup_hold_s = 0.3
         self.getups = 0                    # falls the duck got up from by itself
         self.getup_timeouts = 0            # …and falls that ran `getup_s` out and were respawned
         # BALL OUT (roadmap Track 4 item 11b): what a referee does on a
@@ -550,6 +562,7 @@ class World:
         d.last_action[:] = 0.0
         d.step_count = 0
         d.down_until = -1.0
+        d.up_since = -1.0
         d._hold_yaw = None
         d.episodes += 1
         self.release(d)
@@ -1057,9 +1070,14 @@ class World:
             d.step_count += 1
             if d.down_until >= 0.0:
                 if self.getup_infer is not None and not d.fallen(data):
-                    d.down_until = -1.0       # it got up by itself: the walker has it back
-                    self.getups += 1
-                elif self.t >= d.down_until:  # the stand-in's clock, or the real get-up's timeout
+                    if d.up_since < 0.0:
+                        d.up_since = self.t   # first tick upright: start the dwell
+                    if self.t - d.up_since >= self.getup_hold_s:
+                        d.down_until = d.up_since = -1.0   # up and STAYING up: the walker has it back
+                        self.getups += 1
+                elif self.getup_infer is not None and d.fallen(data):
+                    d.up_since = -1.0         # back over the line: the dwell starts again
+                if d.down_until >= 0.0 and self.t >= d.down_until:  # the clock, or the get-up's timeout
                     if self.getup_infer is not None:
                         self.getup_timeouts += 1
                     self._respawn(d)

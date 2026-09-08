@@ -37,13 +37,23 @@ def _world(getup_infer, getup_s: float = 5.0) -> World:
                  getup_s=getup_s, getup_infer=getup_infer)
 
 
-def _drop_and_settle(w: World, steps: int = 80) -> None:
-    """Lay it down and let it come to rest. `steps` has to stay well inside
-    `getup_s`, or the stand-in respawns the duck before the test starts."""
+def _lay_and_register(w: World, limit: int = 60) -> tuple[float, float]:
+    """Lay the duck down and step until the World has registered the fall.
+    Returns where it went down, so a test can tell a get-up (it stays there)
+    from a respawn (it is moved to its spawn)."""
     _lay_on_back(w)
-    for _ in range(steps):
+    for _ in range(limit):
         w.step()
-    assert w.ducks["d0"].down_until > w.t, "the fall was never registered"
+        if w.ducks["d0"].down_until > w.t:
+            p = w.ducks["d0"].trunk_pos(w.data)
+            return float(p[0]), float(p[1])
+    raise AssertionError("the fall was never registered")
+
+
+def _run_until_up(w: World, limit_s: float = 8.0) -> None:
+    t0 = w.t
+    while w.ducks["d0"].down_until >= 0.0 and w.t - t0 < limit_s:
+        w.step()
 
 
 def test_without_a_policy_the_fallen_duck_is_still_teleported():
@@ -51,11 +61,9 @@ def test_without_a_policy_the_fallen_duck_is_still_teleported():
     measured on: it lies there for `getup_s` and is respawned."""
     w = _world(None)
     assert w.getup_infer is None and w.getups == 0
-    _drop_and_settle(w)
+    _lay_and_register(w)
     d = w.ducks["d0"]
-    t0 = w.t
-    while d.down_until >= 0.0 and w.t - t0 < 8.0:
-        w.step()
+    _run_until_up(w)
     assert d.down_until < 0.0                                  # it left the down state…
     assert w.getups == 0 and w.getup_timeouts == 0             # …by the clock, uncounted
     x, y = float(d.trunk_pos(w.data)[0]), float(d.trunk_pos(w.data)[1])
@@ -66,12 +74,10 @@ def test_with_alpha_stand_the_duck_gets_itself_up_where_it_fell():
     """The substantive difference: it stands under its own power, before the
     timeout, and it is left WHERE IT FELL rather than moved to its spawn."""
     w = _world(onnx_infer(POLICIES_DIR / "alpha_stand.onnx"))
-    _drop_and_settle(w)
+    where = _lay_and_register(w)
     d = w.ducks["d0"]
-    where = tuple(float(v) for v in d.trunk_pos(w.data)[:2])
     t0 = w.t
-    while d.down_until >= 0.0 and w.t - t0 < 8.0:
-        w.step()
+    _run_until_up(w)
     assert d.down_until < 0.0, "it never got up"
     assert w.getups >= 1 and w.getup_timeouts == 0             # up by itself, not by the clock
     assert w.t - t0 < 5.0                                      # …and inside the timeout
@@ -85,11 +91,9 @@ def test_a_policy_that_cannot_get_up_still_times_out():
     """The timeout is what stops a stuck duck stalling a battery, so a useless
     get-up policy must respawn on `getup_s` exactly as the stand-in does."""
     w = _world(zero_infer, getup_s=2.0)
-    _drop_and_settle(w, steps=40)
+    _lay_and_register(w)
     d = w.ducks["d0"]
-    t0 = w.t
-    while d.down_until >= 0.0 and w.t - t0 < 6.0:
-        w.step()
+    _run_until_up(w, limit_s=6.0)
     assert d.down_until < 0.0
     assert w.getups == 0 and w.getup_timeouts >= 1             # counted as a timeout, not a get-up
     x, y = float(d.trunk_pos(w.data)[0]), float(d.trunk_pos(w.data)[1])
@@ -98,10 +102,30 @@ def test_a_policy_that_cannot_get_up_still_times_out():
 
 def test_reset_clears_the_getup_counters():
     w = _world(onnx_infer(POLICIES_DIR / "alpha_stand.onnx"))
-    _drop_and_settle(w)
-    t0 = w.t
-    while w.ducks["d0"].down_until >= 0.0 and w.t - t0 < 8.0:
-        w.step()
+    _lay_and_register(w)
+    _run_until_up(w)
     assert w.getups >= 1
     w.reset()
     assert w.getups == 0 and w.getup_timeouts == 0
+
+
+def test_the_walker_gets_it_back_only_once_it_STAYS_up():
+    """`fallen()` is a threshold, and a duck handed back the first tick it
+    crosses it is still on its way up: it drops straight back over the line.
+    Measured before this dwell existed — ONE real fall in seed 0 of a 24-seed
+    3v3 battery became TWENTY-FIVE counted falls, 0.1-0.3 s apart, which is
+    far too close together to be separate topples (3 falls with the teleport,
+    30 with the get-up, on the same seeds). With `getup_hold_s` it is 1 again."""
+    w = _world(onnx_infer(POLICIES_DIR / "alpha_stand.onnx"))
+    assert w.getup_hold_s > 0.0
+    _lay_and_register(w)
+    d = w.ducks["d0"]
+    while d.up_since < 0.0 and d.down_until >= 0.0:
+        w.step()                                              # …to the first upright tick
+    assert d.up_since >= 0.0
+    first_up = d.up_since
+    assert d.down_until >= 0.0, "handed back on the first upright tick: no dwell"
+    assert w.getups == 0
+    _run_until_up(w)
+    assert d.down_until < 0.0 and w.getups == 1
+    assert w.t - first_up >= w.getup_hold_s                    # it had to hold it

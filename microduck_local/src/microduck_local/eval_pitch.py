@@ -120,11 +120,17 @@ ROW_FIELDS = METRIC_FIELDS + GOAL_FIELDS + SHAPE_FIELDS
 
 
 def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = None,
-            getup_s: float = 0.0, ball_out_s: float = 0.0) -> dict:
+            getup_s: float = 0.0, ball_out_s: float = 0.0, getup_policy: str | None = None) -> dict:
     from .brain.team import brain_kwargs, kickoff_brains
     sc = make_pitch(per_side=per_side)
     infer = onnx_infer(Path(walker) if walker else POLICIES_DIR / "alpha_walking.onnx")
-    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, getup_s=getup_s, ball_out_s=ball_out_s)
+    # A real get-up instead of the teleport stand-in (roadmap B.1): the
+    # fallen duck is driven by this policy until it stands, and `--getup-s` is
+    # the timeout rather than a fixed lie-down. `alpha_stand` is the one that
+    # works (100% from back/front/side in 0.2-1.3 s on the bench).
+    getup_infer = onnx_infer(Path(getup_policy)) if getup_policy else None
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, getup_s=getup_s,
+              ball_out_s=ball_out_s, getup_infer=getup_infer)
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
     # A little seed-dependent asymmetry: nudge the ball off centre.
@@ -156,6 +162,7 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
             "kickGoals": score["kicked"], "bumpGoals": score["bumped"],   # attributed by the World (KICK_GOAL_S)
             "ballOuts": score["ballOuts"],                                 # the ball-out rule's placements (0 unless --ball-out-s)
             "ballOutS": ball_out_s, "getupS": getup_s,   # the physics this row was measured under (`load_done` refuses to mix)
+            "getups": w.getups, "getupTimeouts": w.getup_timeouts,   # falls it stood up from / ran the timeout out
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()}, "simSeconds": round(w.t, 1),
             "seconds": seconds,
@@ -361,6 +368,10 @@ def main() -> None:
                     help="the referee's throw-in (roadmap Track 4 item 11b): a ball at rest against the boards for "
                          "S seconds is placed 0.45 m in; the lab's pitches play at 5. 0 = off, the benchmark's baseline "
                          "(the ball is at the boards 72%% of a 3v3 run and unkickable there: kicks 2.9 -> 7.7 a run at 5)")
+    ap.add_argument("--getup-policy", default=None, metavar="ONNX",
+                    help="drive a fallen duck with this policy until it stands, instead of teleporting it "
+                         "(roadmap B.1); ../microduck/policies/alpha_stand.onnx is the one that works. "
+                         "--getup-s becomes the timeout. Needs --getup-s > 0 to do anything.")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--out", help="append each seed's result here as a JSON line AND resume from it: "
                                   "seeds already in the file are not re-run")
@@ -389,7 +400,8 @@ def main() -> None:
         if not args.json:
             print(_seed_line(r), flush=True)
 
-    args_list = [(sd, args.seconds, args.per_side, args.walker, args.getup_s, args.ball_out_s) for sd in todo]
+    args_list = [(sd, args.seconds, args.per_side, args.walker, args.getup_s, args.ball_out_s,
+                  args.getup_policy) for sd in todo]
     try:
         if args.jobs > 1 and len(todo) > 1:
             import multiprocessing as mp
