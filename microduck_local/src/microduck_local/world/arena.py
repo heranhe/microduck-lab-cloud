@@ -306,7 +306,7 @@ class WorldPerson:
 class World:
     def __init__(self, scenario: Scenario, infer_for: dict[str, Infer] | None = None,
                  max_episode_s: float | None = None, seed: int | None = None, getup_s: float = 0.0,
-                 ball_out_s: float = 0.0):
+                 ball_out_s: float = 0.0, getup_infer: Infer | None = None):
         # No episode timeout by default: a world is a place, not an episode
         # (a 30 s default once respawned a duck mid-delivery, toy and all).
         # Training envs pass their own horizon.
@@ -327,6 +327,24 @@ class World:
         # floor-to-stand yet), which on a robot costs 10-20 s. 0: the
         # respawn as it always was, and every number measured before this.
         self.getup_s = float(getup_s)
+        # THE GET-UP, for real (roadmap B.1 / bead mdl-0ad). `getup_s` alone is
+        # a stand-in: the fallen duck lies on a zero command for that long and
+        # is then TELEPORTED upright. Give this a policy and the duck gets up
+        # instead - it is driven by `getup_infer` while it is down, and the
+        # moment it is upright again the walker has it back, with no teleport.
+        # `getup_s` becomes the TIMEOUT: a duck that cannot make it up in that
+        # long is respawned as before, so a stuck duck cannot stall a battery.
+        # MEASURED (12 seeds a pose, honest BAM, obs noise + domain
+        # randomisation + action delay, deterministic ONNX): the shipped
+        # `alpha_stand.onnx` gets up from lying on its back, front and side
+        # 100% of the time in 0.2-1.3 s, while the walker manages 0 of 24 -
+        # which is why a fallen duck stays down today. So this is a CONTROLLER
+        # SWITCH and not a policy that had to be trained.
+        # None = the teleport stand-in, bit for bit every number measured
+        # before this.
+        self.getup_infer = getup_infer
+        self.getups = 0                    # falls the duck got up from by itself
+        self.getup_timeouts = 0            # …and falls that ran `getup_s` out and were respawned
         # BALL OUT (roadmap Track 4 item 11b): what a referee does on a
         # walled table. A ball at rest within `ball_out_m` of the boards for
         # `ball_out_s` seconds is placed `ball_out_in` in from that wall
@@ -496,6 +514,7 @@ class World:
         self.goal_credit_duck = None
         self.goals_kicked = self.goals_bumped = 0
         self.ball_outs, self._ball_rest_t0 = 0, None
+        self.getups = self.getup_timeouts = 0
         for p in self.persons.values():
             p.reset(self.data)
         for d in self.ducks.values():
@@ -1006,7 +1025,11 @@ class World:
                 d.set_cmd(data, (0.0, 0.0, 0.0))
             skill = self._skill_cmd(d)
             obs = d.obs(data)
-            raw = np.asarray((skill or d.infer)(obs), np.float32)
+            # A duck that is DOWN is driven by the get-up policy when there is
+            # one. The zero command above is exactly what a standing behaviour
+            # wants, so the observation it sees is the one it was trained on.
+            down = self.getup_infer is not None and d.down_until > self.t
+            raw = np.asarray((skill or (self.getup_infer if down else d.infer))(obs), np.float32)
             d.last_action = raw.copy()
             data.ctrl[d.adr.actuators] = C.DEFAULT_POSE + raw.clip(-4.0, 4.0)
         blockers = [tuple(d.trunk_pos(data)[:2]) for d in self.ducks.values()] if any(
@@ -1033,7 +1056,12 @@ class World:
         for d in self.ducks.values():
             d.step_count += 1
             if d.down_until >= 0.0:
-                if self.t >= d.down_until:    # the get-up (its stand-in: lying for getup_s) is over
+                if self.getup_infer is not None and not d.fallen(data):
+                    d.down_until = -1.0       # it got up by itself: the walker has it back
+                    self.getups += 1
+                elif self.t >= d.down_until:  # the stand-in's clock, or the real get-up's timeout
+                    if self.getup_infer is not None:
+                        self.getup_timeouts += 1
                     self._respawn(d)
                     mujoco.mj_forward(m, data)
                     d.prev_joint_vel = d.joint_vel(data)
