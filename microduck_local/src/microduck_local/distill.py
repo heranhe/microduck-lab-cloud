@@ -310,6 +310,18 @@ def ensure_distilled(teacher: Path | str | None = None, seed: int = 0,
     return out
 
 
+def _head_ranges(spec: str | None):
+    """`--head-range nlo,nhi,hlo,hhi,ylo,yhi,rlo,rhi` (rad) as the walk env's
+    ranges; None keeps the contract's. Exactly eight numbers, or it says so
+    (ten silently dropped a pair before 2026-09-08)."""
+    if not spec:
+        return None
+    v = [float(x) for x in spec.split(",")]
+    if len(v) != 8:
+        raise SystemExit(f"--head-range needs 8 numbers (neck, head, yaw, roll lo/hi), got {len(v)}")
+    return tuple((v[k], v[k + 1]) for k in range(0, 8, 2))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--teacher", required=True, help="path to the ONNX policy to clone")
@@ -332,8 +344,7 @@ def main() -> None:
     print(f"collecting from {args.teacher} ...")
     obs, act, ret = collect(args.teacher, args.episodes, args.cmd_lo, args.cmd_hi,
                             seed=args.seed,
-                            head_cmd_ranges=(tuple((v[k], v[k + 1]) for k in range(0, 8, 2))
-                                             if (v := ([float(x) for x in args.head_range.split(',')] if args.head_range else None)) else None))
+                            head_cmd_ranges=_head_ranges(args.head_range))
     print(f"  {len(obs)} transitions; teacher |action| mean {np.abs(act).mean():.3f}; "
           f"return mean {ret.mean():.1f}")
     out = RUNS_DIR / args.run_name

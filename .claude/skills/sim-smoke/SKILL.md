@@ -39,3 +39,8 @@ Gotchas: never `pkill -f duck-lab` from an agent shell (the pattern matches
 your own command line and kills your shell; bringup.sh uses `duck-la[b]`);
 the container has no EGL, so do not set `MUJOCO_GL=egl` here; headless
 software GL is slower than a Mac GPU, so give the page a few seconds.
+
+A screenshot is one instant. For *what happened over a minute* — a fall, a
+stall, a scrum — use the `record-world` skill instead: it runs the same
+scenario headless under a seed and writes an mp4, a contact sheet and an
+events log; no browser or running lab needed.

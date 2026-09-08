@@ -227,3 +227,16 @@ def test_board_ball_reads_the_freshest_claim():
     tm.claim("d2", 1.4, 0.6, (0.1, 0.1), (0.4, 0.1, 0.0))
     xy, age = b._board_ball(1.5)
     assert xy == (0.1, 0.1) and age == pytest.approx(0.1)
+
+
+def test_zero_knobs_are_edges_not_zero_divisions():
+    """`intercept_ahead=0,intercept_keep=0` with the ball ON our goal, and
+    `intercept_dt=0`, are how a battery sweeps a knob to its edge; both
+    divided by zero before 2026-09-08 (code review)."""
+    from microduck_local.brain.intercept import Interceptor, block_point
+    assert block_point((-1.5, 0.0), (-1.5, 0.0), (0.0, 0.0), ahead=0.0, keep=0.0) is None
+    it = Interceptor()
+    it.hist = [(0.0, 1.0), (0.1, 0.9)]
+    assert it.closing(0.1, window=0.0, max_age=1.0) is None        # the newest sighting is its own baseline
+    rate, eta = it.closing(0.1, window=0.05, max_age=1.0)
+    assert abs(rate - 1.0) < 1e-9 and abs(eta - 0.9) < 1e-9

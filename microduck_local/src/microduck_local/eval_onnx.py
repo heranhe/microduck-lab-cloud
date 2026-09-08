@@ -33,6 +33,10 @@ def main() -> None:
                     help="Pin twist vx (run eval). Default 0.4 for --behavior run")
     ap.add_argument("--actuator", default=None, choices=("xml", "bam"),
                     help="Override actuator; run defaults to bam")
+    ap.add_argument("--push", action="store_true",
+                    help="Shove the base every 3-6 s (the training env's pushes, "
+                         "2026-09-06). Off here by default so eval numbers stay "
+                         "comparable with the ones taken before pushes existed.")
     args = ap.parse_args()
 
     # `eval-run` is the same entry point with run defaults.
@@ -57,7 +61,7 @@ def main() -> None:
         env = BehaviorEnv(args.behavior, **kw)
     else:
         from .walk_env import MicroduckWalkEnv
-        kw = dict(seed=args.seed)
+        kw = dict(seed=args.seed, push_robot=args.push)
         if args.actuator:
             kw["actuator"] = args.actuator
         env = MicroduckWalkEnv(**kw)

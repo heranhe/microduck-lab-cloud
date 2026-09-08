@@ -50,9 +50,12 @@ GROUND_PICK_END_PHI = 0.7
 # `kick_duration` (0.5 s in robotd's control.rs) with an all-zero command,
 # then back to the walker. Same protocol here.
 KICK_S = 0.5
-# A goal this soon after a kick is the kick's; the rest were walked into (a
-# chase at 0.45 m/s sends a bumped ball rolling about as far as a kick does
-# on this floor). `soccer_score` reports both counts; eval-pitch prints them.
+# A goal this soon after a kick is the kick's; the rest were walked into.
+# (Until 2026-09-06 the ball had no rolling resistance, so a chase at
+# 0.45 m/s sent a bumped ball as far as a kick did - to the boards; now a
+# kick at 1.4 m/s reaches a goal 1.5 m off in ~1.3 s and stops after
+# 3.5 m, a walked-into ball after 0.7 m - see `Ball.rolling`.)
+# `soccer_score` reports both counts; eval-pitch prints them.
 KICK_GOAL_S = 4.0
 # …and at the STANDING tuning: robotd's standing transition fires on that
 # all-zero command, so the window runs at `standing_action_scale` (1.0 —
@@ -134,10 +137,10 @@ class WorldDuck:
     head_cmd: np.ndarray = field(default_factory=lambda: np.zeros(4, np.float32))
     body_cmd: np.ndarray = field(default_factory=lambda: np.zeros(6, np.float32))
     falls: int = 0
+    down_until: float = -1.0           # lying where it fell until then (World.getup_s); -1: up
     step_count: int = 0
     bumped_t: float = -1e9             # when a body of this duck last touched another duck or a person
     episodes: int = 0
-    down_until: float = -1.0           # lying where it fell until then (World.getup_s); -1: up
     _hold_yaw: float | None = None
 
     # -- state readers (all straight off mjData, no caching) -------------------
@@ -309,9 +312,14 @@ class World:
         # Training envs pass their own horizon.
         max_episode_s = float("inf") if max_episode_s is None else max_episode_s
         self.scenario = scenario
-        self.model = compose(scenario)
-        self.data = mujoco.MjData(self.model)
-        self.t = 0.0
+        # A MICRODUCK_SKILL_<NAME> override naming a missing file is a typo
+        # that used to disable the kick silently (start_skill refuses it, no
+        # event): a battery then measured "the brain never kicks". Said here,
+        # at build, before anything is measured (code review, 2026-09-08).
+        for name in SKILLS:
+            ov = os.environ.get(f"MICRODUCK_SKILL_{name.upper()}")
+            if ov and not Path(ov).exists():
+                raise FileNotFoundError(f"MICRODUCK_SKILL_{name.upper()}={ov!r}: no such file")
         # FALLS COST TIME (roadmap Track 4 s6 B.1, the second half): with
         # `getup_s` > 0 a fallen duck lies where it fell, on a zero command,
         # for that long before it is respawned - the stand-in for a get-up
@@ -333,6 +341,9 @@ class World:
         self.ball_out_m, self.ball_out_in = 0.20, 0.45
         self._ball_rest_t0: float | None = None
         self.ball_outs = 0
+        self.model = compose(scenario)
+        self.data = mujoco.MjData(self.model)
+        self.t = 0.0
         self.tick = 0
         self.rng = np.random.default_rng(scenario.seed if seed is None else seed)
         infer_for = infer_for or {}
@@ -349,9 +360,6 @@ class World:
                                                                 f"ball{i}"), b.radius)
                     for i, b in enumerate(scenario.balls)]
         targets += [Target(p.id, "person", self.persons[p.id].body, p.radius, height=p.height) for p in scenario.persons]
-        self.pickables: dict[str, int] = {
-            t.id: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, t.id) for t in scenario.pickables}
-        self.pickable_kind = {t.id: t.kind for t in scenario.pickables}
         # A pitch's four goal POSTS, as landmarks a camera can classify
         # (roadmap Track 4 s6 C.2): the goal is a scored line with no
         # geometry, so they are fixed-position targets on the mouth line,
@@ -360,6 +368,9 @@ class World:
             gx, gw = scenario.floor[0] / 2 - 0.25, scenario.goal_width / 2   # the mouth line (goal_for) and half-width
             targets += [Target(f"post_{side}_{lr}", "post", -1, 0.05, pos=(sx * gx, sy * gw, 0.15))
                         for side, sx in (("right", 1.0), ("left", -1.0)) for lr, sy in (("l", 1.0), ("r", -1.0))]
+        self.pickables: dict[str, int] = {
+            t.id: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, t.id) for t in scenario.pickables}
+        self.pickable_kind = {t.id: t.kind for t in scenario.pickables}
         targets += [Target(t.id, "toy", self.pickables[t.id],
                            max(PICKABLE_KINDS[t.kind]["size"]) / 2) for t in scenario.pickables]
         self.basket = scenario.basket
@@ -374,9 +385,6 @@ class World:
         self.last_goal: str | None = None
         self.kickoff_hold_s = 1.0
         self.kickoff_until = -1.0
-        self.last_kick_t = -1e9            # when a kick skill last started (attribution, KICK_GOAL_S)
-        self.last_kick_duck: str | None = None    # …and which duck took it
-        # Who the World says put the last goal in: the duck whose kick was
         # THE GAME STATE (roadmap Track 4 s6 B.3). Every league runs a
         # GameController: after a goal the team that CONCEDED kicks off and
         # the other side stands off until the ball is in play. The World is
@@ -391,6 +399,9 @@ class World:
         self.kickoff_free_s = 10.0
         self.kickoff_moved_m = 0.1
         self.kickoff_ball: tuple[float, float] | None = None
+        self.last_kick_t = -1e9            # when a kick skill last started (attribution, KICK_GOAL_S)
+        self.last_kick_duck: str | None = None    # …and which duck took it
+        # Who the World says put the last goal in: the duck whose kick was
         # inside KICK_GOAL_S at the moment the ball crossed, else None (it
         # was walked in). Exactly the test `goals_kicked` / `goals_bumped`
         # splits on, recorded per goal so a caller that knows the ROSTER —
@@ -421,10 +432,10 @@ class World:
             det = None
             if d.detector is not None:
                 det = Detector(self.model, site=adr.prefix + "head_camera",
+                               spec=DetectorSpec.from_env(),          # MICRODUCK_CAMERA, a battery's sensor variant
                                noise=DetectorNoise.preset(d.detector), targets=targets,
                                seed=int(self.rng.integers(0, 2**31 - 1)))
             self.ducks[d.id] = WorldDuck(
-                               spec=DetectorSpec.from_env(),          # MICRODUCK_CAMERA, a battery's sensor variant
                 id=d.id, adr=adr, spawn=d.spawn, infer=infer_for.get(d.id, zero_infer),
                 policy_id=d.policy, tof=tof, detector=det,
                 odom_preset=d.odom, odom_noise=OdomNoise.preset(d.odom),
@@ -471,11 +482,11 @@ class World:
         self.goals = {"left": 0, "right": 0}
         self.last_goal = None
         self.kickoff_until = -1.0
+        self.kickoff_team = None
+        self.kickoff_ball = None
         self.last_kick_t = -1e9
         self.last_kick_duck = None
         self.goal_credit_duck = None
-        self.kickoff_team = None
-        self.kickoff_ball = None
         self.goals_kicked = self.goals_bumped = 0
         self.ball_outs, self._ball_rest_t0 = 0, None
         for p in self.persons.values():
@@ -486,12 +497,33 @@ class World:
         for d in self.ducks.values():
             d.prev_joint_vel = d.joint_vel(self.data)
 
+    # A mocap capsule has infinite mass: a duck respawned INSIDE one is driven
+    # out at 4-6 m/s (the physics audit's "fling" was this loop - a person
+    # walking over a fallen duck's spawn point, every tick a new fall). The
+    # spawn steps aside, perpendicular to the person's heading, to this
+    # clearance from the capsule's surface.
+    RESPAWN_CLEAR_M = 0.15
+
+    def _clear_of_persons(self, x: float, y: float) -> tuple[float, float]:
+        for p in self.persons.values():
+            need = p.spec.radius + self.RESPAWN_CLEAR_M
+            dx, dy = x - p.x, y - p.y
+            if math.hypot(dx, dy) >= need:
+                continue
+            sx, sy = -math.sin(p.yaw), math.cos(p.yaw)          # the person's left
+            if dx * sx + dy * sy < 0:
+                sx, sy = -sx, -sy                                # ...or right, whichever side the spawn is on
+            x, y = p.x + sx * need, p.y + sy * need
+        return x, y
+
     def _respawn(self, d: WorldDuck) -> None:
         x, y, yaw = d.spawn
+        x, y = self._clear_of_persons(x, y)
         spawn_duck(self.model, self.data, d.adr, x, y, yaw)
         self._odom_reset(d, x, y, yaw)
         d.last_action[:] = 0.0
         d.step_count = 0
+        d.down_until = -1.0
         d._hold_yaw = None
         d.episodes += 1
         self.release(d)
@@ -515,7 +547,6 @@ class World:
         d.policy_id = policy_id
 
     # -- one 50 Hz control step -----------------------------------------------
-        d.down_until = -1.0
     # -- manipulation (roadmap 12.2 / 12.3) ------------------------------------
     def mouth_tip(self, d: WorldDuck) -> np.ndarray:
         sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, d.adr.prefix + "mouth_tip")
@@ -534,6 +565,7 @@ class World:
             side = "right" if x > 0 else "left"
             self.goals[side] += 1
             self.last_goal = side
+            self.kickoff_team = self.team_defending(side)     # the side that conceded restarts
             self.goal_seq += 1
             if self.t - self.last_kick_t <= KICK_GOAL_S:
                 self.goals_kicked += 1
@@ -590,8 +622,8 @@ class World:
         q, v = int(self.model.jnt_qposadr[j]), int(self.model.jnt_dofadr[j])
         nx, ny = self.rng.uniform(-0.05, 0.05, 2)
         self.data.qpos[q:q + 7] = [nx, ny, self.scenario.balls[0].radius + 0.005, 1.0, 0.0, 0.0, 0.0]
-            self.kickoff_team = self.team_defending(side)     # the side that conceded restarts
         self.data.qvel[v:v + 6] = 0.0
+        self.kickoff_ball = (float(nx), float(ny))
         for d in self.ducks.values():
             self._respawn(d)
             d.set_cmd(self.data, (0.0, 0.0, 0.0))
@@ -604,30 +636,6 @@ class World:
     def in_kickoff(self) -> bool:
         return self.t < self.kickoff_until
 
-    def goal_for(self, d: WorldDuck) -> tuple[float, float] | None:
-        """The goal this duck attacks (world = odometry-at-spawn frame): the
-        mouth its team is declared to attack (`Scenario.attacks`), else the one
-        its spawn heading faces. None off a pitch.
-
-        The declaration exists because the heading rule cannot answer for a
-        roster placed by hand — a defender is placed facing its OWN goal — and
-        an undeclared team whose ducks disagree is refused by
-        `validate_scenario` rather than resolved here."""
-        if self.goal_width <= 0:
-            return None
-        self.kickoff_ball = (float(nx), float(ny))
-        hx = self.scenario.floor[0] / 2 - 0.25
-        mouth = self.scenario.attacks.get(self.team_of.get(d.id) or "")
-        if mouth is not None:
-            return (hx if mouth == "right" else -hx), 0.0
-        return (hx if math.cos(d.spawn[2]) >= 0 else -hx), 0.0
-
-    def ball_xy(self) -> tuple[float, float] | None:
-        """The ball's planar position, unrounded. `soccer_score` rounds to the
-        millimetre for the stream, which is right for a payload and wrong for
-        an accumulator: eval-pitch sums per-step displacements over 15 000
-        control ticks, and mm-quantised differences random-walk into the
-        answer. None off a pitch (no ball / no goals)."""
     def team_defending(self, side: str) -> str | None:
         """The team whose own mouth is `side` ("left" / "right"): the one a
         ball crossing it scores AGAINST, which kicks off after. None when no
@@ -654,6 +662,29 @@ class World:
                 return "kickoff"
         return "playing"
 
+    def goal_for(self, d: WorldDuck) -> tuple[float, float] | None:
+        """The goal this duck attacks (world = odometry-at-spawn frame): the
+        mouth its team is declared to attack (`Scenario.attacks`), else the one
+        its spawn heading faces. None off a pitch.
+
+        The declaration exists because the heading rule cannot answer for a
+        roster placed by hand — a defender is placed facing its OWN goal — and
+        an undeclared team whose ducks disagree is refused by
+        `validate_scenario` rather than resolved here."""
+        if self.goal_width <= 0:
+            return None
+        hx = self.scenario.floor[0] / 2 - 0.25
+        mouth = self.scenario.attacks.get(self.team_of.get(d.id) or "")
+        if mouth is not None:
+            return (hx if mouth == "right" else -hx), 0.0
+        return (hx if math.cos(d.spawn[2]) >= 0 else -hx), 0.0
+
+    def ball_xy(self) -> tuple[float, float] | None:
+        """The ball's planar position, unrounded. `soccer_score` rounds to the
+        millimetre for the stream, which is right for a payload and wrong for
+        an accumulator: eval-pitch sums per-step displacements over 15 000
+        control ticks, and mm-quantised differences random-walk into the
+        answer. None off a pitch (no ball / no goals)."""
         if self._ball_joint is None:
             return None
         q = int(self.model.jnt_qposadr[self._ball_joint])
@@ -787,26 +818,6 @@ class World:
         self.model.actuator_biasprm[d.adr.actuators, 1] = -kp
         d.gain_ratio = ratio
 
-    def start_skill(self, d: WorldDuck, name: str) -> bool:
-        """Hand the reflex tier to a skill policy for one cycle (the robot's
-        own pattern: hard swap in, auto swap back): ground_pick (a phase
-        cycle) or kick_left / kick_right (a 0.5 s window)."""
-        if name not in SKILLS or d.skill is not None:
-            return False
-        if name not in self.skills:
-            from ..brain.brain_env import onnx_infer
-            path = self.skill_path(name)                 # env override, local export, or the shipped file
-            if not path.exists():
-                return False
-            self.skills[name] = onnx_infer(path)
-        d.skill, d.skill_t0, d.skill_infer = name, self.t, self.skills[name]
-        d._hold_yaw = None
-        if name.startswith("kick"):
-            self._set_gain_ratio(d, STANDING_GAIN_RATIO)
-            self.last_kick_t, self.last_kick_duck = self.t, d.id
-        if d.holding is None:
-            d.beak_closed = False          # a cycle starts with an open, empty beak
-        return True
     # Skills trained HERE, vendored under microduck_local/policies/<skill>/,
     # preferred over the shipped Hub file when present (the kicks: roadmap
     # item 7, behaviors/kick.py - 0% whiff from every gaze pose on the bench,
@@ -824,7 +835,7 @@ class World:
         from ..brain.brain_env import POLICIES_DIR  # noqa: PLC0415
         override = os.environ.get(f"MICRODUCK_SKILL_{name.upper()}")
         if override:
-            return Path(override)
+            return Path(override)                                    # checked to exist when the World is built
         local = World.LOCAL_SKILLS.get(name)
         if local:
             p = Path(__file__).resolve().parents[3] / "policies" / local
@@ -846,10 +857,30 @@ class World:
                 return None
             try:
                 out.append(float(json.loads(side.read_text())["exit_rad"]))
-            except (ValueError, KeyError, OSError):
+            except (ValueError, KeyError, OSError, TypeError):      # a sidecar written before the exit was measured (null)
                 return None
         return out[0], out[1]
 
+    def start_skill(self, d: WorldDuck, name: str) -> bool:
+        """Hand the reflex tier to a skill policy for one cycle (the robot's
+        own pattern: hard swap in, auto swap back): ground_pick (a phase
+        cycle) or kick_left / kick_right (a 0.5 s window)."""
+        if name not in SKILLS or d.skill is not None:
+            return False
+        if name not in self.skills:
+            from ..brain.brain_env import onnx_infer
+            path = self.skill_path(name)                 # env override, local export, or the shipped file
+            if not path.exists():
+                return False
+            self.skills[name] = onnx_infer(path)
+        d.skill, d.skill_t0, d.skill_infer = name, self.t, self.skills[name]
+        d._hold_yaw = None
+        if name.startswith("kick"):
+            self._set_gain_ratio(d, STANDING_GAIN_RATIO)
+            self.last_kick_t, self.last_kick_duck = self.t, d.id
+        if d.holding is None:
+            d.beak_closed = False          # a cycle starts with an open, empty beak
+        return True
 
     def in_basket(self, toy: str) -> bool:
         if self.basket is None:
@@ -873,18 +904,30 @@ class World:
         elif intent.beak == "open" and d.beak_closed:
             self.release(d)
 
-    def _sense_bumps(self) -> None:
-        """A duck touching another duck or a person: its `bumped_t` is now.
-        On the robot this is the IMU and the servo loads; here it is the
-        contact list - and in the walk scene only the FEET carry collision
-        geometry, so a bump is feet touching feet, which is what a duck-duck
-        fall is. The floor, the boards, the ball and the toys are not bodies."""
+    def _sense_bumps(self, pairs: list[np.ndarray]) -> None:
+        """Snapshot the current contact list's geom pairs into `pairs`. On the
+        robot a bump is the IMU and the servo loads; here it is the contact
+        list, read after EVERY physics substep of a tick (`step`) so a touch
+        that lasts one substep still counts - the last substep alone missed
+        three in four. The owner lookup happens once a tick (`_stamp_bumps`);
+        measured against the last-substep-only scan, the four snapshots cost
+        3-8% of a world step (10-20 us of 0.2-0.35 ms, pitch and playroom).
+        Under collision "all" (the default) every body of a duck is in this:
+        trunk, head, legs, feet; under "walk" the soles and the
+        self-collision slivers. The floor, the boards, the ball and the toys
+        are not owners."""
         n = self.data.ncon
-        if n == 0 or len(self._owner_duck) == 0:
+        if n:
+            pairs.append(self.data.contact.geom1[:n].copy())
+            pairs.append(self.data.contact.geom2[:n].copy())
+
+    def _stamp_bumps(self, pairs: list[np.ndarray]) -> None:
+        """Every duck whose body touched ANOTHER owner's (a duck's or a
+        person's) in any substep of the tick: its `bumped_t` is now."""
+        if not pairs or len(self._owner_duck) == 0:
             return
         own = self._geom_owner
-        g1, g2 = self.data.contact.geom1[:n], self.data.contact.geom2[:n]
-        o1, o2 = own[g1], own[g2]
+        o1, o2 = own[np.concatenate(pairs[0::2])], own[np.concatenate(pairs[1::2])]
         hit = (o1 >= 0) & (o2 >= 0) & (o1 != o2)
         if not hit.any():
             return
@@ -939,15 +982,36 @@ class World:
             p.spec.yield_m > 0 for p in self.persons.values()) else ()
         for p in self.persons.values():
             p.step(data, C.CTRL_DT, blockers)
+        pairs: list[np.ndarray] = []
         for _ in range(C.DECIMATION):
             mujoco.mj_step(m, data)
+            self._sense_bumps(pairs)
+        # What the walk env does after its substep loop (`_refresh_derived`,
+        # physics audit item 6): `mj_step` integrates AFTER it computed
+        # kinematics and sensors, so without this the IMU blocks of the obs,
+        # the trunk height and every site a sensor rays from describe the
+        # state one substep (5 ms) before `qpos`. The same four calls, so
+        # tests/test_arena.py's step-for-step lock holds to the bit.
+        mujoco.mj_kinematics(m, data)
+        mujoco.mj_comPos(m, data)
+        mujoco.mj_comVel(m, data)
+        mujoco.mj_sensorVel(m, data)
         self.t += C.CTRL_DT
         self.tick += 1
-        self._sense_bumps()
+        self._stamp_bumps(pairs)
         for d in self.ducks.values():
             d.step_count += 1
+            if d.down_until >= 0.0:
+                if self.t >= d.down_until:    # the get-up (its stand-in: lying for getup_s) is over
+                    self._respawn(d)
+                    mujoco.mj_forward(m, data)
+                    d.prev_joint_vel = d.joint_vel(data)
+                continue                      # still down: counted at the fall, nothing more to do
             if d.fallen(data):
                 d.falls += 1
+                if self.getup_s > 0.0:
+                    d.down_until = self.t + self.getup_s
+                    continue
                 self._respawn(d)
                 mujoco.mj_forward(m, data)
                 d.prev_joint_vel = d.joint_vel(data)
@@ -995,17 +1059,8 @@ class World:
         return out
 
     def sensors_payload(self, duck_id: str) -> dict | None:
-            if d.down_until >= 0.0:
-                if self.t >= d.down_until:    # the get-up (its stand-in: lying for getup_s) is over
-                    self._respawn(d)
-                    mujoco.mj_forward(m, data)
-                    d.prev_joint_vel = d.joint_vel(data)
-                continue                      # still down: counted at the fall, nothing more to do
         d = self.ducks[duck_id]
         out: dict = {}
-                if self.getup_s > 0.0:
-                    d.down_until = self.t + self.getup_s
-                    continue
         if d.tof is not None and d.tof.last is not None:
             out["tof"] = {**d.tof.last.as_payload(), "age": round(self.t - d.tof.last.t, 4)}
         if d.detector is not None and d.detector.last is not None:

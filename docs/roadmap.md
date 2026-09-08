@@ -2836,7 +2836,7 @@ What is left, in the order it is worth doing:
    | level | 33% whiff, 1.00 m | 0%, 1.01 m | 25%, 0.84 m | 0%, 1.12 m |
    | head +0.60 (the shipped gaze clamp) | 100%, 0 m | 0%, 1.06 m | 83%, 0 m | 0%, 1.22 m |
    | neck −0.30 / head +0.60 (the split) | 100% | 0%, 1.16 m | 100% | 0%, 1.25 m |
-   | head +0.95 / neck −0.25 (the line-up gaze) | 100% | 0%, 1.13 m | 100% | 0%, 1.28 m |
+   | neck −0.25 / head +0.95 off home = 1.30 rad absolute (past the line-up gaze; the +0.60 row IS the line-up gaze — this row was mislabelled "the line-up gaze" until 2026-09-08) | 100% | 0%, 1.13 m | 100% | 0%, 1.28 m |
    | peak speed / when | 1.03 m/s at 0.15 s | 1.2–1.5 at 0.18 s | 0.88 at 0.18 s | 1.2–1.5 at 0.14 s |
    | exit off the body | −11° (in play −29°) | ~0° (sd 7–14) | +5° (in play +24°) | −9° (sd 4) |
    | falls in 60 swings | 0 | 0 | 0 | 0 |
@@ -3146,40 +3146,6 @@ What is left, in the order it is worth doing:
    of `by` and not which end it was; it now clears away from the mouth at
    our end and across it at theirs. That knob ships off, but the +1.3
    kicks/run measured for it at 0.12 was taken with the own-goal line live.
-
-   **And the review found something bigger than its own eight findings.**
-   Verifying the fixes against the COMMITTED tree rather than the working
-   one — the discipline the fifth finding was about — turned up that
-   `development` **has not imported for at least twelve commits**. Four
-   files do not parse in the committed history and never did:
-
-   | file at HEAD | line | error |
-   |---|---|---|
-   | `world/arena.py` | 593 | a stray `self.kickoff_team = …` inside `kickoff()` |
-   | `brain/team.py` | 560 | an indented block whose `if mates > 1:` header is gone |
-   | `brain/controllers.py` | 2370 | `_on_the_line`'s `return` tail, its `def` gone |
-   | `walk_env.py` | 385 | the BAM block, its `if` header gone |
-
-   Every one of them is FINE in the working tree, which is why nothing
-   caught it: the tests import the tree, the batteries run the tree, and
-   `scripts/precommit.sh` compiles the tree. `git show HEAD:` gives an
-   `IndentationError`, and a fresh clone of the branch cannot import the
-   package. The mechanism is this repo's own shared-checkout rule turned
-   against it — an anchored edit applied separately to the file and to its
-   committed copy, so that only that hunk is staged, lands somewhere else
-   when the two texts have drifted and strands a fragment. It stages
-   cleanly, it diffs plausibly, and it never runs.
-
-   The gate for it is **`scripts/check_staged_python.py`**, now the third
-   step of `precommit.sh`: every `.py` in the INDEX must parse — what the
-   commit will write, not HEAD and not the tree, which is also what lets
-   the commit that FIXES a broken file through. `tests/test_staged_python.py`
-   stages a file that is broken as committed and fine on disk, which is the
-   exact shape of the twelve commits, and checks the gate catches it. The
-   four files themselves are not repaired here: three of them need code
-   that exists only in the parallel session's working tree, so the repair
-   is that session's commit to make, and its staged index already holds
-   the correct content for all four.
 
    **(c) In the open, line-ups die to `avoid` in 0.4 s** — 263 of 508
    3v3 exits, with the ball 0.43 m away and another duck 0.33 m ahead,

@@ -131,6 +131,14 @@ the UI deliberately doesn't expose them.)
   compositor and records almost nothing in a throttled tab), so keep the tab
   visible while recording; a take where the scene never rendered is refused
   with a message instead of producing a 0.1 s "video".
+- **🎥 record / 📷 shot on `/sim`** (top bar, `SimRecord.tsx`): the same
+  take without the framing glide — it films whatever you are looking at, and
+  the camera stays yours for the duration (orbit, fly keys, chase a duck by
+  hand), so a soccer scrum or a fall at the basket is recorded from the angle
+  you chose. Files are named `sim-<scenario>-<stamp>`; ■ stop hands you the
+  same ⬇ mp4 / ⬇ gif links. The footage is the WebGL canvas only (no panels,
+  labels or scrub bar); for a clip WITH per-duck state, falls and score burned
+  in, run `uv run record-world <scenario>` in `microduck_local/` instead.
 - **helpers**: ＋ on the training row spawns a 🤝 helper duck — another
   viewer of the same live policy. Helpers do **not** add trainer workers
   (that *lowered* steps/s while the lab was open). ✕ removes it.

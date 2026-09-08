@@ -101,6 +101,30 @@ def _yaw_quat(yaw: float) -> list[float]:
     return [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
 
 
+def _pin_mass_properties_to_walk(robot: mujoco.MjSpec) -> None:
+    """Give a non-walk robot variant the walk file's `<inertial>` values.
+
+    Upstream exports each variant separately and rounds the inertials by
+    hand: `jaw_soft` is `fullinertia="0.000320811 ..."` in robot_walk.xml
+    and `0.000320812` in robot_allcollisions.xml (three bodies differ, in
+    the seventh digit; every mass is identical). Nothing physical - and
+    enough to seed chaos: the shipped walker's joint angles under "all"
+    drifted 0.2-0.4 rad from "walk" over 10 s on a flat floor with no
+    contact but the soles', and tests/test_arena.py's step-for-step lock
+    against the walk env failed at 3e-9 on step 0. A variant is the walk
+    robot plus collision meshes, so its mass properties are the walk
+    robot's, to the bit."""
+    walk = mujoco.MjSpec.from_file(str(ROBOT_XML["walk"]))
+    ref = {b.name: b for b in walk.bodies}
+    for b in robot.bodies:
+        r = ref.get(b.name)
+        if r is None or not b.name:
+            continue
+        b.mass, b.ipos, b.iquat = r.mass, r.ipos, r.iquat
+        b.inertia, b.fullinertia = r.inertia, r.fullinertia
+        b.explicitinertial = r.explicitinertial
+
+
 def compose(scenario: Scenario) -> mujoco.MjModel:
     """Compile the scenario. Raises FileNotFoundError if microduck_rl is not
     checked out (same message as the walk env)."""
@@ -148,17 +172,45 @@ def compose(scenario: Scenario) -> mujoco.MjModel:
         body.ipos = [0, 0, 0]
         body.inertia = [inertia, inertia, inertia]
         body.explicitinertial = True
+        # condim 6: MuJoCo only applies the torsional and rolling
+        # coefficients on a 6-dim contact; on the default 3-dim contact
+        # (sliding only) a rolling ball has NOTHING to slow it, and it rolls
+        # until a wall does. Upstream's ball.xml carries the same
+        # `friction="0.5 0.005 0.0001"` on a condim-3 geom, so its rolling
+        # value is silently ignored too. The floor keeps priority parity, so
+        # the pair takes the larger of each coefficient (sliding stays the
+        # floor's 1.0; rolling is the ball's, `Ball.rolling`), and the feet
+        # keep their priority-1 contact with the ball unchanged.
+        #
+        # Restitution is NOT modelled, and a stiffer contact does not buy it
+        # (measured 2026-09-06, a 1.4 m/s roll into a board): the default
+        # solref (0.02, 1) rebounds at e = 0.15; (0.02, 0.2) 0.20;
+        # (0.01, 0.2) 0.20; (0.01, 0.1) - a time constant at the 2 x timestep
+        # floor and a fifth of critical damping - 0.22, and that setting also
+        # shortens the roll-outs above by a fifth (0.26 -> 0.21 m, 3.5 ->
+        # 3.4 m). A hollow ball is e ~ 0.5-0.7, so a kicked ball here sits
+        # at the wall it hits, whatever the solref; left at the default.
         body.add_geom(name=f"ball{i}_geom", type=mujoco.mjtGeom.mjGEOM_SPHERE,
                       size=[ball.radius, 0, 0], group=0, rgba=[1.0, 0.55, 0.0, 1.0],
-                      friction=[0.5, 0.005, 0.0001])
+                      condim=6, friction=[0.5, 0.005, ball.rolling])
     for t in scenario.pickables:
         k = PICKABLE_KINDS[t.kind]
         half = [v / 2 for v in k["size"]]
         body = w.add_body(name=t.id, pos=[t.pos[0], t.pos[1], half[2] + 0.001], quat=_yaw_quat(t.yaw))
         body.add_freejoint(name=f"{t.id}_free")
+        # priority 1, so the 0.8 sliding friction is the one that applies:
+        # MuJoCo takes the HIGHER-priority geom's friction, and at equal
+        # priority the element-wise max - and the floor's sliding is 1.0, so
+        # at parity a toy's 0.8 was inert (measured, a 0.3 m/s nudge on the
+        # floor: 0.41 cm, the mu = 1.0 prediction 0.46; at priority 1,
+        # 0.52 cm, the mu = 0.8 prediction 0.57). The feet are priority 1
+        # too, so a foot on a toy stays the max of the two (1.0). Only the
+        # sliding value does anything on this condim-3 geom; the torsional
+        # and rolling entries are ignored (they need condim 4 / 6, as the
+        # ball's rolling does above) and are left at MuJoCo's defaults.
         body.add_geom(name=f"{t.id}_geom", type=mujoco.mjtGeom.mjGEOM_BOX, size=half,
                       mass=k["mass"], group=PICKABLE_GROUP, rgba=list(k["rgba"]),
-                      friction=[0.8, 0.005, 0.0001])
+                      priority=1, friction=[0.8, 0.005, 0.0001])
     if scenario.basket is not None:
         b = scenario.basket
         bx, by = b.pos
@@ -189,16 +241,27 @@ def compose(scenario: Scenario) -> mujoco.MjModel:
                       rgba=[0.35, 0.55, 0.85, 1.0])
     for duck in scenario.ducks:
         robot = mujoco.MjSpec.from_file(str(robot_xml))
+        if scenario.collision != "walk":
+            _pin_mass_properties_to_walk(robot)
         x, y, yaw = duck.spawn
         frame = w.add_frame(pos=[x, y, 0.0], quat=_yaw_quat(yaw))
         spec.attach(robot, prefix=duck_prefix(duck.id), frame=frame)
     # Grasp = attachment: one INACTIVE weld per (duck, pickable). The world
     # sets its relative pose and switches it on when a beak closes on a toy.
+    # And one contact EXCLUDE per pair: the beak is a gripper whose soft
+    # mouth closes AROUND a toy, which a rigid convex hull cannot - under
+    # "all" the jaw's hull sat on top of a 4 cm block and held the mouth tip
+    # 2 cm above it, the grasp missed by 3.5 cm against a 4 cm tolerance,
+    # and the toy-behind-the-basket pick went from 8/8 seeds to 3/8
+    # (measured, tests/test_tidy.py). The jaw still meets the floor, the
+    # boards, the ball, the basket, persons and other ducks.
     for duck in scenario.ducks:
         for t in scenario.pickables:
             spec.add_equality(name=f"{duck.id}/hold/{t.id}", type=mujoco.mjtEq.mjEQ_WELD,
                               objtype=mujoco.mjtObj.mjOBJ_BODY,
                               name1=f"{duck_prefix(duck.id)}jaw_soft", name2=t.id, active=False)
+            ex = spec.add_exclude(name=f"{duck.id}/mouth/{t.id}")
+            ex.bodyname1, ex.bodyname2 = f"{duck_prefix(duck.id)}jaw_soft", t.id
     model = spec.compile()
     for duck in scenario.ducks:
         if duck.team:
@@ -210,6 +273,26 @@ def compose(scenario: Scenario) -> mujoco.MjModel:
                                     f"{duck_prefix(duck.id)}{side}_foot_collision")
             if gid >= 0:
                 model.geom_priority[gid] = 1
+            # The SOLE is the ground contact the walker was trained on. Under
+            # "all" the shoe shell (`foot_left` / `foot_right`, in the same
+            # ankle body) is a collision mesh too, and its convex hull comes
+            # to 2 mm above the sole's underside - so a foot that tilts or
+            # sinks its millimetre into the soft floor stands on the shell
+            # as well, and the walker's flat-floor trajectory drifted 16 cm
+            # in 10 s from the walk model's (measured, seeded shoves; and
+            # tests/test_arena.py's step-for-step lock against the walk env
+            # broke at 3e-9). The shell keeps upstream's self-collision bits
+            # (contype/conaffinity 2, `robot_walk.xml`'s
+            # `self_collision_only` class): it meets other ducks' shells and
+            # legs, never the floor, the boards, the ball or a toy - those
+            # meet the sole, exactly as in the walk model. With this the
+            # walker is bit-identical under "walk" and "all" on a flat floor
+            # (tests/test_world.py).
+            ankle = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY,
+                                      f"{duck_prefix(duck.id)}ankle_{side}")
+            for g in range(model.ngeom):
+                if g != gid and model.geom_bodyid[g] == ankle and (model.geom_contype[g] or model.geom_conaffinity[g]):
+                    model.geom_contype[g] = model.geom_conaffinity[g] = 2
     return model
 
 

@@ -165,7 +165,7 @@ def run(seed: int, seconds: float, per_side: int) -> list[dict]:
         w.step()
         if w.goal_seq != goal_seq:
             goal_seq = w.goal_seq
-            kickoff_brains(brains, teams)
+            kickoff_brains(brains, teams, w)          # with the world: the kickoff rule the benchmark plays under
             pending = [k for k in pending if False]        # the ball teleported: nothing to settle
         keep = []
         for k in pending:

@@ -212,3 +212,69 @@ def test_persons_walk_their_path_and_ducks_detect_them():
     assert not p.possessed and p.cmd is None
     world.reset()
     assert (p.x, p.y) == (1.0, 0.0) and world.ducks["d0"].detector.last is None
+
+
+def test_the_walker_is_bit_identical_under_all_and_walk_on_a_flat_floor():
+    """`collision="all"` (the default) changes what a duck can TOUCH, not how
+    it walks: the shipped walker at 0.3 m/s with a shove, every qpos equal
+    to the bit between the two robot variants (10 s x 3 seeds and a turn,
+    measured). Two things had to be pinned for that - the variants' hand-
+    rounded `<inertial>` values (`compose._pin_mass_properties_to_walk`)
+    and the shoe shell's floor contact - or they drifted 0.2-0.5 rad
+    apart from a 1e-9 seed."""
+    infer = onnx_infer(POLICIES / "alpha_walking.onnx")
+
+    def run(collision, seconds=4.0):
+        sc = Scenario(name="w", floor=(20, 20), ducks=[Duck("d0", (0, 0, 0), None, None, None)],
+                      collision=collision)
+        w = World(sc, infer_for={"d0": infer}, seed=0)
+        d = w.ducks["d0"]
+        d.set_cmd(w.data, (0.3, 0.0, 0.0))
+        qs = []
+        for k in range(int(seconds / C.CTRL_DT)):
+            w.data.xfrc_applied[d.adr.trunk_body, :2] = (1.2, -0.8) if 50 <= k < 60 else (0.0, 0.0)
+            w.step()
+            qs.append(w.data.qpos.copy())
+        return w.model, np.array(qs), d.falls
+
+    ma, qa, fa = run("walk")
+    mb, qb, fb = run("all")
+    assert fa == fb == 0 and mb.ngeom > ma.ngeom
+    for f in ("body_mass", "body_inertia", "body_ipos", "body_iquat"):
+        np.testing.assert_array_equal(getattr(ma, f), getattr(mb, f), err_msg=f)
+    np.testing.assert_array_equal(qa, qb)
+
+
+def test_a_bump_that_lasts_one_substep_is_sensed():
+    """`World._sense_bumps` reads the contact list after EVERY substep of a
+    tick. Two ducks stood just touching, one flung sideways at 2 m/s (1 cm
+    a substep): the contact exists in the tick's first substep only - the
+    tick ends with no duck-duck pair in the list - and both are `bumped`.
+    (Reading the last substep alone, as before, missed it.)"""
+    sc = Scenario(name="bb", floor=(4, 4), ducks=[Duck("d0", (0.0, 0.0, 0.0), None, None, None),
+                                                   Duck("d1", (0.0, 0.2, 0.0), None, None, None)])
+    w = World(sc)
+    m, d = w.model, w.data
+    d0, d1 = w.ducks["d0"], w.ducks["d1"]
+
+    def duck_duck_pairs() -> int:
+        n = 0
+        for c in range(d.ncon):
+            b1 = m.body(m.geom_bodyid[d.contact.geom1[c]]).name
+            b2 = m.body(m.geom_bodyid[d.contact.geom2[c]]).name
+            n += b1.startswith("d0/") and b2.startswith("d1/") or b1.startswith("d1/") and b2.startswith("d0/")
+        return n
+
+    # Slide d1 in beside d0 until the first contact appears.
+    q1 = d1.adr.root_qpos
+    y = 0.2
+    while y > 0.0 and duck_duck_pairs() == 0:
+        y -= 0.001
+        d.qpos[q1 + 1] = y
+        mujoco.mj_forward(m, d)
+    assert 0.02 < y < 0.2 and duck_duck_pairs() > 0, y
+    assert not w.bumped(d0) and not w.bumped(d1)
+    d.qvel[d1.adr.root_qvel + 1] = 2.0
+    w.step()
+    assert duck_duck_pairs() == 0                     # gone by the tick's last substep
+    assert w.bumped(d0) and w.bumped(d1)

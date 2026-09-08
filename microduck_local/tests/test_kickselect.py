@@ -13,6 +13,7 @@ from microduck_local.brain.kickselect import (
     GOALOPP,
     GOALOWN,
     INFIELD,
+    WHIFF,
     KickModel,
     Pitch,
     evaluate,
@@ -98,7 +99,7 @@ def test_whiffs_stay_put_and_the_push_is_an_action_with_the_aim_the_kick_gives_i
     rng = np.random.default_rng(3)
     # Whiffs: with p_whiff = 1 every sample stops at the ball.
     whiffy = KickModel(speed=1.4, speed_sd=0.0, dir_sd=0.0, decel=0.3, p_whiff=1.0)
-    assert all(label == INFIELD and end == (0.5, 0.0) for label, end in roll_out((0.5, 0.0), 0.0, whiffy, PITCH, rng, 8))
+    assert all(label == WHIFF and end == (0.5, 0.0) for label, end in roll_out((0.5, 0.0), 0.0, whiffy, PITCH, rng, 8))
     # The push model: rolls `roll` under `decel`, no exit angle.
     from dataclasses import replace
     pm = push_model(roll=0.64, dir_sd=0.0, decel=0.3)
@@ -343,3 +344,38 @@ def test_the_brain_feeds_the_selector_the_ducks_the_board_does_not_own():
         seen[on] = calls[-1]
     assert seen[True] == [(0.5, -0.1)] and seen[False] is None
     assert ChaseParams().kick_select_opps is False                            # ships off until measured
+
+
+def test_a_ball_estimated_on_or_past_our_line_still_refuses_the_own_goal():
+    """`roll_out` tests `0 < f` for each wall, so a ball estimate ON or past
+    the goal line (a 2-5 cm error on a ball at the boards, the dominant
+    dead-ball state) made that wall invisible: a swing straight into our own
+    mouth read 0% own goal from x = -1.50 against 99% from -1.49 (code
+    review, 2026-09-08). `evaluate` now rolls out from just inside."""
+    pitch = Pitch(half_x=1.5, half_y=1.25, goal_w=0.7, attack_sign=1.0)      # our mouth at x = -1.5
+    for bx in (-1.49, -1.50, -1.51, -1.60):
+        v = evaluate((bx, 0.0), math.pi, "kick_left", KickModel(dir_sd=0.05, speed_sd=0.05), pitch,
+                     np.random.default_rng(0), 100)
+        assert v.p_own > 0.9, (bx, v.p_own)
+    # and the same past the far end for a shot: a goal, not INFIELD at x = 5
+    v = evaluate((1.52, 0.0), 0.0, "push", KickModel(dir_sd=0.0, speed_sd=0.0), pitch, np.random.default_rng(0), 10)
+    assert v.p_goal == 1.0
+
+
+def test_a_whiff_is_never_a_received_pass():
+    whiffy = KickModel(speed=1.4, speed_sd=0.0, dir_sd=0.0, decel=0.3, p_whiff=1.0)
+    v = evaluate((0.5, 0.0), 0.0, "kick_left", whiffy, PITCH, np.random.default_rng(0), 20,
+                 mates=[(0.5, 0.3)], pass_reach=0.4, pass_bonus=0.6)
+    assert v.p_pass == 0.0 and abs(v.value - potential(0.5, 0.0, PITCH)) < 1e-9      # valued where it lies, no bonus
+
+
+def test_a_safe_push_that_scores_beats_one_that_only_stands_well():
+    """The push-first branch ranked pushes by `value`, which EXCLUDES the
+    samples that score: a push into the open mouth (value 0.0) lost to one
+    that rolled to a nice spot beside it. Same rule as the kicks now."""
+    from microduck_local.brain.kickselect import push_model
+    pitch = Pitch(half_x=1.5, half_y=1.25, goal_w=0.7, attack_sign=1.0)
+    pm = push_model(dir_sd=0.0)                                  # 0.64 m, dead straight
+    v = select((1.2, 0.0), [(0.0, "push"), (math.pi / 2, "push")], KickModel(), pitch,
+               np.random.default_rng(0), n=20, shoot=0.3, models={"push": pm})
+    assert v is not None and v.foot == "push" and v.p_goal == 1.0 and abs(v.heading) < 1e-9

@@ -19,12 +19,7 @@ import {
   truckImpulse,
 } from "@/lib/camera";
 import { loadJSON, saveJSON } from "@/lib/persist";
-import {
-  getCapture,
-  pumpCaptureFrame,
-  setCaptureCanvas,
-  setSnapshotFn,
-} from "@/lib/record";
+import { getCapture } from "@/lib/record";
 import { getSelectedDuck, setSelectedDuck } from "@/lib/select";
 import { modalIsOpen } from "@/lib/ui";
 import { buildBodyGeometries, Duck } from "./Duck";
@@ -35,6 +30,7 @@ import { TeachPanel } from "./TeachPanel";
 import { pushToast, Toasts } from "./Toasts";
 import { AnimPanel } from "./AnimPanel";
 import { RecordPanel } from "./RecordPanel";
+import { CaptureCanvas, Snapshotter } from "./Capture";
 import { PoseDuck } from "./PoseDuck";
 
 function gridOffsets(n: number, spacing = 0.65): [number, number][] {
@@ -153,9 +149,10 @@ const SHOT = { az: 0.61, dist: 0.78, height: 0.34, drift: 0.05 };
 
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
-/** Inside-the-Canvas helper for the 🎥 record flow: registers the WebGL
- *  canvas for MediaRecorder, and while a capture is framing/recording flies
- *  the camera to a ¾ front view of the target duck and keeps it centered.
+/** Inside-the-Canvas helper for the 🎥 record flow (the canvas itself is
+ *  registered and pumped by CaptureCanvas, Capture.tsx): while a capture is
+ *  framing/recording flies the camera to a ¾ front view of the target duck
+ *  and keeps it centered.
  *  OrbitControls is paused for the duration (CameraKeys takes a `paused`
  *  callback and drops held motions while it is true), and
  *  the camera simply stays where the take ended. The azimuth is chosen ONCE
@@ -165,11 +162,6 @@ const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 function RecordCamera({ client }: { client: LabClient }) {
   const controls = useThree((s) => s.controls) as unknown as ControlsLike | null;
   const camera = useThree((s) => s.camera);
-  const gl = useThree((s) => s.gl);
-  useEffect(() => {
-    setCaptureCanvas(gl.domElement);
-    return () => setCaptureCanvas(null);
-  }, [gl]);
   // Never leave the user without controls (unmount mid-take).
   useEffect(() => {
     return () => {
@@ -186,8 +178,6 @@ function RecordCamera({ client }: { client: LabClient }) {
 
   useFrame((st, dtRaw) => {
     const cap = getCapture();
-    // One captured video frame per rendered frame (no-op unless recording).
-    pumpCaptureFrame();
     const active = cap.phase === "framing" || cap.phase === "recording";
     if (!active) {
       if (paused.current && controls) controls.enabled = true;
@@ -246,40 +236,6 @@ function RecordCamera({ client }: { client: LabClient }) {
       camera.lookAt(aim);
     }
   });
-  return null;
-}
-
-/** 📷 snapshot: registers the synchronous take-a-PNG implementation (see
- *  lib/record.ts for why it must be synchronous — the download has to stay
- *  inside the button's user gesture or Chrome drops it as "automatic").
- *  The WebGL buffer (preserveDrawingBuffer:false) is only readable in the
- *  same task as a render, so this re-renders, reads with toDataURL (sync),
- *  and restores. Objects tagged `userData.hideInCapture` (selection rings)
- *  are hidden for the capture render only. */
-function Snapshotter() {
-  const camera = useThree((s) => s.camera);
-  const gl = useThree((s) => s.gl);
-  const scene3 = useThree((s) => s.scene);
-  useEffect(() => {
-    setSnapshotFn((name) => {
-      const hidden: THREE.Object3D[] = [];
-      scene3.traverse((o) => {
-        if (o.visible && o.userData.hideInCapture) {
-          o.visible = false;
-          hidden.push(o);
-        }
-      });
-      gl.render(scene3, camera);
-      const dataUrl = gl.domElement.toDataURL("image/png");
-      hidden.forEach((o) => (o.visible = true));
-      const a = document.createElement("a");
-      a.href = dataUrl;
-      a.download = `${name}.png`;
-      a.click();
-      pushToast(`📷 ${name}.png → downloads`);
-    });
-    return () => setSnapshotFn(null);
-  }, [camera, gl, scene3]);
   return null;
 }
 
@@ -592,6 +548,7 @@ export default function Viewer() {
             return ph === "framing" || ph === "recording";
           }}
         />
+        <CaptureCanvas />
         <Snapshotter />
       </Canvas>
       <Hud clientRef={clientRef} connected={connected} error={error} />

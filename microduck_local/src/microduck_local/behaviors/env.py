@@ -39,6 +39,12 @@ class BehaviorEnv(MicroduckWalkEnv):
         # stack has no z-kill; a bouncing stride dips through 0.07 m without
         # falling), and so does any pose whose target sits under the fall line.
         kwargs.setdefault("height_termination", self.behavior.height_termination)
+        # Velocity pushes (walk_env's push_robot, upstream's push_by_setting_
+        # velocity) are OFF for every behavior unless a caller asks: they
+        # would be a new experiment in a trick's curriculum, not a fix, and
+        # the locomotion recipes were tuned without them. The rest of the
+        # velocity DR subset follows `domain_rand` as before.
+        kwargs.setdefault("push_robot", False)
         self.foot_contact_state = {"left": True, "right": True}
         # Counts resets. Task-state hooks (Behavior.reset_fn / obs_fn) key
         # their per-episode state on it, so an obs built DURING a reset —

@@ -2,7 +2,8 @@
 GameController — after a goal the side that conceded kicks off and the
 state runs set → kickoff → playing; the team board carries the message;
 a chase brain with `kickoff_wait` stands off the other side's restart in
-its own half until the ball leaves the spot. Ships off until measured."""
+its own half until the ball leaves the spot. Ships ON: measured, it fires
+and costs nothing (roadmap B.3)."""
 
 import math
 

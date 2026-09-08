@@ -104,7 +104,7 @@ def block_point(ball: tuple[float, float], own_goal: tuple[float, float],
     the ones a block can address start from 0.8 m out."""
     dx, dy = own_goal[0] - ball[0], own_goal[1] - ball[1]
     d = math.hypot(dx, dy)
-    if d < ahead + keep:
+    if d < ahead + keep or d < 1e-9:                # ahead + keep = 0 with the ball ON the goal: nothing to block
         return None
     ux, uy = dx / d, dy / d
     s = (me[0] - ball[0]) * ux + (me[1] - ball[1]) * uy
@@ -152,6 +152,8 @@ class Interceptor:
         if not old:
             return None
         t0, d0 = old[-1]
+        if t1 - t0 <= 0.0:                          # window 0: the newest sighting is its own baseline
+            return None
         rate = (d0 - d1) / (t1 - t0)
         if rate <= 1e-6:
             return None

@@ -7,17 +7,17 @@ Format v1 (JSON, saved under microduck_local/scenarios/<name>.json):
      "walls": [{"from": [x, y], "to": [x, y], "height": 0.3, "thickness": 0.02}],
      "boxes": [{"pos": [x, y, z], "size": [sx, sy, sz], "yaw": 0.0,
                 "mass": 0.0, "rgba": [r, g, b, a]}],     # mass 0 = static scenery
-     "balls": [{"pos": [x, y], "radius": 0.035, "mass": 0.015}],
+     "balls": [{"pos": [x, y], "radius": 0.035, "mass": 0.015, "rolling": 0.002}],  # rolling: the floor
      "ducks": [{"id": "d0", "spawn": [x, y, yaw], "policy": "pollen:alpha_walking",
                 "tof": "datasheet", "detector": "datasheet", "brain": "follow",
                 "team": "cream", "role": "striker"}],      # soccer: a colorway, a job
      "goal_width": 0.7,                                # > 0 makes it a pitch
      "attacks": {"cream": "right"},                    # …and which mouth a team attacks
      "persons": [{"id": "p0", "pos": [x, y], "yaw": 0.0, "path": [[x, y], ...],
-                  "speed": 0.3, "radius": 0.2, "height": 1.0, "yield_m": 0.0}],  # kinematic walkers
+                  "speed": 0.3, "radius": 0.2, "height": 1.0, "yield_m": 0.55}], # kinematic walkers; yield_m: stops short of a duck
      "pickables": [{"id": "t0", "kind": "brick"|"block"|"sock", "pos": [x, y], "yaw": 0.0}],
      "basket": {"pos": [x, y], "size": [0.3, 0.3], "rim": 0.06} | null,   # the tidy target
-     "collision": "walk"}                               # "walk" | "all" robot MJCF
+     "collision": "all"}                                # "all" | "walk" robot MJCF ("walk": only the soles collide)
 
 Everything is metres, radians, world frame, z up. Validation is strict on
 purpose: a scenario that compiles into a model nobody meant is worse than a
@@ -152,6 +152,22 @@ class Ball:
     pos: tuple[float, float]
     radius: float = 0.035              # upstream's 70 mm kick ball
     mass: float = 0.015
+    # Rolling resistance against the floor, MuJoCo's rolling-friction
+    # coefficient (units of length: the rolling torque the contact resists
+    # is `rolling` x the normal force). It is the FLOOR that this number
+    # describes; the ball is the same hollow plastic everywhere. Measured
+    # roll-out on an open floor (tests/test_world.py guards the first row):
+    #     rolling   nudge 0.2 m/s   walked into 0.45 m/s   kick 1.4 m/s
+    #     0 (none)  12 m, never     27 m, never            84 m, never
+    #     0.001     0.84 m / 16 s   2.4 m / 20 s           9.9 m / 29 s
+    #     0.0015    0.41 m / 7 s    1.2 m / 10 s           5.2 m / 14 s
+    #     0.002     0.25 m / 4 s    0.72 m / 6 s           3.5 m / 9 s
+    # 0.002 is a short carpet / rubber mat, the floor a home robot lives
+    # on: a bump stops within a stride, a kick crosses the pitch. Before
+    # 2026-09-06 the ball had NO rolling resistance at all (the coefficient
+    # was set but the geom's condim of 3 ignores it) - a bumped ball rolled
+    # until a wall stopped it.
+    rolling: float = 0.002
 
 
 @dataclass
@@ -169,18 +185,37 @@ class Duck:
 
 @dataclass
 class Person:
-    """A kinematic walker (a mocap capsule): what a duck follows."""
+    """A kinematic walker (a mocap capsule): what a duck follows.
+
+    A mocap body has INFINITE mass: it is wherever the world writes it each
+    tick and nothing a duck does moves it, so a person-duck contact cannot
+    yield momentum the way a real person's would. It has to be AVOIDED, not
+    softened - which is what `yield_m` does. Measured 2026-09-06 (collision
+    "all", the shipped walker standing, capsule walking through its spot):
+    at 0.10 m/s the capsule shoves the duck 0.22 m (peak 0.30 m/s, no
+    fall); from 0.15 m/s up it knocks it over broadside (peak 0.21 m/s,
+    then a fall), and head-on it pushes it at 0.35 m/s (0.15) to 0.61 m/s
+    (0.3). The 4-6 m/s "fling" the physics audit saw was the fallen duck
+    RESPAWNING inside the capsule (`World._respawn` now spawns clear of a
+    person). No walking speed is safe for a walk-through person, so the
+    loader does not cap `speed`; a polite walker never touches at any
+    speed the loader allows (surface gap 34 cm at 1.5 m/s). `yield_m` 0
+    reproduces the pre-2026-09 world, where the capsule walked through.
+    """
     id: str
     pos: tuple[float, float]
     yaw: float = 0.0
     path: list[tuple[float, float]] = field(default_factory=list)   # waypoints, looped
-    speed: float = 0.3
+    speed: float = 0.3                 # m/s along the path (with yield_m 0 anything >= 0.15 topples a duck, above)
     radius: float = 0.2
     height: float = 1.0
-    # A polite walker: with a duck inside `yield_m` ahead on its way it
-    # stops, and after a wait steps on to its next waypoint instead of
-    # walking through the duck (a mocap capsule would). 0: walks through.
-    yield_m: float = 0.0
+    # A polite walker: with a duck inside `yield_m` (centre to centre) ahead
+    # on its way it stops, and after a wait steps on to its next waypoint
+    # instead of walking through the duck. 0.55 is the follow benchmark's
+    # `polite` (brain/brain_env.py FollowTask, which should read this): the
+    # capsule's surface stops 0.35 m from the trunk. 0: walks through - see
+    # the docstring for what that does to a duck.
+    yield_m: float = 0.55
 
 
 # What a duck can pick up: full extents (m), mass (kg), colour. Sizes are
@@ -227,7 +262,15 @@ class Scenario:
     # mouth its spawn heading faces, which is what every pitch did before this
     # field and what `World.goal_for` still falls back to.
     attacks: dict[str, str] = field(default_factory=dict)
-    collision: str = "walk"
+    # Which robot MJCF the ducks are attached from. "all" gives every body its
+    # collision mesh; "walk" - upstream's flat-floor training variant, and the
+    # default here until 2026-09-06 - meets the world through the two 13 mm
+    # soles ONLY: a ball at trunk height passed through a standing duck, a
+    # walker had its beak 9 cm inside a wall before a foot touched it, two
+    # walkers head-on overlapped to 3-7 cm trunk to trunk. The shipped
+    # walker's flat-floor trajectory is bit-identical under both
+    # (tests/test_arena.py), so "all" costs a policy nothing.
+    collision: str = "all"
     version: int = SCENARIO_VERSION
 
     # -- serialisation -----------------------------------------------------
@@ -310,7 +353,8 @@ def validate_scenario(raw: dict) -> Scenario:
         balls.append(Ball(
             _vec(b.get("pos"), 2, f"balls[{i}].pos", -bound, bound),
             _num(b.get("radius", 0.035), f"balls[{i}].radius", 0.005, 0.5),
-            _num(b.get("mass", 0.015), f"balls[{i}].mass", 0.001, 5.0)))
+            _num(b.get("mass", 0.015), f"balls[{i}].mass", 0.001, 5.0),
+            _num(b.get("rolling", Ball.rolling), f"balls[{i}].rolling", 0.0, 0.05)))
     if len(walls) + len(boxes) + len(balls) > MAX_OBJECTS:
         raise ScenarioError(f"more than {MAX_OBJECTS} objects")
 
@@ -376,7 +420,7 @@ def validate_scenario(raw: dict) -> Scenario:
             _num(q.get("speed", 0.3), f"persons[{i}].speed", 0.0, 1.5),
             _num(q.get("radius", 0.2), f"persons[{i}].radius", 0.05, 0.5),
             _num(q.get("height", 1.0), f"persons[{i}].height", 0.2, 2.0),
-            _num(q.get("yield_m", 0.0), f"persons[{i}].yield_m", 0.0, 2.0)))
+            _num(q.get("yield_m", Person.yield_m), f"persons[{i}].yield_m", 0.0, 2.0)))
     if len(persons) > MAX_PERSONS:
         raise ScenarioError(f"more than {MAX_PERSONS} persons")
     pickables = []
@@ -402,7 +446,7 @@ def validate_scenario(raw: dict) -> Scenario:
         basket = Basket(_vec(braw.get("pos"), 2, "basket.pos", -bound, bound),
                         _vec(braw.get("size", [0.3, 0.3]), 2, "basket.size", 0.1, 1.0),
                         _num(braw.get("rim", 0.06), "basket.rim", 0.02, 0.18))
-    collision = raw.get("collision", "walk")
+    collision = raw.get("collision", Scenario.collision)
     if collision not in ("walk", "all"):
         raise ScenarioError("collision must be 'walk' or 'all'")
     goal_width = raw.get("goal_width", 0.0) or 0.0
@@ -529,7 +573,7 @@ def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
     """`per_side` ducks a side, one ball, walls all round (the soccer track).
     A goal is the ball crossing either short wall's line inside
     `goal_width`; the World counts them and re-centres the ball. The CREAM
-    team (d0…) spawns at −x and attacks the +x mouth; the LAVENDER team
+    team (d0…) spawns at −x and attacks the +x mouth; the GRAPHITE team
     attacks −x; the pitch grows a little with the roster. Teammates share a
     blackboard (brain/team.py) — a message a second over Wi-Fi on the
     robot — that says who attacks and where the ball was seen.

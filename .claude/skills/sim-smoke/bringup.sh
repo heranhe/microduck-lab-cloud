@@ -11,7 +11,7 @@ LOGS="${TMPDIR:-/tmp}/sim-smoke"; mkdir -p "$LOGS"
 # `setsid` is a util-linux thing and macOS has no such command — this script
 # died on its first line of real work on the platform the repo is tuned for.
 # A subshell with `nohup` and a closed stdin detaches well enough on both.
-DETACH=(); command -v setsid > /dev/null && DETACH=(setsid)
+DETACH=(); command -v setsid > /dev/null && DETACH=(setsid)   # expanded as ${DETACH[@]+"${DETACH[@]}"}: an EMPTY array is "unbound" to bash 3.2 under set -u
 if [[ "${2:-}" == "--restart" || "${1:-}" == "--restart" ]]; then
   # A bracketed regex so this script's own command line never matches.
   for p in $(pgrep -f 'bin/duck-la[b]' || true); do kill "$p" || true; done
@@ -24,12 +24,12 @@ if ! curl -sf -o /dev/null http://127.0.0.1:8788/world; then
   LAB_CMD=("$ROOT/microduck_local/.venv/bin/duck-lab")
   [[ -x "${LAB_CMD[0]}" ]] || LAB_CMD=(uv run duck-lab)
   ( cd "$ROOT/microduck_local" && LAB_STATE_PATH="$LOGS/lab-state.json" \
-      "${DETACH[@]}" nohup "${LAB_CMD[@]}" --fresh --world "$SCENARIO" --port 8788 > "$LOGS/lab.log" 2>&1 < /dev/null & )
+      ${DETACH[@]+"${DETACH[@]}"} nohup "${LAB_CMD[@]}" --fresh --world "$SCENARIO" --port 8788 > "$LOGS/lab.log" 2>&1 < /dev/null & )
   for _ in $(seq 1 120); do curl -sf -o /dev/null http://127.0.0.1:8788/world && break; sleep 0.5; done
 fi
 curl -sf -o /dev/null http://127.0.0.1:8788/world && echo "lab: up ($(curl -s http://127.0.0.1:8788/world | head -c 60)…)" || { echo "lab failed:"; tail -20 "$LOGS/lab.log"; exit 1; }
 if ! curl -sf -o /dev/null http://127.0.0.1:63317/sim; then
-  ( cd "$ROOT/duck-viewer" && PORT=63317 "${DETACH[@]}" nohup npm run dev > "$LOGS/viewer.log" 2>&1 < /dev/null & )
+  ( cd "$ROOT/duck-viewer" && PORT=63317 ${DETACH[@]+"${DETACH[@]}"} nohup npm run dev > "$LOGS/viewer.log" 2>&1 < /dev/null & )
   for _ in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:63317/sim && break; sleep 1; done
 fi
 curl -sf -o /dev/null http://127.0.0.1:63317/sim && echo "viewer: up" || { echo "viewer failed:"; tail -20 "$LOGS/viewer.log"; exit 1; }

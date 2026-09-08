@@ -23,7 +23,7 @@ Backends (pick with ``MICRODUCK_VEC_ENV``, or the ``backend=`` argument):
             N: 632 MB of private memory per worker becomes 16 MB, and
             building a 64-env vec env drops from 7.8 s to 0.2 s because no
             child ever opens the MJCF. Domain randomization stays
-            per-worker: a write to `body_mass`/`geom_friction` in a child
+            per-worker: a write to `body_mass`/`geom_friction`/... in a child
             copies those one or two pages for that child alone (verified in
             tests/test_vec_env.py). Trainers wrap the result with
             ``as_sb3_vec_env`` after importing torch.
@@ -137,19 +137,22 @@ def _warm_jit(probe: gym.Env) -> None:
     and every stage of a curriculum chain.
 
     Side-effect-free by construction: a BAM step rewrites `dof_frictionloss`
-    and `dof_damping` on the model every substep, and a reset may draw new
-    `body_mass`/`geom_friction`, so all four are snapshotted and restored.
-    The children then inherit exactly the model the probe's CONSTRUCTION
-    left, as before — only the compiled code is new. Best-effort: a factory
-    whose env cannot take a zero action is not worth failing a run over.
+    and `dof_damping` on the model every substep, and a reset draws new
+    values into every field in `walk_env.DR_MODEL_FIELDS` and the
+    `mj_setConst` outputs that depend on them (`SETCONST_FIELDS`), so all of
+    them are snapshotted and restored. The children then inherit exactly
+    the model the probe's CONSTRUCTION left, as before — only the compiled
+    code is new. Best-effort: a factory whose env cannot take a zero action
+    is not worth failing a run over.
     """
+    from .walk_env import DR_MODEL_FIELDS, SETCONST_FIELDS
     env = probe.unwrapped
     if getattr(env, "bam", None) is None:
         return  # the "xml" actuator path has no numba kernels to warm
     model = env.model
     saved = {name: getattr(model, name).copy()
-             for name in ("dof_frictionloss", "dof_damping",
-                          "body_mass", "geom_friction")}
+             for name in ("dof_frictionloss", "dof_damping")
+             + DR_MODEL_FIELDS + SETCONST_FIELDS if hasattr(model, name)}
     try:
         probe.reset()
         probe.step(np.zeros(probe.action_space.shape, dtype=np.float32))

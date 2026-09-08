@@ -228,3 +228,12 @@ def test_a_supporter_gazes_at_a_ball_it_sees_only_with_support_gaze():
     assert heads[False][1] == 0.0 and heads[False][0] == 0.0                # off: level, as shipped
     assert heads[True][1] > 0.05                                            # on: the head pitched at the ball (the law gives 0.116 at 0.6 m)
     assert ChaseParams().support_gaze is False
+
+
+def test_the_grid_is_symmetric_on_a_2v2_pitch():
+    """`np.arange` dropped the +y row whenever 2*hy was not a multiple of the
+    step: on the 2v2 bounds a supporter could stand 5 cm nearer one board
+    than the other (code review, 2026-09-08)."""
+    f = Field((1.7, 1.425), 0.35)
+    assert abs(f.y.max() + f.y.min()) < 1e-9 and abs(f.x.max() + f.x.min()) < 1e-9
+    assert abs(f.y.max() - (1.425 - 0.35)) < 1e-9 and abs(f.x.max() - (1.7 - 0.35)) < 1e-9

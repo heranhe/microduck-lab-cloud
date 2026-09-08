@@ -14,6 +14,15 @@ Two actuator models are available (`actuator=`, or `MICRODUCK_ACTUATOR`):
 
 The observation/action contract is exact under both (contract.py), so exported
 ONNX is drop-in compatible with infer_policy.py --new-cmd-obs and the runtime.
+
+`train-walk` trains on ``"bam"``; the env's own default stays ``"xml"`` (the
+cheap, deployment-rehearsal physics the tricks and the lab run on).
+
+Physics parity with the upstream velocity cfg (2026-09-06 audit): the solver
+runs implicitfast / 10 / 20 (UPSTREAM_* below), the IMU blocks of the obs are
+refreshed after the substep loop (`_refresh_derived`), and domain
+randomization carries upstream's velocity pushes, mass+inertia scaling, CoM
+offsets and armature scaling with upstream's ranges (each a constructor knob).
 """
 
 from __future__ import annotations
@@ -56,13 +65,69 @@ _E_FWD = np.array([1.0, 0.0, 0.0])
 # env and an "xml" env can never be handed the same compiled model.
 _SHARED_MODELS: dict[tuple[str, str], mujoco.MjModel] = {}
 
-# id(model) -> the model's compile-time body_mass/geom_friction, captured the
-# moment it was compiled. Domain randomization writes those two arrays, so an
+# The mjModel fields domain randomization writes (restore-then-apply every
+# reset — AGENTS.md), and the derived constants `mujoco.mj_setConst` recomputes
+# from them (measured on this model: change mass/inertia/ipos/armature, call
+# mj_setConst, diff every array of the model — these are the ones that moved).
+# `body_subtreemass` matters to anything reading subtree_com; the invweight0
+# fields scale the constraint impedance, so a mass draw that skipped them
+# would be a slightly different robot from the one the solver thinks it has.
+DR_MODEL_FIELDS = ("body_mass", "body_inertia", "body_ipos", "dof_armature",
+                   "geom_friction")
+SETCONST_FIELDS = ("body_subtreemass", "body_invweight0", "dof_invweight0",
+                   "dof_M0", "actuator_acc0", "light_poscom0", "dof_length")
+
+# id(model) -> the model's compile-time copy of every field above, captured
+# the moment it was compiled. Domain randomization writes those arrays, so an
 # env that joins a shared model AFTER a sibling has already randomized it would
 # otherwise adopt the sibling's draw as its "restore to defaults" baseline and
 # quietly accumulate. Only cached models are registered, and the cache holds the
 # strong reference that keeps the id valid.
-_PRISTINE: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+_PRISTINE: dict[int, dict[str, np.ndarray]] = {}
+
+# ------------------------------------------------ upstream velocity-cfg values
+#
+# mjlab's velocity task (mjlab/tasks/velocity/velocity_env_cfg.py, the base of
+# upstream microduck_velocity_env_cfg.py) trains on implicitfast with 10
+# Newton iterations and 20 line-search iterations; the MJCF default that
+# scripts/infer_policy.py (the deployment rehearsal) runs is Euler / 100 / 50.
+# Measured here with alpha_walking.onnx, 500 steps with three shoves, xml AND
+# bam: implicitfast alone and iterations=10 alone are BIT-IDENTICAL to the
+# XML default (the solver converges in <= 6 iterations, and Euler already
+# integrates joint damping implicitly on this model). Only ls_iterations=20
+# moves anything, and only under BAM: 1.4e-17 in qpos at step 49 — a
+# line-search cutoff ULP under the stiff DOF-friction rows — which chaos
+# grows to 4e-3 by step 300; the walker falls in neither. Training parity
+# wins over deployment parity: these are the numbers the shipped policies
+# were optimized against, and the deployment rehearsal is unaffected to the
+# bit under xml.
+UPSTREAM_INTEGRATOR = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+UPSTREAM_SOLVER_ITERATIONS = 10
+UPSTREAM_LS_ITERATIONS = 20
+
+# Domain randomization ranges, read from upstream microduck_velocity_env_cfg.py
+# (the sim2real recipe this env mirrors). Each is a MicroduckWalkEnv knob.
+MASS_SCALE_RANGE = (0.95, 1.05)       # dr.pseudo_inertia alpha: mass AND inertia
+ARMATURE_SCALE_RANGE = (0.9, 1.1)     # dr.joint_armature, per joint
+PUSH_VEL_RANGE = (-0.3, 0.3)          # push_by_setting_velocity, m/s, world xy
+PUSH_INTERVAL_S = (3.0, 6.0)          # interval_range_s
+# body_ipos offsets, ramped by curriculum in per-env steps (upstream counts
+# 24 steps/env per iteration: 500/1000/1500 iterations = 12k/24k/36k).
+TRUNK_COM_STAGES = ((0, 0.003), (12_000, 0.005), (24_000, 0.010), (36_000, 0.015))
+HEAD_COM_STAGES = ((0, 0.003), (12_000, 0.005), (24_000, 0.010))
+# Upstream HEAD_BODY_NAMES, verbatim. Its own comment notes that bearing_roll
+# is the right-hip-yaw link, not a head body, "kept only to preserve existing
+# DR behavior" — mirrored as-is so the draw distribution is the shipped one.
+HEAD_COM_BODIES = ("neck", "neck_pitch", "yaw_roll_motion", "jaw_soft",
+                   "bearing_roll")
+
+
+def _staged(stages: tuple[tuple[int, float], ...], n: int) -> float:
+    v = stages[0][1]
+    for step, val in stages:
+        if n >= step:
+            v = val
+    return v
 
 # Set by `shared_model_scope()`: envs constructed inside the scope fetch from
 # the cache instead of compiling. A ContextVar rather than a plain global so an
@@ -87,13 +152,18 @@ def shared_model(scene: str | Path, actuator: str = "xml") -> mujoco.MjModel:
     if model is None:
         model = mujoco.MjModel.from_xml_path(key[0])
         _SHARED_MODELS[key] = model
-        _PRISTINE[id(model)] = (model.body_mass.copy(),
-                                model.geom_friction.copy())
+        _PRISTINE[id(model)] = _snapshot_fields(model)
     return model
 
 
-def pristine_baselines(model: mujoco.MjModel) -> tuple[np.ndarray, np.ndarray]:
-    """The model's compile-time (body_mass, geom_friction).
+def _snapshot_fields(model: mujoco.MjModel) -> dict[str, np.ndarray]:
+    return {name: getattr(model, name).copy()
+            for name in DR_MODEL_FIELDS + SETCONST_FIELDS
+            if hasattr(model, name)}
+
+
+def pristine_baselines(model: mujoco.MjModel) -> dict[str, np.ndarray]:
+    """The model's compile-time copy of every DR-written / mj_setConst field.
 
     Recorded at compile time for cached models; for a privately compiled or
     caller-supplied model there is nobody else to have touched it, so reading it
@@ -102,7 +172,7 @@ def pristine_baselines(model: mujoco.MjModel) -> tuple[np.ndarray, np.ndarray]:
     known = _PRISTINE.get(id(model))
     if known is not None:
         return known
-    return model.body_mass.copy(), model.geom_friction.copy()
+    return _snapshot_fields(model)
 
 
 def clear_shared_models() -> None:
@@ -187,6 +257,11 @@ class MicroduckWalkEnv(gym.Env):
         domain_rand: bool = True,
         action_delay: bool = True,
         random_yaw: bool = True,
+        # The head-pose command range the policy trains under. The contract's
+        # keep-alive range (+-0.05 rad) is why a walker trained here has never
+        # seen a head-down command; pass the gaze poses to train one that has
+        # (roadmap 4c revisit, 2026-09-07: `train-walk --head-range`).
+        head_cmd_ranges: tuple | None = None,
         seed: int | None = None,
         scene_xml: str | None = None,   # default walk scene; SCENE_ALL_XML for
                                         # tricks needing head/trunk floor contact
@@ -210,6 +285,23 @@ class MicroduckWalkEnv(gym.Env):
         model: mujoco.MjModel | None = None,  # adopt an already-compiled model
                                         # instead of compiling a private ~138 MB
                                         # copy. See `shared_model_scope`.
+        # ---- domain randomization knobs, upstream velocity cfg defaults.
+        # All of them are inert when domain_rand=False.
+        mass_scale_range: tuple[float, float] = MASS_SCALE_RANGE,
+                                        # trunk mass AND inertia, one factor
+                                        # (pseudo_inertia alpha), per reset
+        armature_scale_range: tuple[float, float] = ARMATURE_SCALE_RANGE,
+                                        # per-joint dof_armature factor
+        trunk_com_offset_m: float | None = None,  # ±m on trunk body_ipos;
+                                        # None = upstream's curriculum ladder
+                                        # (TRUNK_COM_STAGES over lifetime steps)
+        head_com_offset_m: float | None = None,   # same for HEAD_COM_BODIES
+        push_robot: bool | None = None, # add U(push_vel_range) to the base's
+                                        # world-xy velocity every
+                                        # U(push_interval_s) of episode time;
+                                        # None = follow domain_rand
+        push_vel_range: tuple[float, float] = PUSH_VEL_RANGE,
+        push_interval_s: tuple[float, float] = PUSH_INTERVAL_S,
     ):
         super().__init__()
         scene = Path(scene_xml) if scene_xml else C.SCENE_WALK_XML
@@ -247,6 +339,13 @@ class MicroduckWalkEnv(gym.Env):
         self.model = (model if model is not None
                       else mujoco.MjModel.from_xml_path(str(scene)))
         self.model.opt.timestep = C.PHYSICS_DT
+        # Upstream's integrator / solver budget (see UPSTREAM_* above for the
+        # measurement). NOTE: scripts/infer_policy.py, the deployment
+        # rehearsal, runs the XML default (Euler / 100 / 50) — a deliberate
+        # difference: identical to the bit under xml, ULP-level under bam.
+        self.model.opt.integrator = UPSTREAM_INTEGRATOR
+        self.model.opt.iterations = UPSTREAM_SOLVER_ITERATIONS
+        self.model.opt.ls_iterations = UPSTREAM_LS_ITERATIONS
         self.data = mujoco.MjData(self.model)
 
         self.max_steps = int(round(max_episode_s / C.CTRL_DT))
@@ -257,11 +356,6 @@ class MicroduckWalkEnv(gym.Env):
         # Lifetime-ramped reward terms count on this. Seeded from
         # MICRODUCK_RAMP_OFFSET (exported by train_behavior BEFORE the vec-env
         # workers fork) so a warm RESTART resumes ramps at strength: without
-        # The head-pose command range the policy trains under. The contract's
-        # keep-alive range (+-0.05 rad) is why a walker trained here has never
-        # seen a head-down command; pass the gaze poses to train one that has
-        # (roadmap 4c revisit, 2026-09-07: `train-walk --head-range`).
-        head_cmd_ranges: tuple | None = None,
         # it, every lab helper add/remove reset ramped penalties to their
         # gentle stage-0 value and then slammed them back at full strength a
         # few hundred k steps later — whiplash that collapsed a run from
@@ -275,6 +369,15 @@ class MicroduckWalkEnv(gym.Env):
         self.domain_rand = domain_rand
         self.action_delay = action_delay
         self.random_yaw = random_yaw
+        self.head_cmd_ranges = (tuple(tuple(map(float, r)) for r in head_cmd_ranges)
+                                if head_cmd_ranges else C.HEAD_CMD_RANGES)
+        self.mass_scale_range = tuple(mass_scale_range)
+        self.armature_scale_range = tuple(armature_scale_range)
+        self.trunk_com_offset_m = trunk_com_offset_m
+        self.head_com_offset_m = head_com_offset_m
+        self.push_robot = bool(domain_rand if push_robot is None else push_robot)
+        self.push_vel_range = tuple(push_vel_range)
+        self.push_interval_s = tuple(push_interval_s)
 
         # Model lookups — resolved by name so joint reordering can't bite.
         self.trunk_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "trunk_base")
@@ -338,11 +441,22 @@ class MicroduckWalkEnv(gym.Env):
         # not accumulate across resets — AGENTS.md). Under a SHARED model these
         # are also the only pristine copy left once a sibling has randomized,
         # which is why every env keeps its own and _sync_model replays it.
-        self._default_body_mass, self._default_geom_friction = (
-            arr.copy() for arr in pristine_baselines(self.model)
-        )
-        self._dr_body_mass = self._default_body_mass.copy()
-        self._dr_geom_friction = self._default_geom_friction.copy()
+        # `_dr_fields` holds THIS env's draw (plus the mj_setConst outputs it
+        # implies) for every field in DR_MODEL_FIELDS + SETCONST_FIELDS.
+        self._defaults = {k: v.copy()
+                          for k, v in pristine_baselines(self.model).items()}
+        self._dr_fields = {k: v.copy() for k, v in self._defaults.items()}
+        # Named views kept for the tests and tools that read them.
+        self._default_body_mass = self._defaults["body_mass"]
+        self._default_geom_friction = self._defaults["geom_friction"]
+        self._dr_body_mass = self._dr_fields["body_mass"]
+        self._dr_geom_friction = self._dr_fields["geom_friction"]
+        # CoM-offset targets: the trunk, and upstream's head-assembly list
+        # (bodies the local model lacks are skipped by name).
+        self._head_com_body_ids = np.array([
+            bid for bid in (
+                mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, n)
+                for n in HEAD_COM_BODIES) if bid >= 0], dtype=int)
 
         # Nominal standing trunk height, measured off the model itself (never
         # hand-carried across model revisions — AGENTS.md).
@@ -369,15 +483,6 @@ class MicroduckWalkEnv(gym.Env):
                     "substep). Use the fork-based vec env, or drop "
                     "shared_model_scope(exclusive=False)."
                 )
-        self.head_cmd_ranges = (tuple(tuple(map(float, r)) for r in head_cmd_ranges)
-                                if head_cmd_ranges else C.HEAD_CMD_RANGES)
-        self.mass_scale_range = tuple(mass_scale_range)
-        self.armature_scale_range = tuple(armature_scale_range)
-        self.trunk_com_offset_m = trunk_com_offset_m
-        self.head_com_offset_m = head_com_offset_m
-        self.push_robot = bool(domain_rand if push_robot is None else push_robot)
-        self.push_vel_range = tuple(push_vel_range)
-        self.push_interval_s = tuple(push_interval_s)
             # Own RNG stream so the xml path's draws stay byte-for-byte as they
             # were. The env-level 0/1-ctrl-step action lag is switched OFF under
             # BAM: the actuator models the real 3-6 physics-step bus lag itself,
@@ -393,6 +498,16 @@ class MicroduckWalkEnv(gym.Env):
                 ),
                 current_scale=bam_current_scale,
             )
+            # BAM retuned dof_armature to its own identified value and ran
+            # mj_setConst; that, not the MJCF's number, is what DR restores
+            # to. A BAM env never shares a model in-process (raised above),
+            # so the model right now IS this env's pristine baseline.
+            self._defaults = _snapshot_fields(self.model)
+            self._dr_fields = {k: v.copy() for k, v in self._defaults.items()}
+            self._default_body_mass = self._defaults["body_mass"]
+            self._default_geom_friction = self._defaults["geom_friction"]
+            self._dr_body_mass = self._dr_fields["body_mass"]
+            self._dr_geom_friction = self._dr_fields["geom_friction"]
 
         self._reset_episode_state()
 
@@ -411,6 +526,11 @@ class MicroduckWalkEnv(gym.Env):
         self._action_lag = 0
         self._delayed_action = np.zeros(C.NUM_JOINTS, dtype=np.float32)
         self.reward_sums: dict[str, float] = {}
+        # Velocity pushes: control steps until the next one (None = off),
+        # plus a readout of what landed, for tests and the viewer.
+        self._push_countdown: int | None = None
+        self.push_count = 0
+        self.last_push = np.zeros(2)
 
     def _sample_commands(self) -> None:
         r = self._rng
@@ -440,11 +560,23 @@ class MicroduckWalkEnv(gym.Env):
         # The draw lands in this env's OWN arrays first: with a shared mjModel
         # the model is not a safe place to keep it, because a sibling env's
         # reset would retune this env's physics mid-episode.
-        self._dr_body_mass[:] = self._default_body_mass
-        self._dr_geom_friction[:] = self._default_geom_friction
+        for name, base in self._defaults.items():
+            self._dr_fields[name][:] = base
         if self.domain_rand:
             r = self._rng
-            self._dr_body_mass[self.trunk_body_id] *= r.uniform(0.9, 1.1)
+            f = self._dr_fields
+            trunk = self.trunk_body_id
+            # Trunk mass + inertia together (upstream dr.pseudo_inertia with
+            # alpha_range = (ln lo / 2, ln hi / 2): both scale by e^(2 alpha),
+            # CoM untouched). Mass-only scaling was a different robot from
+            # the one the solver thinks it has — a denser trunk, not a
+            # heavier one. Upstream draws this once per env at startup; per
+            # reset here is the same distribution with more coverage.
+            lo, hi = self.mass_scale_range
+            scale = float(np.exp(2.0 * r.uniform(np.log(lo) / 2.0,
+                                                 np.log(hi) / 2.0)))
+            f["body_mass"][trunk] *= scale
+            f["body_inertia"][trunk] *= scale
             # Friction DR goes on the FEET, not the floor. MuJoCo mixes a
             # contact pair's friction by element-wise MAX unless one geom sets
             # geom_priority, and neither our floor nor our feet did — so
@@ -455,7 +587,32 @@ class MicroduckWalkEnv(gym.Env):
             # (0.7, 1.3) with priority=1, which is what actually varies grip.
             mu = r.uniform(0.7, 1.3)
             for gid in self.foot_geoms.values():
-                self._dr_geom_friction[gid, 0] = mu
+                f["geom_friction"][gid, 0] = mu
+            # CoM offsets (dr.body_ipos, operation="add"): the trunk, and the
+            # head assembly per body. Range follows upstream's curriculum
+            # over lifetime steps unless pinned by the knob.
+            rt = (self.trunk_com_offset_m if self.trunk_com_offset_m is not None
+                  else _staged(TRUNK_COM_STAGES, self._lifetime_steps))
+            f["body_ipos"][trunk] += r.uniform(-rt, rt, 3)
+            rh = (self.head_com_offset_m if self.head_com_offset_m is not None
+                  else _staged(HEAD_COM_STAGES, self._lifetime_steps))
+            ids = self._head_com_body_ids
+            f["body_ipos"][ids] += r.uniform(-rh, rh, (len(ids), 3))
+            # Reflected rotor inertia (dr.joint_armature, scale, per joint).
+            # Under BAM the baseline is BAM's own armature (see __init__).
+            lo, hi = self.armature_scale_range
+            f["dof_armature"][self.joint_qvel_adr] *= r.uniform(
+                lo, hi, C.NUM_JOINTS)
+            # Land the draw, then let MuJoCo recompute what depends on it
+            # (body_subtreemass, the invweight0 impedance scalings, dof_M0
+            # ...). mj_setConst poses `data` at qpos0 as scratch; reset()
+            # re-poses right after. The recomputed constants join this env's
+            # draw so a shared model can be re-pointed at them per step.
+            self._sync_model()
+            mujoco.mj_setConst(self.model, self.data)
+            for name in SETCONST_FIELDS:
+                if name in f:
+                    f[name][:] = getattr(self.model, name)
         self._sync_model()
 
     @property
@@ -471,8 +628,52 @@ class MicroduckWalkEnv(gym.Env):
 
     def _sync_model(self) -> None:
         """Point the (possibly shared) model at THIS env's randomization."""
-        self.model.body_mass[:] = self._dr_body_mass
-        self.model.geom_friction[:] = self._dr_geom_friction
+        model = self.model
+        for name, value in self._dr_fields.items():
+            getattr(model, name)[:] = value
+
+    # -------------------------------------------------------- perturbations
+
+    def _draw_push_steps(self) -> int:
+        lo, hi = self.push_interval_s
+        return max(1, int(round(self._rng.uniform(lo, hi) / C.CTRL_DT)))
+
+    def _push(self) -> None:
+        """Upstream push_by_setting_velocity: add U(range) to the base's
+        world-frame xy velocity (free-joint qvel[0:2] IS world linear
+        velocity). Applied after the physics substeps and before the
+        observation, where mjlab's interval events fire."""
+        lo, hi = self.push_vel_range
+        dv = self._rng.uniform(lo, hi, 2)
+        self.data.qvel[0:2] += dv
+        self.last_push[:] = dv
+        self.push_count += 1
+        self._push_countdown = self._draw_push_steps()
+
+    def _refresh_derived(self) -> None:
+        """Bring the position/velocity-dependent readouts up to the state
+        the substep loop actually left.
+
+        `mj_step` integrates AFTER it computed kinematics, cvel and sensors,
+        so once the loop ends `xpos`/`xquat`/`sensordata` describe the state
+        one substep (5 ms) BEFORE `qpos`/`qvel` — the joint blocks of the
+        obs were fresh and the IMU blocks were not (measured on the shipped
+        walker: gyro up to 0.77 rad/s off against a ±0.03 noise band,
+        projected gravity 0.0098 against ±0.01). Measured in situ, this is
+        the cheapest call set that makes gyro, projected gravity and trunk
+        height equal a full `mj_forward` to the bit: 3.5 us against 12.8 for
+        `mj_step1` and 18.8 for `mj_forward` (the whole step is ~95 us).
+        It deliberately touches nothing the actuator reads: `mj_step1` would
+        rebuild the constraint rows without solving them, handing the BAM
+        friction-budget scan `efc_force` values from a different row layout.
+        The contact list (`_foot_contacts`) keeps its substep-old snapshot,
+        exactly as before.
+        """
+        m, d = self.model, self.data
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_comPos(m, d)
+        mujoco.mj_comVel(m, d)
+        mujoco.mj_sensorVel(m, d)
 
     # ------------------------------------------------------------ gym API
 
@@ -504,6 +705,9 @@ class MicroduckWalkEnv(gym.Env):
             int(self._rng.integers(0, 2))
             if (self.action_delay and self.bam is None) else 0
         )
+        # mjlab samples an interval term's first firing at reset, then again
+        # after each firing.
+        self._push_countdown = self._draw_push_steps() if self.push_robot else None
         self.prev_joint_vel = self._joint_vel().copy()
         return self._get_obs(), {}
 
@@ -546,6 +750,17 @@ class MicroduckWalkEnv(gym.Env):
             for _ in range(C.DECIMATION):
                 self.bam.before_step()
                 mujoco.mj_step(self.model, self.data)
+
+        if self._push_countdown is not None:
+            self._push_countdown -= 1
+            if self._push_countdown <= 0:
+                self._push()
+        # Obs, rewards and the fall check below all read xquat / sensordata
+        # / xpos: make them describe the integrated state (see the method).
+        # Before `after_step`, which publishes the BAM torque into
+        # actuator_force — a readout no forward call here recomputes.
+        self._refresh_derived()
+        if self.bam is not None:
             self.bam.after_step()
 
         self.step_count += 1

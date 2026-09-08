@@ -9,6 +9,13 @@ failing on numbers it never produced. Record on the platform in question:
 
     MICRODUCK_RECORD_GOLDENS=1 uv run --with pytest pytest tests/test_step_perf_parity.py tests/test_bam_perf_parity.py
 
+2026-09-06: the physics-audit fixes (fresh IMU obs after the substep loop,
+implicitfast / 10 / 20, mass+inertia / CoM / armature DR and velocity
+pushes — walk_env.py) moved every obs byte and every DR draw, so the
+recordings in tests/goldens/ predate the trajectory they now pin and the
+Linux x86_64 files must be re-recorded on a Linux box with the command
+above (they skip on a Mac). Until then CI's Linux runner fails on them.
+
 The file records the upstream model sha and the library versions it was
 made against; a mismatch on either is reported first, because a golden
 that moved with a model re-export (2026-09: the CAD re-export moved every

@@ -119,10 +119,15 @@ def scene_walk_ball_xml() -> Path:
             link.unlink()
         elif link.exists():
             link.unlink()
-        link.symlink_to(target)
+        try:
+            link.symlink_to(target)
+        except FileExistsError:                       # a sibling vec-env worker got there first
+            pass
     xml = src.read_text().replace("</mujoco>", '    <include file="ball.xml"/>\n</mujoco>')
     xml = re.sub(r'qpos="([^"]+)"', lambda m: f'qpos="{" ".join(m.group(1).split())} 0.3 0 0.035 1 0 0 0"', xml)
     p = out / "scene_walk_ball.xml"
     if not p.exists() or p.read_text() != xml:
-        p.write_text(xml)
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")        # atomic: a worker never reads a half-written scene
+        tmp.write_text(xml)
+        os.replace(tmp, p)
     return p

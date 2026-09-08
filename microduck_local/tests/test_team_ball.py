@@ -46,6 +46,7 @@ def test_the_roster_sets_the_boards_fusion_from_the_brains_knob(monkeypatch):
     sc = make_pitch(per_side=2)
     w = World(sc, seed=1)
     assert ChaseParams().fuse_ball is False                       # ships off until the ledger is read
+    monkeypatch.delenv("MICRODUCK_CHASE", raising=False)          # the default, whatever the shell says
     teams = {}
     for d in sc.ducks:
         brain_kwargs(d, w, teams)

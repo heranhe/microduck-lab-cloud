@@ -16,8 +16,20 @@ does; this file covers how not to fool yourself.
   run if any episode's penalty sum goes positive (a double-negation bug
   shipped once; the guard stays).
 - **Domain randomization restores compile-time defaults before applying.**
-  It must never accumulate across resets. `tests/test_env_contract.py` locks
-  this.
+  It must never accumulate across resets. `tests/test_env_contract.py` and
+  `tests/test_walk_env_physics.py` lock this — for every field in
+  `walk_env.DR_MODEL_FIELDS` (mass, inertia, CoM, armature, friction) and
+  the `mj_setConst` outputs that depend on them. A new randomized quantity
+  joins those tuples, gets a knob with the upstream range as its default,
+  and gets a test that shows it LANDS in the model.
+- **The IMU blocks of the obs are refreshed after the substep loop**
+  (`_refresh_derived`). Without it gyro / gravity / trunk height describe
+  the state one substep before the joint blocks. Don't remove it, and don't
+  "upgrade" it to `mj_step1`: that rebuilds the constraint rows the BAM
+  friction scan reads without solving them.
+- **Velocity pushes are part of the walk env's DR and OFF in every
+  behavior recipe** (`BehaviorEnv` defaults `push_robot=False`). Turning
+  them on for a trick is an experiment to name and measure, not a fix.
 - **ONNX ships with the obs normalizer baked in** (`export-walk`). A raw
   checkpoint is not a deliverable.
 - **`joint_vel` lags one control step** (Dynamixel moving-average), matching
@@ -333,6 +345,12 @@ redundant — a module that parses can still fail on a bad relative import.
    and the three classic failure patterns: the collapsed "stand", the
    spawn-assisted "trick", the cycling "hold"). Reward batteries here have
    scored a face-down crouch as standing.
+   For WORLD mode (a room, the playroom, a pitch) the same eye is
+   `uv run record-world <scenario>`: the lab's own `WorldState` run headless
+   under a seed, to `world.mp4` + `sheet.png` + `events.txt` (every brain
+   transition, fall, pick, release and goal, with sim time). Read the log
+   and the sheet before saying what a duck did on the `/sim` page
+   (`.claude/skills/record-world/SKILL.md`).
 3. **Render a null control** (`--policy limp` / `--policy zero`) before
    crediting the policy with anything a spawn pose or gravity could have done.
 4. **Throughput is not learning speed.** Two "optimizations" (overlapped
@@ -480,7 +498,9 @@ number). Rules that follow, on any shared or virtualized machine:
 ## Sim2real honesty
 
 This harness is for prototyping with minutes-long feedback loops. Even under
-`actuator="bam"` it is a subset of the official domain-randomization stack.
+`actuator="bam"` — `train-walk`'s default since the 2026-09-06 audit — it is
+a subset of the official domain-randomization stack (no IMU misalignment,
+encoder bias or IMU delay; see README "Physics parity").
 Once a behavior works here, port the env design to an mjlab cfg in upstream
 `microduck_rl` and retrain on GPU — that stack, not this one, is the recipe
 for policies that survive real hardware.

@@ -284,7 +284,7 @@ def test_pitch_counts_goals_and_recentres_the_ball():
     assert validate_scenario(sc.to_dict()) == sc and sc.goal_width == 0.7
     w = World(sc)
     assert w.soccer_score() == {"left": 0, "right": 0, "ball": [0.0, 0.0], "lastGoal": None, "kickoff": 0.0, "kicked": 0, "bumped": 0,
-                                "state": "playing", "kickoffTeam": None}
+                                "state": "playing", "kickoffTeam": None, "ballOuts": 0}
     j = w._ball_joint
     q = int(w.model.jnt_qposadr[j])
     hx = sc.floor[0] / 2 - 0.25
@@ -461,8 +461,8 @@ def test_the_world_senses_a_bump_between_two_ducks_and_the_tof_places_hits_by_th
         w.step()
     assert not w.bumped(d0) and not w.bumped(d1)
     assert tof_clearance_3d(d0.tof.last).min() > 0.8                  # the boards, not the floor under the dipped head
-    # Put d1 right against d0: only the FEET collide in the walk scene, so the
-    # trunks sit 5 cm apart (feet touching is what a duck-duck fall is).
+    # Put d1 right against d0, 5 cm ahead: the bodies overlap (every body of a
+    # duck collides under "all"), and a touch in any substep is a bump.
     q0 = d1.adr.root_qpos
     p0 = d0.trunk_pos(w.data)
     w.data.qpos[q0:q0 + 2] = [p0[0] + 0.05, p0[1]]
@@ -601,3 +601,209 @@ def test_a_scene_can_name_a_learned_brain():
         base["ducks"][0]["brain"] = bad
         with pytest.raises(ScenarioError):
             validate_scenario(base)
+
+
+def test_a_nudged_ball_rolls_to_a_stop_and_a_kicked_one_crosses_the_pitch():
+    """The ball has rolling resistance (`Ball.rolling`, applied through a
+    condim-6 contact). Before 2026-09-06 the geom's condim of 3 silently
+    dropped the coefficient and a ball barely touched by a duck rolled
+    until a wall stopped it. Open floor, no walls: a 0.2 m/s nudge stops
+    inside half a metre, a 1.4 m/s kick still travels over two."""
+    def rollout(rolling, v0, seconds=20.0):
+        sc = Scenario(name="open", floor=(40.0, 40.0), walls=[], ducks=[],
+                      balls=[Ball((0.0, 0.0), rolling=rolling)])
+        model = compose(sc)
+        data = mujoco.MjData(model)
+        j = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "ball0_free")
+        q, v = int(model.jnt_qposadr[j]), int(model.jnt_dofadr[j])
+        r = sc.balls[0].radius
+        data.qpos[q:q + 7] = [0, 0, r, 1, 0, 0, 0]
+        for _ in range(100):
+            mujoco.mj_step(model, data)
+        data.qvel[v:v + 6] = [v0, 0, 0, 0, v0 / r, 0]           # a pure roll
+        x0 = float(data.qpos[q])
+        for _ in range(int(seconds / model.opt.timestep)):
+            mujoco.mj_step(model, data)
+        return float(data.qpos[q] - x0), float(data.qvel[v])
+
+    g = mujoco.mj_name2id(compose(Scenario(name="b", floor=(4, 4), ducks=[], balls=[Ball((0, 0))])),
+                          mujoco.mjtObj.mjOBJ_GEOM, "ball0_geom")
+    assert g >= 0
+    dist, speed = rollout(Ball((0, 0)).rolling, 0.2)
+    assert 0.1 < dist < 0.5 and speed < 0.01, (dist, speed)
+    dist, speed = rollout(Ball((0, 0)).rolling, 1.4)
+    assert 2.0 < dist < 6.0 and speed < 0.05, (dist, speed)
+    # The regression: with no rolling resistance a nudge never stops.
+    dist, speed = rollout(0.0, 0.2)
+    assert dist > 3.0 and speed > 0.19, (dist, speed)
+
+
+# -- the physics audit of 2026-09-06 (world layer) -----------------------------
+
+def test_scenarios_default_to_the_all_collision_robot():
+    """Every builtin and every JSON without `collision` gets a duck that is a
+    BODY (`Scenario.collision` "all"); "walk" - upstream's flat-floor
+    training variant, two 13 mm soles - stays available by name."""
+    from microduck_local.world import make_pitch, make_playroom
+    assert Scenario(name="x").collision == "all"
+    assert validate_scenario({"name": "x"}).collision == Scenario.collision
+    assert validate_scenario({"name": "x", "collision": "walk"}).collision == "walk"
+    for sc in (make_room(seed=1), make_playroom(seed=0), make_pitch()):
+        assert sc.collision == "all", sc.name
+
+
+def test_a_ball_at_trunk_height_bounces_off_a_duck_not_through_it():
+    """A ball thrown at trunk height from 15 cm in front of a standing duck
+    comes back off the jaw, neck and trunk (measured vx -0.31 m/s); on the
+    "walk" robot it passed through the trunk touching nothing and rolled
+    on past the duck (max x 1.3 m against the duck's 0.6)."""
+    from microduck_local.world import World
+
+    def throw(collision):
+        sc = Scenario(name="b", floor=(6, 6), ducks=[Duck("d0", (0.6, 0.0, math.pi), None, None, None)],
+                      balls=[Ball((0.0, 0.0))], collision=collision)
+        w = World(sc)
+        m, d = w.model, w.data
+        j = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "ball0_free")
+        q, v = int(m.jnt_qposadr[j]), int(m.jnt_dofadr[j])
+        bg = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "ball0_geom")
+        d.qpos[q:q + 7] = [0.45, 0.0, 0.16, 1, 0, 0, 0]
+        d.qvel[v:v + 6] = [1.5, 0, 0, 0, 0, 0]
+        mujoco.mj_forward(m, d)
+        hit, xmax, vmin = set(), 0.0, 9.0
+        for _ in range(50):
+            w.step()
+            for c in range(d.ncon):
+                g1, g2 = d.contact.geom1[c], d.contact.geom2[c]
+                if bg in (g1, g2):
+                    other = m.body(m.geom_bodyid[g2 if g1 == bg else g1]).name
+                    if other.startswith("d0/"):
+                        hit.add(other)
+            xmax = max(xmax, float(d.qpos[q]))
+            vmin = min(vmin, float(d.qvel[v]))
+        return hit, xmax, vmin
+
+    hit, xmax, vmin = throw("all")
+    assert "d0/trunk_base" in hit and xmax < 0.6 and vmin < -0.1, (hit, xmax, vmin)
+    hit, xmax, vmin = throw("walk")
+    assert not hit and xmax > 1.0, (hit, xmax)
+
+
+def test_two_walkers_head_on_stop_beak_to_beak():
+    """Two shipped walkers driven at each other meet beak to beak and stop
+    with their trunks 11 cm apart (measured), both up and both `bumped`;
+    as two pairs of soles they overlapped to 3-7 cm trunk to trunk, one
+    tripping over the other's feet."""
+    from microduck_local.brain.brain_env import onnx_infer
+    from microduck_local.world import World
+    sc = Scenario(name="dd", floor=(6, 6), ducks=[Duck("d0", (-0.4, 0.0, 0.0), None, None, None),
+                                                   Duck("d1", (0.4, 0.03, math.pi), None, None, None)])
+    w = World(sc, infer_for={d.id: onnx_infer(POLICIES_DIR / "alpha_walking.onnx") for d in sc.ducks}, seed=0)
+    d0, d1 = w.ducks["d0"], w.ducks["d1"]
+    for d in (d0, d1):
+        d.set_cmd(w.data, (0.25, 0.0, 0.0))
+    gap, bumped = 9.0, 0
+    for _ in range(int(5.0 / C.CTRL_DT)):
+        w.step()
+        gap = min(gap, float(np.linalg.norm((d0.trunk_pos(w.data) - d1.trunk_pos(w.data))[:2])))
+        bumped += w.bumped(d0) and w.bumped(d1)
+    assert gap >= 0.08 and bumped > 0 and d0.falls == 0 and d1.falls == 0, (gap, bumped, d0.falls, d1.falls)
+
+
+def test_a_wall_stops_a_walker_at_the_beak_not_the_feet():
+    """Driven at a board 0.35 m ahead the beak stops at the board's face
+    (measured 0.2 cm short) and the duck stays up; on the soles alone the
+    beak was 8.7 cm inside the board before a foot reached it, and it fell."""
+    from microduck_local.brain.brain_env import onnx_infer
+    from microduck_local.world import World
+    sc = Scenario(name="w", floor=(6, 6), walls=[Wall((0.35, -1.5), (0.35, 1.5), height=0.3)],
+                  ducks=[Duck("d0", (0.0, 0.0, 0.0), None, None, None)])
+    w = World(sc, infer_for={"d0": onnx_infer(POLICIES_DIR / "alpha_walking.onnx")}, seed=0)
+    d = w.ducks["d0"]
+    d.set_cmd(w.data, (0.3, 0.0, 0.0))
+    mouth = mujoco.mj_name2id(w.model, mujoco.mjtObj.mjOBJ_SITE, "d0/mouth_tip")
+    tip = -9.0
+    for _ in range(int(4.0 / C.CTRL_DT)):
+        w.step()
+        tip = max(tip, float(w.data.site_xpos[mouth][0]))
+    face = 0.35 - sc.walls[0].thickness / 2
+    assert face - 0.03 < tip < face + 0.01 and d.falls == 0, (tip, face, d.falls)
+
+
+def test_a_person_is_polite_by_default_and_a_rude_one_cannot_fling_a_duck():
+    """`Person.yield_m` is on by default: a capsule walking through a standing
+    duck's spot never touches it (surface gap 34 cm, at 0.3 and at 1.5 m/s).
+    A mocap body has infinite mass, so with yield 0 a person at the default
+    speed pushes the duck over broadside - one honest fall at 0.27 m/s, not
+    the 5 m/s "fling" the audit measured: that was the fallen duck
+    RESPAWNING inside the capsule, and a respawn now steps clear of a person
+    (`World._clear_of_persons`)."""
+    from microduck_local.brain.brain_env import onnx_infer
+    from microduck_local.world import World
+    assert Person("p", (0.0, 0.0)).yield_m > 0
+    assert validate_scenario({"name": "a", "persons": [{"pos": [1, 0]}]}).persons[0].yield_m == Person.yield_m
+
+    def run(yield_m, seconds=6.0):
+        sc = Scenario(name="p", floor=(6, 6), ducks=[Duck("d0", (0.0, 0.0, math.pi / 2), None, None, None)],
+                      persons=[Person("p0", (-0.8, 0.0), 0.0, path=[(2.0, 0.0)], yield_m=yield_m)])
+        w = World(sc, infer_for={"d0": onnx_infer(POLICIES_DIR / "alpha_walking.onnx")}, seed=0)
+        d, m = w.ducks["d0"], w.model
+        pb = w.persons["p0"].body
+        touched, vmax = False, 0.0
+        for _ in range(int(seconds / C.CTRL_DT)):
+            w.step()
+            vmax = max(vmax, float(np.linalg.norm(w.data.qvel[d.adr.root_qvel:d.adr.root_qvel + 3])))
+            for c in range(w.data.ncon):
+                if pb in (m.geom_bodyid[w.data.contact.geom1[c]], m.geom_bodyid[w.data.contact.geom2[c]]):
+                    touched = True
+        return touched, vmax, d.falls
+
+    touched, vmax, falls = run(Person.yield_m)
+    assert not touched and falls == 0 and vmax < 0.5, (touched, vmax, falls)
+    touched, vmax, falls = run(0.0)
+    assert touched and vmax < 1.0 and falls <= 2, (touched, vmax, falls)
+
+
+def test_a_toy_slides_at_its_own_friction_not_the_floors():
+    """Toys are priority 1 (compose.py), so their 0.8 sliding friction is the
+    pair's: a 0.3 m/s nudge slides v^2 / 2 mu g = 0.57 cm at mu 0.8
+    (measured 0.51-0.57 by kind), not the 0.46 of the floor's 1.0 - which
+    is what every kind did before (0.41-0.42), the equal-priority pair
+    taking the element-wise max."""
+    from microduck_local.world.scenario import Pickable
+    mu_floor = 0.3 ** 2 / (2 * 1.0 * 9.81)
+    mu_toy = 0.3 ** 2 / (2 * 0.8 * 9.81)
+    for kind in ("brick", "block", "sock"):
+        m = compose(Scenario(name="t", floor=(10, 10), ducks=[], pickables=[Pickable("t0", kind, (0.0, 0.0))]))
+        d = mujoco.MjData(m)
+        g = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "t0_geom")
+        assert m.geom_priority[g] == 1 and m.geom_friction[g][0] == 0.8
+        j = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "t0_free")
+        q, v = int(m.jnt_qposadr[j]), int(m.jnt_dofadr[j])
+        for _ in range(200):
+            mujoco.mj_step(m, d)                                   # settle
+        d.qvel[v:v + 6] = [0.3, 0, 0, 0, 0, 0]
+        x0 = float(d.qpos[q])
+        for _ in range(200):
+            mujoco.mj_step(m, d)
+        slide = float(d.qpos[q] - x0)
+        assert mu_floor * 1.05 < slide <= mu_toy * 1.02, (kind, slide, mu_floor, mu_toy)
+
+
+def test_a_beak_and_a_toy_are_a_contact_excluded_pair():
+    """The beak is a gripper: the soft mouth closes AROUND a block, which a
+    rigid convex hull cannot - under "all" the jaw's hull sat on top of a
+    4 cm block, held the tip 2 cm above it and the toy-behind-the-basket
+    pick fell from 8/8 seeds to 3/8. `compose` excludes each (duck jaw, toy)
+    pair, next to the weld it already makes for it; the jaw still meets
+    everything else."""
+    from microduck_local.world.scenario import Pickable
+    sc = Scenario(name="x", ducks=[Duck("d0", (0, 0, 0)), Duck("d1", (1, 0, 0))],
+                  pickables=[Pickable("t0", "block", (0.3, 0.0)), Pickable("t1", "sock", (0.3, 0.3))])
+    m = compose(sc)
+    pairs = {frozenset((m.body(int(sig) >> 16).name, m.body(int(sig) & 0xFFFF).name)) for sig in m.exclude_signature}
+    for d in sc.ducks:
+        for t in sc.pickables:
+            assert frozenset((f"{d.id}/jaw_soft", t.id)) in pairs
+    assert m.neq == 4 and m.nexclude == 4 + 2                    # + upstream's neck/jaw phantom-contact exclude per duck
+    assert not any(frozenset(("d0/trunk_base", "t0")) == p for p in pairs)

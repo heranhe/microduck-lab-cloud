@@ -163,12 +163,14 @@ def test_heading_lin_vel_follows_yaw():
 
 
 def test_domain_rand_does_not_accumulate():
-    """AGENTS.md: DR must restore-then-apply — 100 resets can't drift the model."""
+    """AGENTS.md: DR must restore-then-apply — 100 resets can't drift the model.
+    (Upstream's pseudo_inertia range, ±5%, since the 2026-09-06 audit; the
+    per-field landing/restore checks live in test_walk_env_physics.py.)"""
     env = MicroduckWalkEnv(domain_rand=True, seed=0)
     nominal = env._default_body_mass[env.trunk_body_id]
     for i in range(100):
         env.reset(seed=i)
-        assert 0.89 * nominal <= env.model.body_mass[env.trunk_body_id] <= 1.11 * nominal
+        assert 0.949 * nominal <= env.model.body_mass[env.trunk_body_id] <= 1.051 * nominal
 
 
 def test_friction_randomization_actually_varies_grip():

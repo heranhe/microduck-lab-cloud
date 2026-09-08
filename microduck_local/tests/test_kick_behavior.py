@@ -6,6 +6,7 @@ can run a local export in place of the shipped skill."""
 
 
 import mujoco
+import pytest
 
 from microduck_local import contract as C
 from microduck_local.behaviors import BEHAVIORS
@@ -78,8 +79,8 @@ def test_the_arena_runs_a_local_export_in_place_of_a_shipped_skill(monkeypatch, 
     assert w.start_skill(d, "kick_right")
     assert d.skill == "kick_right"
     monkeypatch.setenv("MICRODUCK_SKILL_KICK_LEFT", str(tmp_path / "missing.onnx"))
-    w2 = World(sc, seed=1)
-    assert not w2.start_skill(w2.ducks[sc.ducks[0].id], "kick_left")     # a missing override is refused, not a crash
+    with pytest.raises(FileNotFoundError, match="MICRODUCK_SKILL_KICK_LEFT"):
+        World(sc, seed=1)                                   # a missing override is refused at BUILD, loudly (it used to disable the kick silently)
 
 
 def test_the_local_kicks_are_the_default_and_their_exits_reach_the_brain(monkeypatch):
@@ -112,3 +113,36 @@ def test_the_local_kicks_are_the_default_and_their_exits_reach_the_brain(monkeyp
     assert World.skill_path("kick_right").name == "ball_kick_right.onnx"
     assert World.kick_exits() is None                                               # no sidecar: the brain's defaults
     assert brain_kwargs(sc.ducks[0], w, {}).get("p", ChaseParams()).kick_exit_right == ChaseParams().kick_exit_right
+
+
+def test_naming_one_exit_on_the_command_line_keeps_the_other_from_its_sidecar(monkeypatch):
+    """Until 2026-09-08 a battery that named `kick_exit_left` silently ran the
+    shipped default for the RIGHT foot too, 28.7 deg off the local kick's
+    sidecar (code review)."""
+    from microduck_local.brain.controllers import ChaseParams
+    from microduck_local.brain.team import brain_kwargs
+    from microduck_local.world import World, make_pitch
+    exits = World.kick_exits()
+    assert exits is not None, "the local kicks and their sidecars are vendored"
+    monkeypatch.setenv("MICRODUCK_CHASE", "kick_exit_left=-0.3")
+    sc = make_pitch()
+    kw = brain_kwargs(sc.ducks[0], World(sc, seed=1), {})
+    p = kw.get("p") or ChaseParams.from_env()
+    assert p.kick_exit_left == -0.3 and p.kick_exit_right == exits[1]
+
+
+def test_a_sidecar_without_an_exit_yet_reads_as_no_exits_and_a_bad_override_raises(tmp_path, monkeypatch):
+    import json
+    import shutil
+
+    from microduck_local.world import World
+    src = World.skill_path("kick_left")
+    onnx = tmp_path / "kick_left.onnx"
+    shutil.copyfile(src, onnx)
+    onnx.with_suffix(".json").write_text(json.dumps({"exit_rad": None, "note": "not measured yet"}))
+    monkeypatch.setenv("MICRODUCK_SKILL_KICK_LEFT", str(onnx))
+    assert World.kick_exits() is None                            # null: the brain keeps its measured defaults, no crash
+    monkeypatch.setenv("MICRODUCK_SKILL_KICK_LEFT", str(tmp_path / "typo.onnx"))
+    from microduck_local.world import make_pitch
+    with pytest.raises(FileNotFoundError, match="MICRODUCK_SKILL_KICK_LEFT"):
+        World(make_pitch(), seed=1)                                # a typo here disabled the kick silently before

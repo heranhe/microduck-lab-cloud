@@ -71,7 +71,7 @@ def run(seed, seconds, per_side):
             goals.append({"t": round(w.t, 1), "mouth": mouth, "by": holder,
                           "ago": round(ago, 1), "own": bool(holder and attacks[holder] != mouth)})
             metrics.tick()
-            kickoff_brains(brains, teams)
+            kickoff_brains(brains, teams, w)          # with the world: the kickoff rule the benchmark plays under
         else:
             metrics.tick()
     back = [k for k in kicks if k["cos"] < 0]

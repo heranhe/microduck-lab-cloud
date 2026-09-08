@@ -1,6 +1,7 @@
 """Train the local walking policy with SB3 PPO across CPU cores.
 
     uv run train-walk --envs 16 --steps 3_000_000 --run-name first
+    uv run train-walk --actuator xml ...     # the cheap XML servo instead of BAM
 
 Same recipe shape as jenga-stacker's train_rl.py, scaled for locomotion:
 multi-process rollout parallelism (vec_env.py — the workers share ONE compiled
@@ -61,10 +62,22 @@ def make_env(rank: int, seed: int, **env_kwargs):
     return _init
 
 
-def main() -> None:
+# The actuator train-walk trains on when neither --actuator nor
+# MICRODUCK_ACTUATOR says otherwise. BAM is the physics the shipped policies
+# were optimized against (firmware current limit, real back-EMF, load-
+# dependent gearbox friction, bus lag); the XML servo is its small-signal
+# linearization and ~30% cheaper per step (README "Actuator model"). Until
+# 2026-09-06 this defaulted to xml by omission — the audit's item 8.
+DEFAULT_ACTUATOR = "bam"
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     # 32: the bench-envs knee — see train_behavior.py's --envs for the numbers.
     ap.add_argument("--envs", type=int, default=32)
+    ap.add_argument("--head-range", default=None, metavar="nlo,nhi,hlo,hhi,ylo,yhi,rlo,rhi",
+                    help="head-pose command ranges (neck, head, yaw, roll; rad) the walker trains under; "
+                         "default: the contract's keep-alive +-0.05. The gaze poses: -0.75,0.05,-0.05,0.8,-1.4,1.4,-0.015,0.015")
     ap.add_argument("--steps", type=int, default=3_000_000)
     ap.add_argument("--run-name", default=time.strftime("walk-%Y%m%d-%H%M%S"))
     ap.add_argument("--device", default="cpu", choices=("cpu", "mps"))
@@ -73,32 +86,19 @@ def main() -> None:
                     help="warm-start from an existing run dir (fine-tune)")
     ap.add_argument("--no-domain-rand", action="store_true")
     ap.add_argument("--no-obs-noise", action="store_true")
-    args = ap.parse_args()
+    ap.add_argument("--actuator", default=None, choices=("xml", "bam"),
+                    help=f"servo model (default {DEFAULT_ACTUATOR}; "
+                         "MICRODUCK_ACTUATOR overrides the default, an "
+                         "explicit flag overrides both)")
+    return ap.parse_args(argv)
 
-    ap.add_argument("--head-range", default=None, metavar="nlo,nhi,hlo,hhi,ylo,yhi,rlo,rhi",
-                    help="head-pose command ranges (neck, head, yaw, roll; rad) the walker trains under; "
-                         "default: the contract's keep-alive +-0.05. The gaze poses: -0.75,0.05,-0.05,0.8,-1.4,1.4,-0.015,0.015")
-    out = RUNS_DIR / args.run_name
-    out.mkdir(parents=True, exist_ok=True)
-    env_kwargs = dict(
+
+def env_kwargs_from_args(args: argparse.Namespace) -> dict:
+    """The MicroduckWalkEnv kwargs a train-walk invocation trains under."""
+    kw = dict(
         domain_rand=not args.no_domain_rand,
         obs_noise=not args.no_obs_noise,
     )
-    # Fork workers BEFORE importing torch. A torch-initialized parent has
-    # OpenMP/Accelerate thread pools; forking them deadlocks on macOS.
-    # One compiled mjModel for the whole fleet: see vec_env.py.
-    print(profile().describe())
-    venv = make_vec_env([make_env(i, args.seed, **env_kwargs)
-                         for i in range(args.envs)])
-
-    import torch
-    from stable_baselines3 import PPO
-    from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
-    from stable_baselines3.common.vec_env.vec_monitor import VecMonitor
-    from stable_baselines3.common.vec_env.vec_normalize import VecNormalize
-
-    configure_torch_cpu(torch)
-    venv = VecMonitor(as_sb3_vec_env(venv))
     if getattr(args, "head_range", None):
         v = [float(x) for x in args.head_range.split(",")]
         assert len(v) == 8, "--head-range needs 8 numbers"
@@ -118,6 +118,21 @@ def main() -> None:
     out = RUNS_DIR / args.run_name
     out.mkdir(parents=True, exist_ok=True)
     env_kwargs = env_kwargs_from_args(args)
+    # Fork workers BEFORE importing torch. A torch-initialized parent has
+    # OpenMP/Accelerate thread pools; forking them deadlocks on macOS.
+    # One compiled mjModel for the whole fleet: see vec_env.py.
+    print(profile().describe())
+    venv = make_vec_env([make_env(i, args.seed, **env_kwargs)
+                         for i in range(args.envs)])
+
+    import torch
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+    from stable_baselines3.common.vec_env.vec_monitor import VecMonitor
+    from stable_baselines3.common.vec_env.vec_normalize import VecNormalize
+
+    configure_torch_cpu(torch)
+    venv = VecMonitor(as_sb3_vec_env(venv))
     batch = ppo_batch_size(N_STEPS, args.envs)
 
     from .symmetry import FastActorCriticPolicy

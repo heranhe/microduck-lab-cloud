@@ -81,8 +81,10 @@ class Field:
     def __init__(self, bounds: tuple[float, float], margin: float, params: FieldParams | None = None):
         self.p = params or FieldParams()
         hx, hy = max(bounds[0] - margin, 0.0), max(bounds[1] - margin, 0.0)
-        xs = np.arange(-hx, hx + 1e-9, self.p.grid)
-        ys = np.arange(-hy, hy + 1e-9, self.p.grid)
+        # linspace, not arange: arange dropped the +y row whenever 2*hy was not
+        # a multiple of the step, so a 2v2 supporter stood 5 cm nearer one board.
+        xs = np.linspace(-hx, hx, int(round(2 * hx / self.p.grid)) + 1)
+        ys = np.linspace(-hy, hy, int(round(2 * hy / self.p.grid)) + 1)
         gx, gy = np.meshgrid(xs, ys, indexing="ij")
         self.x, self.y = gx.ravel(), gy.ravel()
         self._pot: dict[float, np.ndarray] = {}

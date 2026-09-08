@@ -37,3 +37,18 @@ def test_a_file_written_under_other_settings_is_refused_not_silently_mixed(tmp_p
         with pytest.raises(SystemExit, match="Write a different variant"):
             load_done(str(f), tag, per_side, seconds)
     assert set(load_done(str(f), "poacher", 3, 300.0)) == {0}       # the matching one still loads
+
+
+def test_the_world_knobs_a_row_was_measured_under_are_part_of_the_resume_key(tmp_path):
+    """--ball-out-s / --getup-s did not appear in the row, so a rerun with the
+    rule on over a file measured with it off said "already measured" and
+    averaged the old rows in (code review, 2026-09-08). A row written before
+    a knob existed was measured at its default and reads as such."""
+    f = tmp_path / "rows.jsonl"
+    f.write_text("\n".join([json.dumps(_row(0, "x", ballOutS=0.0, getupS=0.0)),
+                            json.dumps(_row(1, "x"))]) + "\n")            # an older row: no knob keys at all
+    base = {"ballOutS": 0.0, "getupS": 0.0}
+    assert set(load_done(str(f), "x", 3, 300.0, base)) == {0, 1}
+    for changed in ({"ballOutS": 5.0}, {"getupS": 2.0}):
+        with pytest.raises(SystemExit, match="different"):
+            load_done(str(f), "x", 3, 300.0, {**base, **changed})

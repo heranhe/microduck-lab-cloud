@@ -246,14 +246,16 @@ class WorldState:
             self.events.append(f"{policy_id}: {type(e).__name__} — duck will stand")
             return None
 
-    def build(self, scenario: Scenario) -> World:
-        """Blocking: compose + policies. Call from a thread."""
+    def build(self, scenario: Scenario, seed: int | None = None) -> World:
+        """Blocking: compose + policies. Call from a thread. `seed` pins the
+        world's RNG (record-world replays a scenario headlessly with it);
+        the lab itself leaves it to the scenario."""
         infer = {}
         for d in scenario.ducks:
             f = self.infer_for(d.policy)
             if f is not None:
                 infer[d.id] = f
-        world = World(scenario, infer_for=infer)
+        world = World(scenario, infer_for=infer, seed=seed)
         if world.goal_width > 0:
             world.ball_out_s = PITCH_BALL_OUT_S      # the referee's throw-in (arena.py, roadmap Track 4 item 11b)
         self.brains = {}
@@ -292,10 +294,10 @@ class WorldState:
         from .world.metrics import PitchMetrics
         return PitchMetrics(w, {d.id: (d.team or d.id) for d in sc.ducks})
 
-    def preload(self, name: str) -> None:
+    def preload(self, name: str, seed: int | None = None) -> None:
         """Build a world before serving (the CLI's --world). Blocking."""
         sc = resolve_scenario(name)
-        self.world, self.scenario = self.build(sc), sc
+        self.world, self.scenario = self.build(sc, seed=seed), sc
         self.metrics = self.new_metrics()
         print(f"[sim] world {sc.name}: {len(sc.ducks)} ducks", flush=True)
 

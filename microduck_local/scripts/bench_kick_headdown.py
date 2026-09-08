@@ -30,12 +30,17 @@ from microduck_local.behaviors.env import BehaviorEnv
 from microduck_local.behaviors.kick import _kick_ball_ids, ball_speed_along
 from microduck_local.brain.brain_env import onnx_infer
 
-POSES = (                              # (label, neck offset, head offset) off HOME
+# (label, neck offset, head offset) off HOME - offsets, added to
+# C.DEFAULT_POSE (head pitch 0.349 rad at home), so "+0.60" is 0.95 rad
+# absolute: the line-up gaze in play (`head_down` 0.6 is a command offset,
+# controllers.py). The last row was labelled "the line-up gaze" until
+# 2026-09-08; it is 0.35 rad PAST it (a code review caught the label).
+POSES = (
     ("level", 0.0, 0.0),
     ("head +0.30", 0.0, 0.30),
-    ("head +0.60 (shipped gaze clamp)", 0.0, 0.60),
+    ("head +0.60 = 0.95 rad abs (the line-up gaze: shipped head_down 0.6)", 0.0, 0.60),
     ("neck -0.30 / head +0.60 (the split)", -0.30, 0.60),
-    ("head +0.95 / neck -0.25 (the line-up gaze)", -0.25, 0.95),
+    ("neck -0.25 / head +0.95 = 1.30 rad abs (past the line-up gaze)", -0.25, 0.95),
 )
 
 

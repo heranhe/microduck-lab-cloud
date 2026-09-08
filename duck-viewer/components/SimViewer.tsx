@@ -55,6 +55,8 @@ import {
 import { camAspect, renderInset } from "@/lib/inset";
 import { buildBodyGeometries, Duck, type BodyGeometry } from "./Duck";
 import CameraKeys from "./CameraKeys";
+import { CaptureCanvas, Snapshotter } from "./Capture";
+import { SimRecord } from "./SimRecord";
 import { BrainPanel } from "./SimBrain";
 import { consumeDragged, HANDLE, useDrag } from "./useDrag";
 import { applyFloorClick, emptyDraft, SimEditor, type EditorState } from "./SimEditor";
@@ -1496,6 +1498,9 @@ export default function SimViewer() {
           zoomSpeed={0.4}
         />
         <CameraKeys home={HOME_CAM} minDist={CAM_MIN_DIST} maxDist={CAM_MAX_DIST} />
+        {/* 🎥 record / 📷 shot (SimRecord in the top bar) read the canvas through these */}
+        <CaptureCanvas />
+        <Snapshotter />
       </Canvas>
 
       {/* top bar */}
@@ -1568,6 +1573,7 @@ export default function SimViewer() {
         >
           ✎ edit
         </button>
+        <SimRecord scenario={scenario?.name ?? null} btn={BTN} />
         <span style={{ flex: "1 1 0", minWidth: 0 }} />
         {/* Every number sits in a slot as wide as its widest value, so the
             line does not shuffle as t grows a digit, kB/s crosses 100, or

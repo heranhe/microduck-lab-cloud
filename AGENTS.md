@@ -66,6 +66,10 @@ by `setup.sh`; upstream no longer vendors them).
   harness mirrors.
 - `.claude/skills/render-rollout/SKILL.md` — how to *look* at what a policy
   actually does (works as plain documentation for any agent, not just Claude).
+- `.claude/skills/record-world/SKILL.md` — how to *record* a world scenario
+  (living room, playroom, soccer pitch) to video + a contact sheet + an events
+  log, headless under a seed, and read what the ducks did. Debug the `/sim`
+  page with this, not by describing what a browser tab looked like.
 - `docs/roadmap.md` — the working list of experiments: what to run next, the
   command for each, and the number that would settle it. Read it before
   starting anything open-ended, and **write the answer back into the item**
@@ -102,6 +106,8 @@ uv run train-brain --run-name follow-v6 --steps 2_000_000 --variety \
     --title "Follower v6" --description "what it tests, and later what it found" --group shipped-followers
 uv run describe-brain p-n256-s31 --title ... --description ... --group capacity   # name a run after the fact
 uv run render-rollout --policy runs/my-run/policy.onnx --behavior stand --out /tmp/rr
+uv run record-world pitch-2v2 --seconds 30 --out /tmp/rw   # world video + sheet + events.txt
+uv run record-world playroom --brain d0=tidy --camera follow:d0 --seconds 60 --out /tmp/rw-tidy
 uv run machine-facts                          # cores + thread profile for THIS machine
 uv run bench-envs                             # the right --envs for THIS machine
 uv run bench-envs --compare-profiles          # mac profile vs linux/cloud profile, interleaved
@@ -139,6 +145,8 @@ uv run scripts/infer_policy.py --walking ../microduck_local/runs/my-run/policy.o
   "Every run is a record" in `microduck_local/AGENTS.md`.
 - Before claiming anything about a trained policy, **render it and look**
   (`render-rollout`) — reward curves and eval sums have repeatedly lied here.
+  The same rule for world mode: before claiming what happens in a room or on
+  the pitch, `record-world` it and read `sheet.png` + `events.txt`.
 - If rollouts never contain the skill you're paying for, **fix the physics
   curriculum, not the reward** — an unsampled state's value is never learned.
   The full lesson (and the servo-ladder pattern that solved it) is in

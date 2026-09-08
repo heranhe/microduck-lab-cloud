@@ -303,7 +303,7 @@ def test_a_shot_is_declined_when_the_ball_is_too_far_to_the_side():
     assert off.p.kick_side_max == 0.0 and off._too_wide(odom) is False
 
 
-def test_a_keeper_owns_the_box_holds_the_line_inside_the_posts_and_never_goes_up_the_pitch():
+def test_a_keeper_owns_the_box_holds_the_line_inside_the_posts_and_never_goes_up_the_pitch(monkeypatch):
     """The keeper (roadmap Track 4 s6 B.2): its zone is the last fifth in
     front of its own mouth and the field players share the rest as they
     would without one; the board never sends it after a loose ball, not
@@ -338,14 +338,12 @@ def test_a_keeper_owns_the_box_holds_the_line_inside_the_posts_and_never_goes_up
     assert abs(t3[1] - 0.30) < 1e-9
     assert b.p.intercept_eta == b.p.keeper_intercept_eta > 0             # a keeper blocks by default
     assert Chase(ChaseParams(), goal=(1.5, 0.0), role="striker").p.intercept_eta == 0.0
-    os.environ["MICRODUCK_CHASE"] = "intercept_eta=0"
-    try:
-        assert Chase(ChaseParams.from_env(), goal=(1.5, 0.0), role="keeper").p.intercept_eta == 0.0   # a battery wins
-    finally:
-        del os.environ["MICRODUCK_CHASE"]
+    monkeypatch.setenv("MICRODUCK_CHASE", "intercept_eta=0")     # restored after the test, not deleted
+    assert Chase(ChaseParams.from_env(), goal=(1.5, 0.0), role="keeper").p.intercept_eta == 0.0   # a battery wins
+    monkeypatch.delenv("MICRODUCK_CHASE")
 
 
-def test_a_drifting_odometry_turns_the_localiser_on_and_ideal_leaves_it_off():
+def test_a_drifting_odometry_turns_the_localiser_on_and_ideal_leaves_it_off(monkeypatch):
     """`brain_kwargs`: a duck whose odometry preset is not `ideal` gets the
     goal-post particle filter (roadmap Track 4 s6 C.2); at `ideal` the
     frames already agree and every soccer number was measured there, so the
@@ -366,14 +364,12 @@ def test_a_drifting_odometry_turns_the_localiser_on_and_ideal_leaves_it_off():
     # A battery that speaks (`localize=0`) wins over the roster rule. For a
     # lone duck there is then no params object at all - `Chase.__init__`
     # reads MICRODUCK_CHASE itself - so what is locked is the BRAIN's state.
-    os.environ["MICRODUCK_CHASE"] = "localize=0"
-    try:
-        kw = brain_kwargs(sc.ducks[0], w, {})
-        assert kw.get("p", ChaseParams()).localize is False        # the local kicks add only their exit angles
-        c = Chase(**kw)
-        assert c.p.localize is False and c.loc is None
-    finally:
-        del os.environ["MICRODUCK_CHASE"]
+    monkeypatch.setenv("MICRODUCK_CHASE", "localize=0")
+    kw = brain_kwargs(sc.ducks[0], w, {})
+    assert kw.get("p", ChaseParams()).localize is False        # the local kicks add only their exit angles
+    c = Chase(**kw)
+    assert c.p.localize is False and c.loc is None
+    monkeypatch.delenv("MICRODUCK_CHASE")
 
 
 def test_the_head_yaw_is_gated_on_forward_clearance_and_fails_open():
@@ -600,7 +596,7 @@ def test_a_measurement_sweep_reaches_a_roster_and_not_only_a_lone_duck():
             os.environ.pop("MICRODUCK_CHASE", None)
 
     for n in (1, 2, 3):
-        assert params("aim_mode=goal", n).aim_mode == "goal"          # the sweep reaches every roster
+        assert params("aim_mode=los", n).aim_mode == "los"            # the sweep reaches every roster
     assert params("", 2).bump_stand_s == ChaseParams().team_bump_stand_s   # …and the roster default still applies
     assert params("", 1).bump_stand_s == 0.0                          # a lone attacker keeps the default
     # An explicit value wins over the roster default — and it is asked for BY
@@ -1181,3 +1177,36 @@ def test_cover_that_holds_the_role_leaves_through_the_hysteresis():
     km.claim("d0", 1.1, 0.5, (-0.9, 0.0), (-1.4, 0.0, 0.0))             # …rolled out of it
     km.claim("d1", 1.1, 1.6, (-0.9, 0.0), (0.5, 0.0, math.pi))
     assert "d0" not in km.candidates(1.1)
+
+
+def test_the_striker_posts_off_the_balls_side_for_both_attack_directions():
+    """The post is `strike_side` off the kick line on the side the ball is
+    NOT on (a striker on the ball's side is a second duck on the ball). The
+    offset rides the lane's left normal, which flips with the attack
+    direction: until 2026-09-08 the team attacking -x posted its striker on
+    the SAME side as the ball, so every roles battery compared two different
+    strikers (code review)."""
+    from types import SimpleNamespace
+    p = ChaseParams()
+    for gx in (1.75, -1.75):
+        b = Chase(p, goal=(gx, 0.0), role="striker", bounds=(1.75, 1.0), goal_w=0.7)
+        b._senses = SimpleNamespace(t=0.0, odom=(0.0, 0.0, 0.0))    # `_hold_target` reads the tick's clock
+        for by in (0.3, -0.3):
+            tx, ty = b._hold_target((0.0, by), (0.0, 0.0, 0.0))
+            assert (ty > 0) != (by > 0), f"attack x={gx:+.2f}, ball y={by:+.2f}: post y={ty:+.2f} is on the ball's side"
+            assert abs(ty) > 0.1                                        # a real offset, not a rounding of zero
+            assert (tx - 0.0) * gx > 0                                # ahead of the ball, toward the goal it attacks
+
+
+def test_from_env_reads_an_int_as_an_int_and_refuses_a_choice_it_does_not_know():
+    """`kick_select_n` reached `kickselect.select` as 20.0 (a TypeError at the
+    first plan on a pitch) and `aim_mode=clmap` silently ran the `los` arm,
+    against the docstring's promise that an unreadable value raises."""
+    import pytest
+    p = ChaseParams.from_env("kick_select_n=20")
+    assert p.kick_select_n == 20 and isinstance(p.kick_select_n, int)
+    for bad in ("kick_select_n=20.0", "kick_select_n=n", "aim_mode=clmap", "head_yaw_when=serach", "support_mode=front"):
+        with pytest.raises(ValueError):
+            ChaseParams.from_env(bad)
+    assert ChaseParams.from_env("aim_mode=los").aim_mode == "los"
+    assert ChaseParams.from_env("search_dip_every=0").search_dip_every == 0.0    # 0 = never dip, not a ZeroDivisionError

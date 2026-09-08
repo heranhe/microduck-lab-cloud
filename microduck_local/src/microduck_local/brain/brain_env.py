@@ -218,8 +218,10 @@ class FollowTask:
     # its next waypoint after 2.5 s, instead of walking through it as a
     # mocap capsule does. The default, because real people stop; 0 is the
     # capsule that walks through, measured to cap every brain's band for
-    # a reason that has nothing to do with following.
-    polite: float = 0.55
+    # a reason that has nothing to do with following. One source with the
+    # world's `Person.yield_m`; and since ducks have bodies (collision "all",
+    # 2026-09-06) a 0 here is a person that topples the duck it walks into.
+    polite: float = Person.yield_m
     # Draw `polite` from this list EACH EPISODE instead of holding it fixed
     # (empty: the fixed `polite` above). The measured reason: `follow-v5` was
     # v4's recipe trained against a person who always stops, and what it

@@ -146,8 +146,9 @@ class Team:
     # that walks between two detector frames drags its fix with it — the
     # track coasts, the odometry does not — which is a spurious ball speed
     # of up to the walking speed, so a velocity is only ACTED on above
-    # `vel_use`, where a rolling ball (a kick leaves at 1.4 m/s and slows
-    # at 0.04 m/s^2) is what it must be.
+    # `vel_use`, where a rolling ball (a kick leaves at 1.4 m/s; the
+    # `ball_decel` below is the same constant-deceleration stand-in as
+    # `ChaseParams.ball_decel`, see its note) is what it must be.
     # MEASURED OFF (`lead_max_s` 0), and this is why the knob is here: over
     # the same 3 seeds x 300 s, aiming at the intercept made the churn
     # WORSE than the straight fix - 18.2 handovers a duck a run against
@@ -156,7 +157,7 @@ class Team:
     # fixes it is differenced from, and a jittering aim point is a
     # jittering cost. The intercept is right for a ball that is genuinely
     # rolling; the board cannot yet tell one from a coasting track.
-    ball_decel: float = 0.04
+    ball_decel: float = 0.3
     lead_max_s: float = 0.0
     vel_smooth: float = 0.5
     vel_min_dt: float = 0.15
@@ -171,7 +172,6 @@ class Team:
     jobs: dict[str, str] = field(default_factory=dict)
     half_x: float = 0.0
     attack_sign: float = 1.0
-    claims: dict[str, Claim] = field(default_factory=dict)
     # --- the shared ball (roadmap Track 4 s6 C.3) -----------------------------
     # The board's ball was the FRESHEST sighting, whoever sent it and
     # however poor. With `fuse` it is the inverse-variance mean of every
@@ -193,7 +193,6 @@ class Team:
     fuse_window: float = 0.5
     claims: dict[str, Claim] = field(default_factory=dict)
     _attacker: str | None = None
-
     # --- the game state (roadmap Track 4 s6 B.3) ------------------------------
     # What the World's GameController said at the last restart, stamped by
     # `kickoff_brains`: whether this team kicks off, until when the other
@@ -204,6 +203,7 @@ class Team:
     _kick_until: float = -1e9
     _kick_ball: tuple[float, float] | None = None
     _kick_moved: float = 0.1
+
     def __post_init__(self) -> None:
         self._reset_ball()
         self._pending: str | None = None
@@ -222,7 +222,6 @@ class Team:
         self._attacker = None
         self._pending = None
         self._reset_ball()
-
         self._kick_ours, self._kick_until, self._kick_ball = True, -1e9, None
 
     # -- the game state --------------------------------------------------------
@@ -242,6 +241,7 @@ class Team:
             return False
         b = ball if ball is not None else self.ball(t)
         return b is None or math.dist(b, self._kick_ball) < self._kick_moved
+
     # -- what a duck sends ---------------------------------------------------
     def claim(self, duck_id: str, t: float, dist: float, ball: tuple[float, float] | None,
               pos: tuple[float, float, float] | None = None, ball_sigma: float = math.nan) -> None:
@@ -371,13 +371,13 @@ class Team:
         `give_up_s` quicker than every zone owner (fallen, facing the wrong
         way, or the ball just skipped past). Static jobs do not change."""
         live = self.members(t)
-        ball = self.ball(t)
         field = [k for k in live if self.jobs.get(k) != "keeper"]     # a keeper never leaves its box for a loose ball
+        ball = self.ball(t)
         allowed = [k for k in live if self.zone_ok(k, ball)]
         if not allowed:
-            return live
+            return field or live
         owners_best = min(self.cost(k, t) for k in allowed)
-        cover = [k for k in live if k not in allowed
+        cover = [k for k in field if k not in allowed
                  and self.cost(k, t) < owners_best - self.give_up_s]
         # The cover that HOLDS the role stays a candidate until a zone owner
         # is quicker by the margin that let it in, so the handover back runs
@@ -458,11 +458,12 @@ class Team:
         seen = [c for c in self.claims.values() if c.ball is not None and t - c.t <= 3 * self.stale_s]
         if not seen:
             return None
+        newest = max(c.t for c in seen)
         inv = 0.0
         for c in seen:
-            s = c.ball_sigma if math.isfinite(c.ball_sigma) else self.sigma_default
             if newest - c.t > self.fuse_window:
                 continue
+            s = c.ball_sigma if math.isfinite(c.ball_sigma) else self.sigma_default
             inv += 1.0 / max(s * s + (self.vel_prior * max(0.0, t - c.t)) ** 2, 1e-6)
         return math.sqrt(1.0 / inv)
 
@@ -470,7 +471,10 @@ class Team:
         """The kicker's known exit line: the ball leaves `origin` along
         `heading` at `speed`. Below `vel_use` this is a coasting track and
         is ignored (the intercept-on-claim measurement). Above it this is
-        the board's ball velocity until kickoff."""
+        the board's ball velocity until the next teammate FIX folds a fresh
+        sample over it in `_fold_ball` (a fix more than `vel_max_dt` after
+        that duck's previous one zeroes it) - one frame in practice, which
+        is why the exit line measured neutral in play (roadmap 4b)."""
         if speed < self.vel_use:
             return
         self._vel = (speed * math.cos(heading), speed * math.sin(heading))
@@ -557,7 +561,8 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     mates = sum(1 for x in world.scenario.ducks if duck_spec.team and x.team == duck_spec.team)
     from dataclasses import replace  # noqa: PLC0415
 
-        from .controllers import ChaseParams
+    from .controllers import ChaseParams  # noqa: PLC0415
+    if mates > 1:
         base = ChaseParams.from_env()
         # …and the roster default applies only where the caller has not
         # already spoken: `bump_stand_s=0` on the command line means that
@@ -565,8 +570,6 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
         # explicit 0 and the shipped default 0 are the same number.
         out["p"] = (base if "bump_stand_s" in ChaseParams.env_names()
                     else replace(base, bump_stand_s=base.team_bump_stand_s))
-    return out
-
     # Localise whenever the duck's odometry is DECLARED to drift: the goal-
     # post particle filter (brain/localize.py) is what keeps its goal, its
     # spot and the board's ball in a frame that means the same thing to a
@@ -574,6 +577,7 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     # already agree exactly and every soccer number was measured there, so
     # nothing here changes - bit for bit - unless a battery says otherwise
     # through MICRODUCK_CHASE. Same by-name rule as above.
+    if duck_spec.odom != "ideal" and "localize" not in ChaseParams.env_names():
         out["p"] = replace(out.get("p") or ChaseParams.from_env(), localize=True)
     # The supporter FIELD (roadmap D.2) ships for the roster it measured a
     # win on and nowhere else: a side WITH A MIDFIELDER (3v3 with roles:
@@ -591,9 +595,11 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     # export under policies/kick, roadmap item 7): their exit angles come
     # from the sidecar beside the file, unless the command line names them.
     exits = getattr(world, "kick_exits", lambda: None)()
-    if exits is not None and "kick_exit_left" not in ChaseParams.env_names() \
-            and "kick_exit_right" not in ChaseParams.env_names():
-        out["p"] = replace(out.get("p") or ChaseParams.from_env(), kick_exit_left=exits[0], kick_exit_right=exits[1])
+    if exits is not None:
+        named = ChaseParams.env_names()                             # a named exit wins; the OTHER foot keeps its sidecar
+        sidecar = {k: v for k, v in zip(("kick_exit_left", "kick_exit_right"), exits) if k not in named}
+        if sidecar:
+            out["p"] = replace(out.get("p") or ChaseParams.from_env(), **sidecar)
     # The shared ball (roadmap C.3): the board fuses sightings when the
     # brain's knob says so - every teammate writes the same value.
     if team is not None:
@@ -601,24 +607,25 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
         team.fuse, team.fuse_window = bool(pf.fuse_ball), float(pf.fuse_window)
     return out
 
-        out["p"] = replace(out.get("p") or ChaseParams.from_env(), localize=True)
 
 def kickoff_brains(brains: dict, teams: dict[str, "Team"], world=None) -> None:
     """After a goal (World.goal_seq moved): every brain forgets its plan —
     the ball it was lining up on, the spot, the retreat it was in — through
     `kickoff()` where a brain has one (Chase keeps its kick count) and
-    `reset()` otherwise; every team's blackboard is wiped."""
+    `reset()` otherwise; every team's blackboard is wiped. With the `world`,
+    the boards also hear the GameController (roadmap B.3): whose kickoff it
+    is and how long the other side stands off."""
     for b in brains.values():
         fn = getattr(b, "kickoff", None) or getattr(b, "reset", None)
         if fn is not None:
             fn()
     for tm in teams.values():
         tm.reset()
-
-
-__all__ = ["Claim", "Team", "ROLE_ZONES", "zones_for", "brain_kwargs", "kickoff_brains"]
     kicker = getattr(world, "kickoff_team", None) if world is not None else None
     if kicker is not None:
         for tm in teams.values():
             tm.kickoff(tm.name == kicker, world.kickoff_until + world.kickoff_free_s,
                        world.kickoff_ball, world.kickoff_moved_m)
+
+
+__all__ = ["Claim", "Team", "ROLE_ZONES", "zones_for", "brain_kwargs", "kickoff_brains"]

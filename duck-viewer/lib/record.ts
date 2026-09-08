@@ -68,7 +68,7 @@ export function useCapture(): CaptureState {
   );
 }
 
-export function captureFraming(duckId: string) {
+export function captureFraming(duckId: string | null) {
   set({
     phase: "framing",
     duckId,

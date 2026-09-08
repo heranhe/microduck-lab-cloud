@@ -13,11 +13,17 @@ training cannot start. This project keeps the same MJCF models, the same
 
 **Actuator model** — pick with `actuator="xml"|"bam"` or `MICRODUCK_ACTUATOR`:
 
-| | `xml` (default) | `bam` |
+| | `xml` (env default) | `bam` (`train-walk` default) |
 |---|---|---|
 | what | MJCF `position` servos, kp=0.55 | the xl330/m6 voltage model microduck_rl trains with |
 | matches | `infer_policy.py` deployment rehearsal | `microduck_constants.py` `FrictionDRBamActuatorCfg` |
 | speed | ~6.4k env-steps/s | ~3.3k env-steps/s |
+
+`train-walk` trains on `bam` (`--actuator xml` opts out; `MICRODUCK_ACTUATOR`
+still overrides the bare default) — until the 2026-09-06 physics audit it
+trained on the XML servo by omission. Measured, interleaved, 32 envs on this
+Mac: 56.4k → 42.4k ctrl steps/s (−25%) for the honest servo. The env's own
+default and everything built on it (tricks, the lab) stay `xml`.
 
 The XML class is *literally* the BAM model run through `to_mujoco()` at
 vin=7.5 V (every one of its five numbers reproduces — see
@@ -42,6 +48,36 @@ stack, and microduck_rl *is* the sim2real recipe (read its AGENTS.md). Once a
 behavior works here, port the env design to an mjlab cfg and retrain on GPU:
 `uv run train <TASK> --hf-jobs`.
 
+**Physics parity with the upstream velocity cfg** (2026-09-06 audit, items
+6–9 in `docs/roadmap.md`), each measured before being adopted:
+
+- *Fresh IMU obs.* `mj_step` integrates after it computes sensors, so after
+  the 4-substep loop the gyro / projected-gravity blocks and the trunk height
+  trailed the joint blocks by 5 ms (shipped walker: gyro up to 0.77 rad/s
+  off against a ±0.03 noise band). `MicroduckWalkEnv._refresh_derived`
+  (`mj_kinematics + mj_comPos + mj_comVel + mj_sensorVel`, 3.5 µs) makes
+  them equal a full `mj_forward` to the bit at +3% per step; `mj_step1`
+  (12.8 µs) would rebuild the constraint rows the BAM friction scan reads
+  without solving them, and `mj_forward` costs 18.8 µs. (The world layer's
+  `World.step` and upstream `infer_policy.py` still read a substep late.)
+- *Solver.* implicitfast / 10 iterations / 20 line-search iterations, as
+  mjlab's velocity task. implicitfast and the iteration cap are bit-identical
+  to the XML default on both actuators; `ls_iterations=20` moves the BAM path
+  by one ULP (1.4e-17 at step 49) that chaos grows — the walker falls in
+  neither. `infer_policy.py` runs the XML default; training parity wins.
+- *Domain randomization*, upstream ranges, every one a constructor knob and
+  shown to land in the model: trunk mass **and inertia** ×[0.95, 1.05] with
+  `mj_setConst` refreshing `body_subtreemass` and the `invweight0` scalings;
+  trunk / head-assembly CoM offsets ±3 → ±15 / ±10 mm on upstream's
+  curriculum; armature ×[0.9, 1.1] per joint; velocity pushes of ±0.3 m/s
+  every 3–6 s (`push_robot`, follows `domain_rand`; OFF for every behavior
+  recipe by default). Not mirrored: IMU misalignment, encoder bias and the
+  0–1 step IMU delay — obs-level terms, each a small change to `_get_obs`,
+  left for a measured follow-up. Under DR + noise the shipped walker now
+  falls ~1 per 120 pushes (5/60 and 0/60 episodes on bam, 0/60 and 3/60 on
+  xml with and without the refresh — the pushes, not the refresh; 0/60
+  without pushes on either code); tracking error is unchanged.
+
 ## Commands
 
 ```bash
@@ -50,8 +86,8 @@ uv sync                                     # one-time (needs ../microduck_rl ch
 uv run --with pytest pytest tests/          # contract tests — run before training
 uv run bench-walk                           # raw env-stepping throughput
 uv run bench-envs                           # PPO throughput vs --envs → the right worker count
-uv run train-walk --envs 12 --steps 3_000_000 --run-name my-run
-MICRODUCK_ACTUATOR=bam uv run train-walk --envs 12 --run-name my-run-bam  # BAM physics
+uv run train-walk --envs 12 --steps 3_000_000 --run-name my-run   # BAM physics (the default)
+uv run train-walk --actuator xml --envs 12 --run-name my-run-xml  # the cheap XML servo instead
 uv run export-walk runs/my-run              # → runs/my-run/policy.onnx (normalizer baked)
 uv run eval-walk runs/my-run/policy.onnx    # headless: falls, tracking error
 uv run eval-walk ../microduck/policies/alpha_walking.onnx   # baseline comparison
@@ -713,6 +749,24 @@ uv run duck-lab --world living-room          # no roster needed; built-ins:
 # then open the viewer's /sim page
 ```
 
+To see what a world did without a browser — a fall, a stall at the basket, a
+scrum on the pitch — record it headless under a seed. It builds the world
+through the lab's own `WorldState` (same policies, brains, team boards,
+tether and kickoff rule), and writes an mp4 for you, a captioned contact
+sheet and an `events.txt` (every brain transition, fall, pick / release and
+goal, with sim time) for an agent to read:
+
+```bash
+uv run record-world living-room --seconds 20 --out /tmp/rw                     # any GET /scenarios name or a .json
+uv run record-world pitch-2v2 --seconds 30 --out /tmp/rw-pitch                 # whole-floor camera
+uv run record-world playroom --brain d0=tidy --camera follow:d0 --skip 60 --seconds 60 --out /tmp/rw-tidy
+```
+
+`--camera top | follow:<duck> | side | front | three-quarter`, `--brain
+DUCK=KIND` swaps a brain like the inspector, `--tether-ms` is the lab's
+tether, `--stride 2 --fps 25` is slow motion. `.claude/skills/record-world/SKILL.md`
+says how to read the outputs.
+
 What a duck senses lives in `sensors/`: `TofSensor` is the head's 8×8
 time-of-flight matrix on the MJCF's `tof` site (45° FOV, 4 m, 15 Hz on a
 fixed grid, uint16 mm frames shaped like the robot's `tof.stream`, with
@@ -730,6 +784,30 @@ documented in `world_server.py`. Invariants worth knowing: a one-duck world
 reproduces `MicroduckWalkEnv` step for step (`tests/test_arena.py`), and the
 world never runs rewards or domain randomization — reflex training keeps its
 own env.
+
+Physics worth knowing (the audit of 2026-09-06, `docs/roadmap.md`): a duck
+is a BODY — `collision` defaults to `"all"`, every part of the robot carries
+its collision mesh, so a ball at trunk height bounces off it, a board stops
+it at the beak and two walkers meet beak to beak 11 cm apart. (`"walk"`,
+upstream's flat-floor training variant, is two 13 mm soles: the ball passed
+through the trunk, the beak went 9 cm into the board, two walkers overlapped
+to 3–7 cm — and it was the default until then.) The shipped walker is
+bit-identical under both on a flat floor: `compose.py` pins the variant's
+hand-rounded `<inertial>` values to the walk file's and keeps the shoe
+shell's hull off the floor, without which the two drifted 0.2–0.5 rad apart
+from a 1e-9 seed. A person is polite by default (`Person.yield_m` 0.55 m,
+the follow benchmark's `--polite`): a mocap capsule has infinite mass and
+cannot be pushed, so contact with a duck is avoided, not softened — a
+walk-through person (`yield_m: 0`) at any walking speed simply knocks a
+standing duck over, and a respawn steps clear of a person rather than
+reappearing inside the capsule. The beak is a gripper: each duck's jaw and
+each toy are a contact-excluded pair (the soft mouth closes *around* a
+block; the jaw's rigid hull sat on top of it and the pick behind the basket
+fell from 8/8 seeds to 3/8 until the exclude). Toys slide at their own 0.8
+(`priority` 1; at equal priority MuJoCo takes the floor's 1.0), the ball rolls to a stop
+(`Ball.rolling`) but does not bounce — restitution is unmodelled, a stiffer
+contact reaches e = 0.22 at best and was not shipped — and a bump between
+ducks or with a person is sensed in any physics substep of a tick.
 
 ### Senses → intents: the brain layer (roadmap Phase 2)
 
@@ -1123,7 +1201,9 @@ its current intent live.
   stay for the robot, where a person does not walk through it.
 
   **A polite person** (`Person.yield_m`, `eval-brain --polite M`) settles
-  it. The mocap capsule walked through the duck, so contact seconds could
+  it — and is every person's default since 2026-09-06 (`yield_m` 0.55
+  unless a scene says otherwise). The mocap capsule walked through the
+  duck, so contact seconds could
   not fall whatever the duck did; a real person stops. With `yield_m`
   the walker stands when a duck is inside that range on its way (facing
   the way it wants to go) and after 2.5 s gives the waypoint up and
@@ -1533,10 +1613,17 @@ the wall.
 **Which goals are kicks.** `eval-pitch` now attributes a goal to a kick
 within 4 s of it, else to a bump: one run scored four goals from one
 kick. Over 8 seeds × 300 s of 1v1 the shipped brain scores **0.75
-kicked and 1.25 bumped goals a run from 8.4 kicks** — a chase at
-0.45 m/s sends a walked-into ball rolling about as far as a kick does
-on this floor, and most goals are that. "One kick in four" above was
-this: read it as one goal per four kicks, most of them not the kick's.
+kicked and 1.25 bumped goals a run from 8.4 kicks** — on that floor a
+chase at 0.45 m/s sent a walked-into ball rolling about as far as a kick
+did, and most goals were that. "One kick in four" above was this: read
+it as one goal per four kicks, most of them not the kick's. *That floor
+had no rolling resistance* — until 2026-09-06 the ball geom's condim of
+3 silently ignored the rolling coefficient, so a barely-touched ball
+rolled until a wall stopped it (12 m from a 0.2 m/s nudge on an open
+floor). The ball now rolls on a condim-6 contact with `Ball.rolling`
+(0.002, a short carpet: a 0.2 m/s nudge stops in 0.25 m, a walked-into
+ball at 0.45 m/s in 0.7 m, a 1.4 m/s kick in 3.5 m), and every soccer
+number above this paragraph was taken on the frictionless ball.
 
 **The kick map** (a standing duck, the ball swept over ahead × side of
 the trunk, `kick_left`; the right kick checked mirrored): the ball
@@ -1662,8 +1749,10 @@ defaults stay.
 **Where the ball is going** (`brain/tracker.py`): every track now carries
 an odometry-frame position and, from consecutive hits, a velocity, and
 `predict(t)` rolls it forward under the floor's deceleration. Probed with
-a kicked ball: it leaves at 1.4 m/s, slows at 0.04 m/s² (it rolls 3 m, to
-the boards) and leaves the level camera at once, 30–55° off the nose, so
+a kicked ball on the old frictionless floor: it left at 1.4 m/s, "slowed"
+at 0.04 m/s² (the tracker's noise — that floor had no rolling resistance,
+and it rolled 3 m, to the boards) and left the level camera at once,
+30–55° off the nose, so
 the old track coasted with a stale range for two seconds and a new one
 was born when the ball was found again. The chase brain can act on the
 prediction three ways — yaw the head toward the predicted bearing

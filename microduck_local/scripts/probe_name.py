@@ -70,7 +70,7 @@ def run(seed: float, seconds: float, per_side: int, strip: bool) -> dict:
                 sig.append(round(sum(t.bearing for t in trs), 4))
         if w.goal_seq != goal_seq:
             goal_seq = w.goal_seq
-            kickoff_brains(brains, teams)
+            kickoff_brains(brains, teams, w)          # with the world: the kickoff rule the benchmark plays under
     m = w.metrics.row() if hasattr(w, "metrics") else {}
     return {"duckTracks": float(np.mean(ntracks)), "namedTracks": named,
             "kicks": kicks, "sig": sig,

@@ -34,6 +34,8 @@ import numpy as np
 
 GOALOPP, GOALOWN, INFIELD = "GOALOPP", "GOALOWN", "INFIELD"
 BLOCKED = "BLOCKED"                              # stopped by a duck in the way: the ball is at its feet (C.4)
+WHIFF = "WHIFF"                                  # the swing missed: the ball stays put - never a goal, never a pass
+EDGE = 0.02                                      # m: a ball estimate is rolled out from just inside the boards (`inside`)
 BLOCK_COST = 0.5                                 # potential units a blocked ball is marked down by - it is theirs now
 PUSH = "push"                                    # the third action beside kick_left / kick_right
 
@@ -105,7 +107,7 @@ def roll_out(ball: tuple[float, float], heading: float, model: KickModel, pitch:
     hw = pitch.goal_w / 2.0
     for k in range(n):
         if whiff[k]:
-            out.append((INFIELD, (ball[0], ball[1])))          # the swing missed: the ball stays put
+            out.append((WHIFF, (ball[0], ball[1])))            # the swing missed: the ball stays put
             continue
         dx, dy = float(d[k] * math.cos(a[k])), float(d[k] * math.sin(a[k]))
         # First board this segment reaches, as a fraction of its length.
@@ -156,6 +158,16 @@ class Verdict:
     p_block: float = 0.0                         # share of samples a duck in the way stopped (C.4)
 
 
+def inside(ball, pitch: Pitch) -> tuple[float, float]:
+    """The ball estimate pulled just inside the boards. An estimate ON or past
+    a line - a 2-5 cm error on a ball at the boards, the dominant dead-ball
+    state - made that wall invisible to `roll_out`'s `0 < f` test: a swing
+    into our own mouth from x = -1.50 read 0% own goal against 99% from
+    -1.49 (code review, 2026-09-08)."""
+    return (min(max(float(ball[0]), -pitch.half_x + EDGE), pitch.half_x - EDGE),
+            min(max(float(ball[1]), -pitch.half_y + EDGE), pitch.half_y - EDGE))
+
+
 def evaluate(ball, u: float, action: str, model: KickModel, pitch: Pitch,
              rng: np.random.Generator, n: int,
              mates: list[tuple[float, float]] | None = None, pass_reach: float = 0.4,
@@ -167,17 +179,18 @@ def evaluate(ball, u: float, action: str, model: KickModel, pitch: Pitch,
     Mellmann's own next step was a teammate attractor in the field). With
     `obstacles` (C.4) a sample a duck stops is valued where it stops, less
     `BLOCK_COST`: a ball at an opponent's feet is not a pass."""
+    ball = inside(ball, pitch)
     samples = roll_out(ball, u + model.exit(action), model, pitch, rng, n, obstacles, obs_r)
     labels = [s[0] for s in samples]
     received = 0
     vals = []
     for label, (px, py) in samples:
-        if label not in (INFIELD, BLOCKED):
+        if label not in (INFIELD, BLOCKED, WHIFF):
             continue
         v = potential(px, py, pitch)
         if label == BLOCKED:
             v -= BLOCK_COST
-        elif mates and any(math.hypot(px - mx, py - my) <= pass_reach for mx, my in mates):
+        elif label == INFIELD and mates and any(math.hypot(px - mx, py - my) <= pass_reach for mx, my in mates):
             received += 1
             v += pass_bonus
         vals.append(v)
@@ -217,7 +230,17 @@ def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: P
     pushes = [v for v in safe if v.foot == PUSH]
     kicks = [v for v in safe if v.foot != PUSH]
     if shoot > 0 and pushes and not any(v.p_goal >= shoot for v in kicks):
-        return max(pushes, key=lambda v: (v.value, -abs(v.heading)))
-    best_goal = max(v.p_goal for v in safe)
-    top = [v for v in safe if v.p_goal >= best_goal - 1.0 / n - 1e-12]
-    return max(top, key=lambda v: (v.value, -abs(v.heading)))
+        return _best(pushes, n, pitch)
+    return _best(safe, n, pitch)
+
+
+def _best(vs: list[Verdict], n: int, pitch: Pitch) -> Verdict:
+    """Mellmann's rule over `vs`: the most likely to score, ties (within one
+    sample) broken by the potential of where the rest of the samples stop,
+    then by the line nearest the attack direction. `value` excludes the
+    samples that SCORE, so ranking the pushes by it alone preferred a push
+    that stood well over one that scored (code review, 2026-09-08)."""
+    best_goal = max(v.p_goal for v in vs)
+    top = [v for v in vs if v.p_goal >= best_goal - 1.0 / n - 1e-12]
+    attack = 0.0 if pitch.attack_sign >= 0 else math.pi
+    return max(top, key=lambda v: (v.value, -abs(math.atan2(math.sin(v.heading - attack), math.cos(v.heading - attack)))))

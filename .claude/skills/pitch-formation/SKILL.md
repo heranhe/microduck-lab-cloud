@@ -46,7 +46,7 @@ uv run python scripts/render_pitch.py --left "chase+defender,chase+striker" --ri
     --per-side 2 --seed 0 --seconds 12 --out /tmp/rp-form
 ```
 
-Then **Read** the sheet PNG the script prints (typically `/tmp/rp-form_sheet.png`). Two colorways; in the late tiles the defender's depth stays back while a teammate is on the ball. If MuJoCo offscreen cannot run, write that failure down — pytest is still the bar.
+Then **Read** the sheet PNG the script prints (`<--out>/sheet.png`, so `/tmp/rp-form/sheet.png` above). Two colorways; in the late tiles the defender's depth stays back while a teammate is on the ball. If MuJoCo offscreen cannot run, write that failure down — pytest is still the bar.
 
 Roster syntax is `eval-striker`'s: `chase+defender,chase+striker` one entry a duck; a single `chase` covers the side.
 

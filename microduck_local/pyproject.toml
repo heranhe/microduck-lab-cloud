@@ -57,6 +57,7 @@ eval-pitch = "microduck_local.eval_pitch:main"
 trace-tidy = "microduck_local.trace_tidy:main"
 walker-facts = "microduck_local.walker_facts:main"
 eval-find-ball = "microduck_local.eval_find_ball:main"
+record-world = "microduck_local.record_world:main"
 
 [tool.pytest.ini_options]
 markers = [
