@@ -3147,6 +3147,40 @@ What is left, in the order it is worth doing:
    our end and across it at theirs. That knob ships off, but the +1.3
    kicks/run measured for it at 0.12 was taken with the own-goal line live.
 
+   **And the review found something bigger than its own eight findings.**
+   Verifying the fixes against the COMMITTED tree rather than the working
+   one — the discipline the fifth finding was about — turned up that
+   `development` **has not imported for at least twelve commits**. Four
+   files do not parse in the committed history and never did:
+
+   | file at HEAD | line | error |
+   |---|---|---|
+   | `world/arena.py` | 593 | a stray `self.kickoff_team = …` inside `kickoff()` |
+   | `brain/team.py` | 560 | an indented block whose `if mates > 1:` header is gone |
+   | `brain/controllers.py` | 2370 | `_on_the_line`'s `return` tail, its `def` gone |
+   | `walk_env.py` | 385 | the BAM block, its `if` header gone |
+
+   Every one of them is FINE in the working tree, which is why nothing
+   caught it: the tests import the tree, the batteries run the tree, and
+   `scripts/precommit.sh` compiles the tree. `git show HEAD:` gives an
+   `IndentationError`, and a fresh clone of the branch cannot import the
+   package. The mechanism is this repo's own shared-checkout rule turned
+   against it — an anchored edit applied separately to the file and to its
+   committed copy, so that only that hunk is staged, lands somewhere else
+   when the two texts have drifted and strands a fragment. It stages
+   cleanly, it diffs plausibly, and it never runs.
+
+   The gate for it is **`scripts/check_staged_python.py`**, now the third
+   step of `precommit.sh`: every `.py` in the INDEX must parse — what the
+   commit will write, not HEAD and not the tree, which is also what lets
+   the commit that FIXES a broken file through. `tests/test_staged_python.py`
+   stages a file that is broken as committed and fine on disk, which is the
+   exact shape of the twelve commits, and checks the gate catches it. The
+   four files themselves are not repaired here: three of them need code
+   that exists only in the parallel session's working tree, so the repair
+   is that session's commit to make, and its staged index already holds
+   the correct content for all four.
+
    **(c) In the open, line-ups die to `avoid` in 0.4 s** — 263 of 508
    3v3 exits, with the ball 0.43 m away and another duck 0.33 m ahead,
    70% of them an OPPONENT (87% in 2v2). Two attackers meet at the ball,
