@@ -67,7 +67,7 @@ def wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
-def run(seed: int, seconds: float, per_side: int, ball_out_s: float = 0.0) -> list[dict]:
+def run(seed: int, seconds: float, per_side: int, ball_out_s: float = 0.0, dump_state: bool = False) -> list[dict]:
     sc = make_pitch(per_side=per_side)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
     w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, ball_out_s=ball_out_s)
@@ -94,6 +94,12 @@ def run(seed: int, seconds: float, per_side: int, ball_out_s: float = 0.0) -> li
                        speed=d.heading_speed(w.data), odom=w.odom(d), skill=d.skill, bumped=w.bumped(d))
             b = brains[d.id]
             intent = b.step(s)
+            # Roadmap 12i: after a swing, when does this duck next SEE the ball?
+            for k in pending:
+                if k["duck"] == d.id and k.get("reacq") is None and w.t - k["t"] >= 0.5:
+                    trk = b.tracker.best(b.p.target_cls, w.t, min_hits=1)
+                    if trk is not None and trk.age(w.t) <= 0.2:
+                        k["reacq"] = round(w.t - k["t"], 2)
             # The brain clears its spot in the same tick it fires, so the
             # intended line is read from `_hunt_u` — which IS that line, and
             # is also what the duck will walk along afterwards to find the
@@ -123,7 +129,60 @@ def run(seed: int, seconds: float, per_side: int, ball_out_s: float = 0.0) -> li
                 # walk-in finished) and `spot_ball` is spot-to-BALL (should be
                 # `kick_ahead` = 8 cm if the plan was right when it was made).
                 sp = prev_spot.get(d.id)
-                pending.append({"t": w.t, "duck": d.id, "foot": intent.skill,
+                state = None
+                if dump_state:
+                    # The duck's and the ball's FULL state at the instant the
+                    # swing is asked for (before the world applies it), so a
+                    # bench can replay this exact swing (roadmap item 12a).
+                    import mujoco
+                    a, q, v = d.adr, w.data.qpos, w.data.qvel
+                    jb = w._ball_joint
+                    bq, bv = int(w.model.jnt_qposadr[jb]), int(w.model.jnt_dofadr[jb])
+                    state = {"root_qpos": q[a.root_qpos:a.root_qpos + 7].round(5).tolist(),
+                             "root_qvel": v[a.root_qvel:a.root_qvel + 6].round(5).tolist(),
+                             "joint_qpos": q[a.joint_qpos].round(5).tolist(),
+                             "joint_qvel": v[a.joint_qvel].round(5).tolist(),
+                             "last_action": d.last_action.round(5).tolist(),
+                             "prev_joint_vel": d.prev_joint_vel.round(5).tolist(),
+                             "ctrl": w.data.ctrl[a.actuators].round(5).tolist(),
+                             "ball_qpos": q[bq:bq + 7].round(5).tolist(),
+                             "ball_qvel": v[bv:bv + 6].round(5).tolist()}
+                    # …and the CONTEXT a single-duck bench scene has not got.
+                    # A replay deletes the boards and the other ducks, so a
+                    # cause that lives in either of them would be invisible in
+                    # it and would come back as "the state is innocent".
+                    # Recorded here so both can be ruled out on the play rows
+                    # instead (roadmap 12a: neither is the cause — the ball is
+                    # a median 0.87 m from a board and the only thing touching
+                    # it at the swing, in 79 of 79 swings, is the floor, which
+                    # is candidate (iii) falsified outright).
+                    hx, hy = sc.floor[0] / 2.0, sc.floor[1] / 2.0
+                    state["ball_board"] = round(float(min(hx - abs(bx), hy - abs(by))), 3)
+                    state["ball_duck"] = round(min(
+                        (math.dist((bx, by), (float(q[o.adr.root_qpos]), float(q[o.adr.root_qpos + 1])))
+                         for o in w.ducks.values() if o.id != d.id), default=9.9), 3)
+                    # The gain the ACTUATORS are at as the swing is asked for.
+                    # `start_skill` drops it to STANDING_GAIN_RATIO on this
+                    # same tick, so a replay that wants the arena's swing has
+                    # to apply 0.8 itself — this column is what says so.
+                    state["gain_ratio"] = round(float(d.gain_ratio), 3)
+                    bb, ball_body = w.model.geom_bodyid, int(w.model.jnt_bodyid[jb])
+                    touch = []
+                    for con in range(w.data.ncon):
+                        g1, g2 = int(w.data.contact.geom1[con]), int(w.data.contact.geom2[con])
+                        oth = g2 if bb[g1] == ball_body else (g1 if bb[g2] == ball_body else None)
+                        if oth is not None:
+                            touch.append(mujoco.mj_id2name(w.model, mujoco.mjtObj.mjOBJ_GEOM, oth)
+                                         or f"geom{oth}")
+                    state["touching"] = touch
+                # What the BRAIN believed at the swing: its ball track's age and
+                # its fresh predicted position (the ahead gate reads the latter;
+                # None = nothing fresh, the gate cannot fire) - item 12c coverage.
+                trk = b.tracker.best(b.p.target_cls, w.t, min_hits=1)
+                pred = getattr(b, "predicted", None)
+                pending.append({"t": w.t, "duck": d.id, "foot": intent.skill, "state": state,
+                                "track_age": None if trk is None else round(trk.age(w.t), 2),
+                                "pred_ahead": None if pred is None else round((pred[0] - ox) * math.cos(oyaw) + (pred[1] - oy) * math.sin(oyaw), 3),
                                 "u": b._hunt_u, "heading": oyaw, "ball0": (bx, by),
                                 # The goal this duck attacks, so a kick can be
                                 # scored as toward / away from it and as "would
@@ -182,7 +241,8 @@ def run(seed: int, seconds: float, per_side: int, ball_out_s: float = 0.0) -> li
                    "dist": round(dist, 3), "ahead": k["ahead"], "side": k["side"],
                    "moved": k["moved"], "plan_age": k["plan_age"], "head_yaw": k["head_yaw"],
                    "head_jt": k.get("head_jt"), "neck_jt": k.get("neck_jt"), "trunk_pitch": k.get("trunk_pitch"),
-                   "spot_dist": k["spot_dist"], "spot_ball": k["spot_ball"]}
+                   "spot_dist": k["spot_dist"], "spot_ball": k["spot_ball"], "state": k.get("state"),
+                   "track_age": k.get("track_age"), "pred_ahead": k.get("pred_ahead"), "reacq": k.get("reacq")}
             if dist < 0.10:                    # the swing missed: no line to speak of
                 out.append({**rec, "err": None, "off_heading": None})
                 continue
@@ -203,10 +263,12 @@ def main() -> None:
     ap.add_argument("--per-side", type=int, default=2)
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--out", default=None, help="write every kick as a JSON line")
+    ap.add_argument("--dump-state", action="store_true",
+                    help="record the duck's and the ball's full state at each swing into --out rows (bench_kick_headdown --from-swings)")
     ap.add_argument("--ball-out-s", type=float, default=0.0,
                     help="the ball-out rule (World.ball_out_s); the lab's pitches play at 5 - it more than doubles the kicks a run")
     args = ap.parse_args()
-    todo = [(s, args.seconds, args.per_side, args.ball_out_s)
+    todo = [(s, args.seconds, args.per_side, args.ball_out_s, args.dump_state)
             for s in range(args.seed0, args.seed0 + args.seeds)]
     rows: list[dict] = []
     if args.jobs > 1 and len(todo) > 1:

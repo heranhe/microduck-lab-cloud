@@ -4320,31 +4320,36 @@ runs away, so it sits at somebody's feet more of the run than ever — and the f
 this stack is weakest. Nothing below is a knob sweep of what exists; each ask is a different mechanism with the number
 that would settle it.
 
-**The funnel, measured this morning** (`probe_kick_line.py --ball-out-s 5`, 48 seeds × 300 s of 2v2, 372 swings,
-local kicks, exits from the sidecars):
+**The funnel, measured this morning** (`probe_kick_line.py --ball-out-s 5`, 60 seeds × 300 s of 2v2, 465 swings,
+local kicks, exits from the sidecars; whiff = the ball travelled < 10 cm after the swing). **Corrected the same
+day:** the table first written here read the probe's `moved` column (ball drift since the plan) as the kick's travel
+and had the rows upside down — this is the right one.
 
-| where the ball was at the swing (from the root, yaw frame) | swings | moved < 10 cm |
+| where the ball was at the swing (from the root, yaw frame) | swings | whiff |
 |---|---|---|
-| 0.00–0.08 m ahead | 37 | 86 % |
-| 0.08–0.11 m ahead (`kick_ahead` = 0.08: where the plan puts it) | 83 | **94 %** |
-| 0.11–0.15 m ahead | 74 | 81 % |
-| 0.15–0.20 m ahead | 44 | 27 % |
-| ≥ 0.20 m ahead | 131 | 2 % |
-| **on the sweet spot** (0.06–0.10 ahead, 0.04–0.08 side) | 29 (8 %) | **100 %** |
+| 0.00–0.08 m ahead | 46 | 24 % |
+| 0.08–0.11 m ahead (`kick_ahead` = 0.08: where the plan puts it) | 103 | **15 %** |
+| 0.11–0.15 m ahead | 87 | 18 % |
+| 0.15–0.20 m ahead | 59 | 49 % |
+| 0.20–0.30 m ahead | 98 | **81 %** |
+| ≥ 0.30 m ahead | 68 | 90 % |
+| inside a 0.15 × 0.12 m box (44 % of swings) | 205 | **8 %** |
+| outside it | 260 | **76 %** |
 
-Whiff overall 50 %. The bench (`bench_kick_headdown.py`, the same offsets from the same root frame, standing start)
-whiffs **0 %** from 0.09 m ahead. So the swing that connects on the bench does not connect in play from the same
-spot, and the swings that "connect" in play are the ones where the ball was 20 cm out — which is the duck stepping
-into it, not the foot swinging through it. The line-up itself is fine: trunk-to-spot at the swing median 0.019 m
-(`lineup_tol` 0.03). The plan is stale: median age 3.6 s, spot-to-ball 0.166 m against the 0.08 planned, ball drift
-since the plan 0.06 m median, 0.29 m at the 90th percentile. And the camera cannot see the spot it is kicking at
-unless the head is down: at the level command the floor is visible from 0.30 m out; at the 0.6 command, from 0.12 m
-to 0.90 m — the head joint at the swing is a median 0.40 rad, i.e. the ball at 0.08 m is *below the frame* at the
-moment that matters, and the tracker's dead reckoning is what the swing fires on.
+Whiff overall 46 %. The line-up reaches its spot (trunk-to-spot 0.019 m against `lineup_tol` 0.03); what has moved is
+the ball: the plan is a median 3.6 s old, spot-to-ball at the swing is 0.17 m against the 0.08 planned, and the swings
+that miss are the ones taken at a ball that is no longer in front of the foot. **12a is done** (`probe_kick_line
+--dump-state`, `bench_kick_headdown --from-swings`): 93 play swings replayed on the bench from their exact state whiff
+74 %, and putting the duck back in the HOME pose or stopping the ball changes nothing (74–75 % in all four variants),
+so the arrival pose, the walker's velocities and the ball's motion are not the cause; the actuator gain of the kick
+window (0.8) is not either (0 % on the bench at 0.8, in a 0.5 s window). By bin the bench agrees with play (30 % whiff
+at 0.08–0.11 m, 100 % at ≥ 0.20 m). The camera sees the floor from 0.12 m out at the line-up gaze, so those far balls
+are *visible* — which is why an ahead gate on the fresh predicted ball (`kick_ahead_max`, 12c's first half) has the
+coverage the side gate (`kick_side_max`, 4b) never had.
 
 ### The asks
 
-**12a. A swing replay: why does the bench kick connect and the play kick not?** — the diagnosis everything else waits on.
+**12a. A swing replay: why does the bench kick connect and the play kick not?** — DONE 2026-09-08, see above: the ball is not where the swing goes, and nothing else is.
 Record, for 50 play swings, the full state at swing start (root pose, joint angles, walker phase, ball position and
 velocity, head/neck joints) and replay each on the bench from that exact state. Three candidates, each falsifiable:
 (i) the arrival pose — the walker's settle does not reach the standing HOME pose the kick trained from (compare joint
@@ -4354,6 +4359,55 @@ pushed by the settling feet in the last 0.3 s (ball speed at swing start; the re
 `probe_kick_line.py` with `--dump-swings out.jsonl`, and `bench_kick_headdown.py --from-swings out.jsonl`.
 Number: bench whiff from replayed play states. If it is 0 %, the sim of the swing is wrong; if it is ~90 %, one of
 (i)–(iii) is the cause and the recipe has to train on it.
+
+*Independent replication, 2026-09-08 (second agent, 386 swings over the 48 seeds the original funnel used;
+`scripts/replay_kick_swings.py`, a ladder of one-change-at-a-time cells).* Same conclusion, reached with a
+**positive control** the four-variant reading above cannot supply: all four of those variants leave the ball
+where play had it, so they show only what does *not* matter. Move the ball back onto the recipe's sweet spot
+and hold everything else — the exact recorded root pose, all 14 joint angles and velocities, the lagged
+`joint_vel` and `last_action` obs blocks, the servo targets:
+
+| replay cell (386 swings) | whiff | foot reached the ball | median travel |
+|---|---|---|---|
+| exact play state, ball where play had it | 56 % | 46 % | 0.00 m |
+| HOME pose, still, ball where play had it | 59 % | 43 % | 0.00 m |
+| **exact play state, ball on the recipe's spot** | **0 %** | **100 %** | **1.94 m** |
+| …and under the arena's whole swing protocol (Kp ×0.8, condim-6 rolling ball, 0.5 s window then the walker) | **0 %** | **100 %** | **1.33 m** |
+| the recipe's own reset (control) | 0 % | 100 % | 1.53 m |
+
+So the swing as the arena runs it is not damaged in any way: from the pose a duck really arrives in, it kicks
+the ball 1.3–1.9 m, *further* than from the recipe's own spawn. The three candidates are individually dead, not
+merely inert — (i) every LEG joint arrives within 0.052 rad of `C.DEFAULT_POSE` (worst per swing: median
+0.032, p90 0.042, never past 0.10; root speed 0.012 m/s, i.e. standing still); (ii) ball speed at the swing is
+a median 0.016 m/s; (iii) in 79 of 79 swings the only thing touching the ball is the **floor** — no foot, no
+shin. Nor is it the boards (ball-to-board median 0.87 m, never inside 0.10 m) or a crowding team-mate (whiff
+36 % when one is within 0.25 m, against 39 % overall).
+
+What remains is one number: how far the ball is from the spot the foot swings through. Measured radially
+(against the recipe's `BALL_OFFSET`, 0.09 ahead × 0.042 to the kicking foot's side) the funnel is monotone,
+which the "ahead" projection is not — a ball at the right distance on the wrong side lands in the same row as
+one the foot passes straight through:
+
+| ball's offset from the kick's sweet spot | swings | whiff |
+|---|---|---|
+| 0.00–0.03 m | 57 | **0 %** |
+| 0.03–0.06 m | 65 | 8 % |
+| 0.06–0.10 m | 60 | 20 % |
+| 0.10–0.20 m | 79 | 61 % |
+| ≥ 0.20 m | 125 | 86 % |
+
+and that offset is the stale plan, almost exactly: **corr(ball drift since the plan, offset from the spot) =
+0.96** (n = 386). By drift: < 0.05 m → 10 % whiff, 0.05–0.15 → 30 %, 0.15–0.30 → 68 %, ≥ 0.30 → 88 %.
+Rendered frames of one swing, the same state under two ball placements (misses, then 1.3 m):
+`scripts/render_kick_swing.py --which 33 --cell 4|2|10`.
+
+Two bench/play differences found while building this, neither the cause but both meaning the two harnesses
+were never the same experiment: `BehaviorEnv` defaults `obs_noise=True` even under `domain_rand=False`, so
+`bench_kick_headdown` grades the kick on **noisier** observations than the arena's noise-free `WorldDuck.obs`
+gives it; and the bench's ball is upstream's `ball.xml` at **condim 3**, where MuJoCo ignores the rolling
+coefficient entirely — the bench's 0 % was measured on the frictionless ball the 2026-09-06 audit removed from
+play. Recommendation (not applied — `behaviors/` is another agent's): if `bench_kick_headdown` is to stand in
+for play, it should pass `obs_noise=False` and set the ball geom to condim 6 / rolling 0.002.
 
 **12b. Train the kick on the ball where it actually is.** The recipe (`behaviors/kick.py`) spawns the ball at
 (0.09, ±0.042) ± 0.015, standing, resting. Play puts it at a median 0.13–0.15 m ahead, 0.07 m to the side, sometimes
@@ -4398,6 +4452,15 @@ inside 0.12 m ahead, or against a board, is pushed out to a kickable spot first,
 closed-loop "approach and kick" from 12a's state distribution with the ball in the observation (the striker env's
 contract carries it), rewarded on ball speed along the goal line — the walk-in, the settle and the swing as one
 policy instead of a planned spot plus a blind swing. Number: the funnel, against 12b+12c.
+
+**12i. A post-kick look that looks.** (Jonathan, from the /sim page, 2026-09-08: "it kicks and then shoots off to
+the opposite side".) After a swing the brain stands and looks for `look_s` 0.8 s at `look_range` 0.3 m — a range
+chosen for a whiffed ball 0.17 m ahead — then hunts the PREDICTED line (aim + exit angle) for 3 s. The exit scatter is
+40–70° a foot, 40–48 % of kicks leave on the other side of that line, and a kicked ball is 0.5–1.3 m out, outside the
+0.3 m gaze's frame; so the look sees nothing and the hunt walks away from the ball half the time. Ask: sweep the head
+yaw across the exit line's side, standing, at a gaze that covers 0.3–1.5 m, and hunt toward the sighting; the ToF-
+sideways objection to `look_aim` was about a yawed head while WALKING. Number: seconds from the swing to the next fresh
+sighting (probe_kick_line `reacq_s`), and the share of kicks followed by a sighting inside `hunt_s`.
 
 **Order.** 12a first — it is a day, and it decides between 12b (recipe) and 12c/12d/12e (sensing/timing). 12f and
 12g are independent of it and a morning each. 12h only after 12b has shown what a better swing is worth.
