@@ -646,6 +646,17 @@ class ChaseParams:
     # blind radius (4c), not a threshold to retune. Re-run this the day the
     # brain can see the ball inside 0.35 m — and not before.
     kick_side_max: float = 0.0
+    # The AHEAD gate (roadmap item 12a, 2026-09-08): the bench replay of 93
+    # play swings found the whiffs are the swings taken at a ball that is no
+    # longer in front of the foot - inside a 0.15 x 0.12 m box the swing
+    # connects 92% of the time, outside it 24% (465 swings) - and those far
+    # balls ARE visible at the line-up gaze (the floor from 0.12 m out), so
+    # unlike the side gate this one has coverage. A predicted ball further
+    # ahead than this refuses the swing and lays the line again from a fresh
+    # sighting; 0 = off. Measured with `gaze_still` (the numbers are on it):
+    # alone it fires on 5% of swings, since the track is stale at the swing
+    # without the held gaze (whiff 44 -> 38% on seeds 0-23).
+    kick_ahead_max: float = 0.15
     # Plan the kick spot for where the ball WILL be when the duck gets there,
     # not where it was last seen: at most this many seconds of lead, from the
     # track's own velocity and `ball_decel`. 0 = off.
@@ -931,6 +942,25 @@ class ChaseParams:
     # uncommitted floor - on the old floor it rolled to the boards like a
     # kick. When that floor is committed, one fresh block on it; if it
     # agrees, flip p_whiff to 0.5 and push to True.
+    #
+    # THAT BLOCK WAS RUN AND IT DISAGREED - the knob stays off for good
+    # (roadmap Track 4 item 13a, 2026-09-08). Every number above was
+    # measured on a pitch that was 85% a STATIONARY ball; the ball-out
+    # rule (item 11b) took dead time 247 -> 176 s and kicks 2.9 -> 7.8 a
+    # run, and on a pitch where the ball travels, push-first reverses on
+    # both blocks (3v3 with roles, --ball-out-s 5, 24 + 24 seeds paired):
+    # dead ball +35.5 s a run (p<0.001, worse on 45 of 48), kicks 8.60 ->
+    # 0.31 a run, ballAdvance -0.336 (p<0.001), ballProgress -0.168
+    # (p=0.019), the ball carried a kick 0.99 -> 0.02 m, crowd +0.068
+    # (p<0.001). Possession still reads +4.40 s/min (p<0.001) and that is
+    # the whole lesson: the pusher stands ON the ball by construction, so
+    # walking it 0.64 m books possession while the ball goes nowhere -
+    # playbook rule 5, "ask what would inflate your metric". On the dead
+    # pitch possession was the only instrument that could move, which is
+    # why this measured as a win three times. Rendered both arms and
+    # looked (record-world pitch-3v3, seed 3, 90 s): shipped, the ball
+    # crosses the pitch and there are six kicks; push-first, it crawls
+    # 1.15 m inside a six-duck scrum and there are none.
     kick_select_p_whiff: float = 0.0
     kick_select_push: bool = False
     # With the push on offer: prefer a SAFE push unless some kick scores in
@@ -964,6 +994,9 @@ class ChaseParams:
     # team compresses around a WALKED ball because every post is laid out
     # relative to the ball. Ships off; the lever is a supporter position
     # that anticipates the carrier, not a rule for the carrier.
+    # And now INERT: it gates only the push offer above, and push-first is
+    # measured off for good (item 13a). Not re-measured on the ball-out
+    # floor because there is nothing left for it to gate.
     defender_clears: bool = False
     # THE GAME STATE (roadmap Track 4 s6 B.3): with `kickoff_wait` on, after
     # a goal the side that SCORED stands off the restart - every duck of it
@@ -1028,6 +1061,11 @@ class ChaseParams:
     # +0.067 (p=0.026), falls 5 -> 12, and the kicks it takes - more of
     # them, 2.0 -> 2.5 a run - carry LESS (0.225 -> 0.159 m a kick):
     # a line that misses the body is a shorter, wider line. Ships off.
+    # RE-MEASURED on the ball-out floor and unchanged (roadmap item 13d,
+    # 3v3 with roles, 24 seeds, --ball-out-s 5): dead ball +9.6 s a run
+    # (p=0.096), kicks -0.92 (p=0.079), ballAdvance -0.065 (p=0.52),
+    # possession -0.70 (p=0.48), spread +0.112 (p=0.017), search +2.6 s a
+    # duck (p=0.021). The flowing pitch did not rescue it. Stays off.
     kick_select_opps: bool = False
     kick_select_obs_r: float = 0.15
     # THE SHARED BALL (roadmap Track 4 s6 C.3): with `fuse_ball` on, the
@@ -1045,6 +1083,14 @@ class ChaseParams:
     # point, a worse game: the fusion keeps claims up to 3 x stale_s, so
     # when the ball MOVES the board's ball lags toward where teammates
     # last saw it, and a supporter walks to a point it has left. Off.
+    # RE-MEASURED on the ball-out floor (roadmap item 13c, 3v3 with roles,
+    # 24 seeds, --ball-out-s 5) and the catastrophe does not reproduce -
+    # nor does anything else: dead ball +7.6 s (p=0.20), kicks -0.83
+    # (p=0.33), ballAdvance -0.138 (p=0.19), ballProgress -0.105 (p=0.34),
+    # possession +1.64 (p=0.14), shape flat, kicksBack 23% -> 22% of kick
+    # events (p=0.90). Own goals 4 -> 0 (p=0.032) is a coin at 24 seeds on
+    # a metric that needs 347. Stays off, but the honest statement is now
+    # "no measured effect", not "worse in play".
     fuse_ball: bool = False
     fuse_window: float = 0.5         # s: only claims this close to the freshest are fused (Team.fuse_window, measured)
     push_roll: float = 0.64          # m a walked-into ball rolls on this floor (benched 0.56-0.71)
@@ -1087,6 +1133,25 @@ class ChaseParams:
     # leaning the wrong way. So the knob ships OFF here and brain_kwargs
     # turns it on for a roster WITH A MIDFIELDER - the one it measured a
     # win on - unless the command line names it.
+    #
+    # RE-MEASURED ON THE BALL-OUT FLOOR (roadmap item 13b, 2026-09-08):
+    # it survives, on a different number than the one it was sold on. The
+    # arm is the knob turned OFF against the shipped ON (3v3 with roles,
+    # --ball-out-s 5, discovery 0-23 then fresh 100-123, paired). What
+    # replicated, same direction on both blocks: ballAdvance -0.199 with
+    # the field off (p=0.003 pooled 48) and the ball carried a kick
+    # -0.424 m (p=0.002) - the field's kicks move the ball further. What
+    # did NOT replicate and is withdrawn: the discovery block's dead-ball
+    # (-11.6 s, p=0.035) and kick-count (+1.21, p=0.032) gains, both flat
+    # on the fresh block (+1.8 p=0.74, +0.04 p=0.96). Possession is flat
+    # on both. The cost is falls, 0.17 -> 0.38 a run with the field on
+    # (p=0.043 over 48 runs): the supporter stands nearer the play.
+    # And `field_mid_ahead` -0.5 vs 0 is a NULL on the new floor (24
+    # seeds: advance -0.134 p=0.14, dead ball +4.7 p=0.51, kicks -0.13
+    # p=0.88, possession +0.14 p=0.90, shape flat) - the 2026-09-07
+    # possession win for holding the midfielder behind the ball does not
+    # reproduce once the ball moves. -0.5 is kept because nothing argues
+    # against it, not because it earns its keep.
     support_field: bool = False
     field_lane: float = 0.2
     field_wide: float = 0.5
@@ -1260,7 +1325,20 @@ class ChaseParams:
     # cannot swing. The fix is in the kick policy's training distribution,
     # or a settle that raises the head in its last ~0.3 s (not built).
     # Roadmap Track 4 item 7, the correction.
-    gaze_still: bool = False
+    #
+    # ON since 2026-09-08 (roadmap item 12c): the kicks are the local ones
+    # now, which do not whiff head-down, and the swing replay (12a) showed
+    # the whiffs are swings at a ball that drifted out of reach while the
+    # track went stale (median 1.8 s old at the swing, in 100% of the
+    # far-ball swings). Held with `kick_ahead_max` the gaze is what gives
+    # the gate its coverage: whiff 44 -> 31% (seeds 0-23) and 51 -> 41%
+    # (100-123), connected kicks a run 3.6 -> 3.6 on the fresh block; the
+    # 2v2 ledger over 24 seeds: possession +0.2 s/min (p 0.70), progress
+    # +0.03 (p 0.59), goals 19 -> 25 (p 0.27), back-kicks 1.9 -> 1.25
+    # (p 0.04), swings 7.8 -> 6.0 a run (p 0.01: the blind ones), falls
+    # flat. Alone (no gate) it sees the ball on 54% of swings and changes
+    # nothing (45% whiff): seeing is only worth what the gate does with it.
+    gaze_still: bool = True
     # The settle that raises the head: with `gaze_still` the line-up gaze
     # puts the ball on the sweet spot and leaves the head pitched where the
     # kick skill cannot swing (benched: 12 of 12 whiffs from a head joint at
@@ -1353,6 +1431,20 @@ class ChaseParams:
     # ahead). A search dips the head every `search_dip_every`.
     look_s: float = 0.8
     look_range: float = 0.3
+    # The look that LOOKS (roadmap item 12i, 2026-09-08): with `look_sweep`
+    # > 0 rad the standing look after a kick gazes at `look_sweep_range`
+    # (a kicked ball is 0.5-1.3 m out, not the 0.3 m above, which is a
+    # whiffed ball's) and sweeps the head yaw +- that amplitude around the
+    # predicted exit line over `look_s`, so a ball that left on the other
+    # side of the line (40-48% do; scatter 40-70 deg a foot) is seen before
+    # the hunt walks away from it. The ToF-sideways objection to `look_aim`
+    # was a yawed head while WALKING; here the duck stands. 0 = off.
+    # MEASURED (with gaze_still + kick_ahead_max, 24 seeds x 300 s of 2v2 a
+    # block): connected kicks seen again within 2 s 37 -> 46% (seeds 0-23),
+    # whiff 31 -> 26% there and 41 -> 38% on the fresh block (100-123),
+    # connected kicks a run 3.8 -> 4.2 / 3.6 -> 3.8. Ships at 0.8 rad.
+    look_sweep: float = 0.8
+    look_sweep_range: float = 1.0
     # The kick map says where the ball goes BEFORE it moves: +21.6 deg for
     # the left foot, -11 for the right, off the body heading. `look_aim`
     # yaws the look after a kick to that angle, at `look_aim_range` (near
@@ -2484,6 +2576,7 @@ class Chase:
         head = (0.0, 0.0, 0.0, 0.0)
         gaze_at: float | None = None
         gaze_yaw = 0.0
+        look_yaw: float | None = None                       # the post-kick sweep (look_sweep)
         retreating = t - self._retreat_t0 < p.retreat_turn_s + p.retreat_walk_s
         if self._prev_skill is not None and senses.skill is None:
             self._look_t0 = t                                   # the kick window just ended: look for the ball ahead
@@ -2528,6 +2621,11 @@ class Chase:
         elif looking:
             vx, wz = 0.0, 0.0
             gaze_at = p.look_aim_range if p.look_aim else p.look_range
+            if p.look_sweep > 0.0:
+                gaze_at = p.look_sweep_range
+                centre = _wrap(self._hunt_u - odom[2]) if self._hunt_u is not None else 0.0
+                phase = (t - self._look_t0) / max(p.look_s, 1e-6)
+                look_yaw = centre + p.look_sweep * math.sin(2.0 * math.pi * phase)
             self.state = "look"
         elif retreating:
             if t - self._retreat_t0 < p.retreat_turn_s:
@@ -2669,7 +2767,7 @@ class Chase:
                         self.state = "push"
                         self.t_state = t
                         vx, wz = p.push_speed, 0.0
-                    elif self._too_wide(odom):
+                    elif self._too_wide(odom) or self._too_far(odom):
                         # The geometry says this one misses. Drop the spot
                         # and walk it again rather than spend a touch on a
                         # shot already 20-plus degrees wide.
@@ -2844,6 +2942,8 @@ class Chase:
             if p.yaw_clear > 0.0 and ahead < p.yaw_clear:
                 gyaw = 0.0
             head = self._head_pose(self._gaze(gaze_at), gyaw)
+        if look_yaw is not None and self.state == "look":
+            head = self._head_pose(self._gaze(gaze_at), float(np.clip(look_yaw, -p.head_yaw_max, p.head_yaw_max)))
         look_at = pred_bearing if pred_bearing is not None else (
             ball.bearing if p.predict_s > 0 and ball is not None and ball.age(t) <= p.predict_s else None)
         if look_at is None and self.state == "look" and p.look_aim and self._last_foot is not None:
@@ -2907,6 +3007,18 @@ class Chase:
         dx, dy = self.predicted[0] - odom[0], self.predicted[1] - odom[1]
         side = -dx * math.sin(odom[2]) + dy * math.cos(odom[2])
         return abs(side) > self.p.kick_side_max
+
+    def _too_far(self, odom) -> bool:
+        """Is the ball too far AHEAD for this swing to reach it?
+        (`kick_ahead_max`; False when the knob is off or nothing fresh has
+        been seen.) The plan's own ball sits `kick_ahead` = 0.08 m out by
+        construction; a predicted ball beyond the gate means the plan went
+        stale while the duck walked in (median plan age 3.6 s)."""
+        if self.p.kick_ahead_max <= 0.0 or self.predicted is None:
+            return False
+        dx, dy = self.predicted[0] - odom[0], self.predicted[1] - odom[1]
+        ahead = dx * math.cos(odom[2]) + dy * math.sin(odom[2])
+        return ahead > self.p.kick_ahead_max
 
     def _kick_heading(self, foot: str, u: float) -> float:
         """The line the ball actually leaves on: aim heading plus the in-play

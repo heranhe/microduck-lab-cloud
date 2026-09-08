@@ -379,3 +379,49 @@ def test_a_safe_push_that_scores_beats_one_that_only_stands_well():
     v = select((1.2, 0.0), [(0.0, "push"), (math.pi / 2, "push")], KickModel(), pitch,
                np.random.default_rng(0), n=20, shoot=0.3, models={"push": pm})
     assert v is not None and v.foot == "push" and v.p_goal == 1.0 and abs(v.heading) < 1e-9
+
+
+def test_a_predicted_ball_too_far_ahead_refuses_the_swing_when_the_gate_is_on():
+    """Roadmap item 12a: replaying 93 play swings on the bench found the
+    whiffs are swings at a ball no longer in front of the foot (inside a
+    0.15 x 0.12 m box 8% whiff, outside 76%). `kick_ahead_max` refuses those
+    from the fresh predicted ball; ships at 0.15 with `gaze_still` (measured: whiff
+    44 -> 31% and 51 -> 41% on two blocks, the ledger flat or better)."""
+    assert ChaseParams().kick_ahead_max == 0.15 and ChaseParams().gaze_still is True   # shipped 2026-09-08 (item 12c)
+    b = Chase(ChaseParams(kick_ahead_max=0.15), goal=(1.5, 0.0))
+    odom = (0.0, 0.0, 0.0)
+    b.predicted = None
+    assert b._too_far(odom) is False                                  # nothing fresh: the plan's ball stands
+    b.predicted = (0.09, 0.05)
+    assert b._too_far(odom) is False                                  # on the sweet spot
+    b.predicted = (0.25, 0.0)
+    assert b._too_far(odom) is True                                   # drifted out of reach
+    b.predicted = (-0.20, 0.0)
+    assert b._too_far(odom) is False                                  # behind: not this gate's business
+    b = Chase(ChaseParams(kick_ahead_max=0.0), goal=(1.5, 0.0))
+    b.predicted = (0.5, 0.0)
+    assert b._too_far(odom) is False                                  # off
+
+
+def test_the_post_kick_look_sweeps_the_head_around_the_exit_line_when_asked():
+    """Roadmap 12i: with `look_sweep` on, the standing look after a kick
+    gazes at `look_sweep_range` and yaws around the predicted line; off, the
+    head stays where it was (the shipped brain, to the bit)."""
+    from microduck_local.brain.runtime import Senses
+    for sweep in (0.0, 0.8):
+        b = Chase(ChaseParams(look_sweep=sweep, hunt_s=3.0), goal=(1.5, 0.0))
+        b.reset()
+        b._hunt_u = 0.5                                        # the kick's predicted line, 0.5 rad left
+        b._look_t0 = 10.0
+        yaws = []
+        for k in range(20):
+            t = 10.0 + k * 0.04
+            intent = b.step(Senses(t=t, tof=None, tof_age=None, det=None, det_age=None, speed=0.0,
+                                   odom=(0.0, 0.0, 0.0), skill=None, bumped=False))
+            if b.state == "look":
+                yaws.append(float(intent.head[2]))
+        assert b.state in ("look", "hunt", "search")
+        if sweep == 0.0:
+            assert all(abs(y) < 1e-9 for y in yaws)
+        else:
+            assert yaws and max(yaws) > 0.9 and min(yaws) < 0.1        # sweeps to the left of 0.5 and back across it

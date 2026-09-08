@@ -3604,6 +3604,67 @@ this stack has none of them.
       configuration falls again (the fused-ball arm fell 8 times in 24,
       push-first 4) and on the day the get-up costs its real 10–20 s; the
       knob is there for both.
+
+      **The first half is now built too, and the premise above is wrong
+      twice (2026-09-08).** Building the bench for it —
+      `microduck_local/scripts/bench_getup.py`, which spawns the duck on
+      its back / front / side, lets the physics SETTLE it (1 s, servos
+      holding what they fell in: unsettled, the duck is still arriving and
+      a policy can cash its unspent potential energy — `alpha_stand`
+      "recovered" from that in 0.4 s, which measures the arrival) and then
+      scores the recipe's own four-gate stand — turned up the thing this
+      item said did not exist:
+
+      | policy | back | front | side | head up? |
+      |---|---|---|---|---|
+      | limp / zero (null control) | 0% | 0% | 0% | — |
+      | `alpha_walking` | 0% | 0% | 0% | — |
+      | `alpha_sitstand` | 0% | 0% | 0% | — |
+      | `alpha_ground_pick` | 0% | 75% | 0% | 0% |
+      | **`alpha_stand`** | **100%** | **100%** | **100%** | **100%** |
+      | `getup-flat-scratch` (control, no ladder) | 0% | 83% | 0% | 0% |
+      | **`getup-l2`** (this repo, 3.5M steps) | **100%** | **100%** | **100%** | **100%** |
+      | `getup-l5` (ladder tip, 10M steps) | 100% | 100% | 100% | 0% |
+
+      12 seeds a pose, honest BAM, observation noise + domain
+      randomization + the action delay on, deterministic exported ONNX,
+      rendered and read. **`alpha_stand.onnx` already does the get-up** —
+      flat on its back to a full held stand in 0.48 s median, jaw back at
+      0.234 m against the STAND keyframe's 0.233 — so "the shipped
+      policies have no floor-to-stand" was never true, and
+      `Mjlab-StandUp-Flat-MicroDuck` (bead mdl-0ad) is not what stands
+      between this project and a get-up.
+
+      **What IS missing is a controller switch, not a policy.** A duck that
+      falls on the pitch is still being driven by the walker, and
+      `alpha_walking` recovers 0 of 24. Under `getup_s` it lies on a zero
+      command; without it, `arena.py` teleports. Handing a fallen duck to
+      `alpha_stand` for ~1.5 s and clearing `down_until` when it stands
+      would replace the teleport with a real recovery **today, with nothing
+      trained**, and give `getup_s` a measured price (0.2–1.3 s, not the
+      assumed 10–20 s) instead of a guessed one. That is the next move on
+      this item, and it belongs in `world/arena.py`.
+
+      **Trained here anyway, and it works** (`behaviors/getup.py`,
+      `scripts/train_getup_ladder.sh`, ~35 min on a busy Mac). The control
+      run settles the ladder's own justification: the LAST rung's config
+      trained from scratch for 2M steps learns the front push-up (83%) and
+      nothing from the back or the side, and it is not a reward problem —
+      scored under this very recipe, `alpha_stand` earns 13.2/step against
+      that run's 3.3. The reward is right; flat-on-the-floor rollouts just
+      never contain a stand. Laddering the PHYSICS (tilt 20→115°, settle
+      0→1 s, XML servos → honest BAM; identical terms in every rung, locked
+      by `tests/test_behaviors.py`) closes it by rung TWO: `getup-l2` at
+      3.5M steps recovers 36 of 36 and holds the stand unbroken for 20 s.
+      A trap worth keeping: **rungs 3–5 keep the recovery and lose the
+      head** — the head-up column goes 100% → 3% → 0% → 0% while the trunk
+      stays at full height and perfectly upright, because the recipe prices
+      head POSE (joint angles, weight 0.8) and not head HEIGHT, so once the
+      starts get hard the head is a free counterweight. `getup-l2` is the
+      artifact; a future revision should put head height inside the salary
+      gate. Caveat as always: this is the local CPU harness under the BAM
+      actuator model, a subset of upstream's DR — a get-up that survives
+      here is a prototype, not a hardware claim.
 - [x] **B.2 A goalkeeper — BUILT, and measured off in 2v2 (2026-09-07).**
       A fourth static role, `keeper`: its zone is the last fifth in front of
       its own mouth (`Team.ROLE_ZONES`, the field players share the rest as
@@ -4197,8 +4258,12 @@ floor being committed; B.2 (a keeper) and B.3 (a game state) are built,
 the keeper off and the game state on; C.1–C.3 (the ball's sigma, the
 goal-post localiser, the fused team ball) are built and measured against
 the truth; C.4's opponent list and D.2's field are built and measured in
-play, each paying in one configuration and not the other. What is left
-needs a GPU (A.2 a learned kick, B.1 a get-up, E.1–E.3) or a colour sense
+play, each paying in one configuration and not the other. B.1 (a get-up)
+came off the GPU list on 2026-09-08: `alpha_stand` already does it (36 of
+36 from back, front and side) and `getup-l2` reproduces it locally in
+3.5M steps, so what is left there is a controller switch in `arena.py`,
+not a training run. What is left needs a GPU (A.2 a learned kick,
+E.1–E.3) or a colour sense
 that survives contact range (the duel, C.4's second half). E still says
 the field's learned results *kept the honest camera and rewarded looking*,
 which is the opposite of the shortcut that would make a striker look good
@@ -4547,9 +4612,10 @@ ball further ahead than that refuses the swing and lays the line again) together
 settle keep the head on the ball's last place, so the track is fresh when the gate reads it — the track was a median
 1.8 s old at the swing before, in 100 % of the far-ball swings, and the gate alone fired on 5 % of swings). Whiff
 44 → 31 % on seeds 0–23 and 51 → 41 % on the fresh block 100–123 (pooled 47 → 36 %), connected kicks a run 3.6 → 3.6
-on the fresh block; the 2v2 ledger over 24 seeds: possession +0.2 s/min (p 0.70), progress +0.03 (p 0.59), goals
-19 → 25 (p 0.27), back-kicks 1.9 → 1.25 (p 0.04), swings 7.8 → 6.0 a run (p 0.01 — the blind ones), own goals and
-falls flat. `gaze_still` alone sees the ball on 54 % of swings and changes nothing (45 % whiff). Still open here: the
+on the fresh block; the 2v2 ledger, two blocks of 24 seeds (0–23 without the sweep, 100–123 with it, 48 paired): possession
++0.4 s/min (p 0.29), progress −0.03 (p 0.42; the fresh block alone read −0.095 at p 0.048, the first +0.03 — a
+sign flip, not an effect), advance −0.02 (p 0.53), goals 42 → 49 (p 0.39), back-kicks 1.9 → 1.4 (p 0.03), swings
+8.2 → 6.1 a run (p < 0.001 — the blind ones), own goals and falls flat. `gaze_still` alone sees the ball on 54 % of swings and changes nothing (45 % whiff). Still open here: the
 per-tick re-plan inside `approach_back`, and the head's side coverage (the side gate `kick_side_max` stays off). The plan is made once (median 3.6 s before the swing) and walked to. Re-plan
 the spot every tick from the freshest ball while inside `approach_back` (0.22 m), and gate the swing on the ball being
 inside the kick's box *now* (from the tracker, with the sigma the tracker already carries): no swing at a ball the
@@ -4587,7 +4653,7 @@ closed-loop "approach and kick" from 12a's state distribution with the ball in t
 contract carries it), rewarded on ball speed along the goal line — the walk-in, the settle and the swing as one
 policy instead of a planned spot plus a blind swing. Number: the funnel, against 12b+12c.
 
-**12i. A post-kick look that looks.** (Jonathan, from the /sim page, 2026-09-08: "it kicks and then shoots off to
+**12i. A post-kick look that looks.** — SHIPPED 2026-09-08 as `look_sweep` 0.8 rad at `look_sweep_range` 1.0 m (with 12c's knobs): connected kicks seen again within 2 s 37 → 46 % (seeds 0–23), whiff 31 → 26 % there and 41 → 38 % on the fresh block, connected kicks a run 3.8 → 4.2 and 3.6 → 3.8; the ledger check is in 12c's paragraph. (Jonathan, from the /sim page, 2026-09-08: "it kicks and then shoots off to
 the opposite side".) After a swing the brain stands and looks for `look_s` 0.8 s at `look_range` 0.3 m — a range
 chosen for a whiffed ball 0.17 m ahead — then hunts the PREDICTED line (aim + exit angle) for 3 s. The exit scatter is
 40–70° a foot, 40–48 % of kicks leave on the other side of that line, and a kicked ball is 0.5–1.3 m out, outside the

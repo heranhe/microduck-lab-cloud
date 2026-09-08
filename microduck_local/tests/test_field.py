@@ -216,7 +216,9 @@ def test_a_supporter_gazes_at_a_ball_it_sees_only_with_support_gaze():
     for on in (False, True):
         tm = Team("left", half_x=1.75)
         tm.jobs = {"d0": "defender", "d2": "striker"}
-        b = Chase(ChaseParams(support_gaze=on), goal=(1.75, 0.0), team=tm, duck_id="d2",
+        # `gaze_still` (on since 2026-09-08) also lets a STANDING duck hold a gaze it
+        # has; off here so this measures `support_gaze` alone, as it was written.
+        b = Chase(ChaseParams(support_gaze=on, gaze_still=False), goal=(1.75, 0.0), team=tm, duck_id="d2",
                   bounds=BOUNDS, goal_w=0.7, role="striker")
         tm.claim("d0", 10.0, 0.15, (-0.6, 0.0), (-0.7, 0.0, 0.0))           # the defender is on a ball in its own half
         odom = (-0.6, 0.6, -math.pi / 2)                                      # the striker, 0.6 m off, facing it
