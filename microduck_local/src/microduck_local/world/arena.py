@@ -339,6 +339,13 @@ class World:
         # lab's pitch builtins turn it on (world_server).
         self.ball_out_s = float(ball_out_s)
         self.ball_out_m, self.ball_out_in = 0.20, 0.45
+        # …and never placed ON a duck. The duck that was lining up on the ball
+        # is standing about `kick_ahead` + `kick_side` (~0.12 m) from it when
+        # the rule fires, so the spot the ball is moved to is exactly where a
+        # body may be. A ball dropped inside one interpenetrates and the
+        # solver flings both apart — the same failure `_clear_of_persons`
+        # exists for on the respawn path (the physics audit's "fling").
+        self.ball_out_clear = 0.25
         self._ball_rest_t0: float | None = None
         self.ball_outs = 0
         self.model = compose(scenario)
@@ -603,10 +610,34 @@ class World:
             # handing the other a centred close-range chance, which is not
             # what a throw-in does. Put it beside the mouth instead.
             ny = float(np.clip(math.copysign(half + self.ball_out_m, ny or 1.0), -hy + m, hy - m))
+        nx, ny = self._clear_of_ducks(nx, ny, hx, hy)
         self.data.qpos[q:q + 3] = [nx, ny, self.scenario.balls[0].radius + 0.005]
         self.data.qvel[v:v + 6] = 0.0
         self.ball_outs += 1
         self._ball_rest_t0 = None
+
+    def _clear_of_ducks(self, x: float, y: float, hx: float, hy: float) -> tuple[float, float]:
+        """Step a ball-out placement off any duck standing on it (see
+        `ball_out_clear`), pushed straight out from that duck and kept inside
+        the boards. Two passes: moving clear of one body can walk into
+        another, and on a crowded pitch the second pass settles it."""
+        m = self.ball_out_in
+        for _ in range(2):
+            moved = False
+            for d in self.ducks.values():
+                p = d.trunk_pos(self.data)
+                dx, dy = x - float(p[0]), y - float(p[1])
+                r = math.hypot(dx, dy)
+                if r >= self.ball_out_clear:
+                    continue
+                if r < 1e-6:
+                    dx, dy, r = 1.0, 0.0, 1.0          # dead centre: any direction will do
+                x = float(np.clip(float(p[0]) + dx / r * self.ball_out_clear, -hx + m, hx - m))
+                y = float(np.clip(float(p[1]) + dy / r * self.ball_out_clear, -hy + m, hy - m))
+                moved = True
+            if not moved:
+                break
+        return x, y
 
     def kickoff(self) -> None:
         """Restart play: the ball on the centre spot (a few centimetres of

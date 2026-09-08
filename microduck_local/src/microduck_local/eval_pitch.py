@@ -198,26 +198,41 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float,
         return {}
     done: dict[int, dict] = {}
     with open(path) as fh:
-        for n, line in enumerate(fh, 1):
-            line = line.strip()
-            if not line:
-                continue
+        lines = fh.readlines()
+    last = len(lines)
+    for n, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
             r = json.loads(line)
-            if (r.get("tag", ""), r.get("perSide"), r.get("seconds")) != (tag, per_side, seconds):
+        except json.JSONDecodeError as e:
+            # A battery is killed mid-write often enough here (this machine
+            # reclaims its container) that the LAST line of the file can be
+            # half a row. That seed simply was not measured: drop it and
+            # resume, which is the whole point of the file. Anywhere else it
+            # is corruption, and silently skipping rows would quietly shrink
+            # a battery — so that is fatal, and says which line.
+            if n == last:
+                print(f"{path}:{n}: last line is truncated ({e.msg}); that seed will be re-run", flush=True)
+                continue
+            raise SystemExit(f"{path}:{n} is not valid JSON ({e.msg}). The file is corrupt, not merely "
+                             "interrupted — a truncated row is only ever the last one.") from e
+        if (r.get("tag", ""), r.get("perSide"), r.get("seconds")) != (tag, per_side, seconds):
+            raise SystemExit(
+                f"{path}:{n} was measured with tag={r.get('tag', '')!r} perSide={r.get('perSide')} "
+                f"seconds={r.get('seconds')}, not tag={tag!r} perSide={per_side} seconds={seconds}. "
+                "Write a different variant to a different file.")
+        for k, want in (knobs or {}).items():
+            got = float(r.get(k) or 0.0)              # a row from before the knob: its default
+            if got != float(want):
                 raise SystemExit(
-                    f"{path}:{n} was measured with tag={r.get('tag', '')!r} perSide={r.get('perSide')} "
-                    f"seconds={r.get('seconds')}, not tag={tag!r} perSide={per_side} seconds={seconds}. "
-                    "Write a different variant to a different file.")
-            for k, want in (knobs or {}).items():
-                got = float(r.get(k) or 0.0)              # a row from before the knob: its default
-                if got != float(want):
-                    raise SystemExit(
-                        f"{path}:{n} was measured with {k}={got}, not {k}={float(want)}. That is a different "
-                        "world, not a resume: pass the same flags, or write it to a different file.")
-            for f in ROW_FIELDS:
-                r.setdefault(f, None)
-            r.setdefault("goalsUnattributed", None)
-            done[int(r["seed"])] = r
+                    f"{path}:{n} was measured with {k}={got}, not {k}={float(want)}. That is a different "
+                    "world, not a resume: pass the same flags, or write it to a different file.")
+        for f in ROW_FIELDS:
+            r.setdefault(f, None)
+        r.setdefault("goalsUnattributed", None)
+        done[int(r["seed"])] = r
     return done
 
 

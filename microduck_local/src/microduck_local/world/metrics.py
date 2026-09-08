@@ -214,6 +214,14 @@ class PitchMetrics:
         pos = self.positions() if pos is None else pos
         best, best_d = None, math.inf
         for did, (x, y) in pos.items():
+            if self.w.ducks[did].down_until > self.w.t:
+                # Lying where it fell (`World.getup_s`), on a zero command,
+                # for as long as a get-up would cost. It is not "on the
+                # ball" in any sense the possession clock means, and while
+                # it lay there it was also the `_holder` credited with the
+                # ball's motion — a duck flat on the floor beside the ball
+                # was being paid for whatever the other side did to it.
+                continue
             r = math.hypot(x - ball[0], y - ball[1])
             if r < best_d:
                 best, best_d = did, r

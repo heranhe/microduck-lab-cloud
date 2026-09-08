@@ -3181,6 +3181,30 @@ What is left, in the order it is worth doing:
    is that session's commit to make, and its staged index already holds
    the correct content for all four.
 
+   **Three more, from the parallel session's read of the same code
+   (2026-09-08).** All in the ball-out rule's own files, all fixed with a
+   test in `tests/test_ball_out.py`:
+
+   - **A battery killed mid-write could not resume.** `load_done` parsed
+     every line, so the half-row this machine leaves when it reclaims a
+     container took the whole file down. A truncated LAST line is now
+     dropped with a note (that seed is simply re-run); a bad line anywhere
+     else is fatal, because silently skipping rows would quietly shrink a
+     battery.
+   - **A duck lying where it fell held the ball.** Under `getup_s` a fallen
+     duck lies on a zero command for as long as a get-up would cost, and it
+     was still the nearest duck to the ball — so it took the possession
+     clock and became the `_holder` credited with the ball's motion. A duck
+     flat on the floor was being paid for whatever the other side did to
+     the ball. `PitchMetrics.nearest` now skips a duck that is down.
+   - **The placement could drop the ball inside a duck.** The duck lining
+     up on the ball stands ~0.12 m from it, which is where the rule moves
+     the ball; a ball placed inside a body interpenetrates and the solver
+     flings both apart — the failure `_clear_of_persons` already exists for
+     on the respawn path (the physics audit's "fling"). The placement now
+     steps out to `ball_out_clear` (0.25 m) from any duck, still inside the
+     boards.
+
    **(c) In the open, line-ups die to `avoid` in 0.4 s** — 263 of 508
    3v3 exits, with the ball 0.43 m away and another duck 0.33 m ahead,
    70% of them an OPPONENT (87% in 2v2). Two attackers meet at the ball,

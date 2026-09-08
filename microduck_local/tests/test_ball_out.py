@@ -296,3 +296,84 @@ def test_a_resume_refuses_rows_measured_under_a_different_world(tmp_path):
     assert set(load_done(str(f), "a", 3, 300.0, {"ballOutS": 0.0, "getupS": 0.0})) == {1}
     with pytest.raises(SystemExit, match="ballOutS"):
         load_done(str(f), "a", 3, 300.0, {"ballOutS": 5.0, "getupS": 0.0})
+
+
+# --- the three the parallel session left behind (2026-09-08) ---
+
+
+def test_a_battery_killed_mid_write_resumes_from_its_truncated_file(tmp_path, capsys):
+    """This machine reclaims its container mid-run, so the LAST line of a
+    --out file is regularly half a row. That seed was simply not measured;
+    anywhere else a bad line is corruption and must not be skipped quietly."""
+    from microduck_local.eval_pitch import load_done
+    f = tmp_path / "x.jsonl"
+    good = {"seed": 0, "tag": "a", "perSide": 3, "seconds": 300.0}
+    f.write_text(json.dumps(good) + "\n" + json.dumps({"seed": 1, **good})[:40])   # cut mid-row
+    got = load_done(str(f), "a", 3, 300.0)
+    assert set(got) == {0}                                           # seed 1 comes back to be re-run
+    assert "truncated" in capsys.readouterr().out
+    # A blank final line is not truncation and nothing is said about it.
+    f.write_text(json.dumps(good) + "\n\n")
+    assert set(load_done(str(f), "a", 3, 300.0)) == {0}
+    assert "truncated" not in capsys.readouterr().out
+    # Corruption in the MIDDLE is fatal: skipping it would shrink the battery.
+    f.write_text("{ this is not json\n" + json.dumps(good) + "\n")
+    with pytest.raises(SystemExit, match="corrupt"):
+        load_done(str(f), "a", 3, 300.0)
+
+
+def test_a_duck_lying_where_it_fell_holds_neither_the_ball_nor_its_progress():
+    """With `getup_s` a fallen duck lies on a zero command for as long as a
+    get-up would cost. It was still the nearest duck to the ball, so it took
+    the possession clock and became the holder credited with the ball's
+    motion — a duck flat on the floor being paid for what the other side did."""
+    from microduck_local.world.metrics import PitchMetrics
+    sc = make_pitch(per_side=1)
+    w = World(sc, seed=0, getup_s=5.0)
+    m = PitchMetrics(w, {d.id: (d.team or d.id) for d in sc.ducks})
+    j = w._ball_joint
+    q = int(w.model.jnt_qposadr[j])
+    d0 = w.ducks["d0"]
+    p = d0.trunk_pos(w.data)
+    w.data.qpos[q:q + 2] = [float(p[0]) + 0.05, float(p[1])]         # the ball at its feet
+    mujoco.mj_forward(w.model, w.data)
+    who, r = m.nearest()
+    assert who == "d0" and r < 0.25                                  # upright: it is on the ball
+    d0.down_until = w.t + 5.0                                        # …and now it is on the floor
+    who, r = m.nearest()
+    assert who != "d0"
+    poss = dict(m.possession)
+    m.tick()
+    assert m.possession == poss                                      # no clock for a duck lying down
+    assert m._holder != (sc.ducks[0].team)
+
+
+def test_the_placement_never_drops_the_ball_inside_a_duck():
+    """The duck that was lining up on the ball stands ~0.12 m from it, which
+    is where the rule moves the ball to. A ball placed inside a body
+    interpenetrates and the solver flings both apart — the failure
+    `_clear_of_persons` already exists for on the respawn path."""
+    from microduck_local.world.compose import spawn_duck
+    sc = make_pitch(per_side=1)
+    w = World(sc, seed=0, ball_out_s=1.0)
+    j = w._ball_joint
+    q, v = int(w.model.jnt_qposadr[j]), int(w.model.jnt_dofadr[j])
+    hx, hy = sc.floor[0] / 2 - 0.25, sc.floor[1] / 2 - 0.25
+    bx, by = 0.3, hy - 0.05                                          # against the side board
+    # Park a duck exactly where the placement would otherwise land.
+    spawn_duck(w.model, w.data, w.ducks["d0"].adr, bx, hy - w.ball_out_in, 0.0)
+    mujoco.mj_forward(w.model, w.data)
+    for _ in range(200):
+        w.data.qpos[q:q + 3] = [bx, by, sc.balls[0].radius + 0.005]
+        w.data.qvel[v:v + 6] = 0.0
+        outs = w.ball_outs
+        w.step()
+        if w.ball_outs != outs:
+            break
+    else:
+        raise AssertionError("the ball-out rule never fired")
+    ball = (float(w.data.qpos[q]), float(w.data.qpos[q + 1]))
+    for did, d in w.ducks.items():
+        p = d.trunk_pos(w.data)
+        assert math.dist(ball, (float(p[0]), float(p[1]))) >= w.ball_out_clear - 0.02, did
+    assert hx - abs(ball[0]) >= 0 and hy - abs(ball[1]) >= 0         # …and still on the pitch
