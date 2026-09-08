@@ -4310,3 +4310,94 @@ tests):
   wants precise bearing for gaze and following) or "find the charging dock".
   A second target is a cheap test of whether the recipe generalizes or whether
   it memorized a ball-sized blob.
+
+
+## Track 4, item 12 — the last 30 centimetres (2026-09-08): a ball at the feet is lost, then missed — ASKS
+
+**The complaint, from the /sim page.** A duck walks the ball to the boards, has it at its feet, loses track of it,
+swings, misses, and the ball is exactly where it was. With the rolling-resistance floor (2026-09-06) the ball no longer
+runs away, so it sits at somebody's feet more of the run than ever — and the funnel below says the feet are where
+this stack is weakest. Nothing below is a knob sweep of what exists; each ask is a different mechanism with the number
+that would settle it.
+
+**The funnel, measured this morning** (`probe_kick_line.py --ball-out-s 5`, 48 seeds × 300 s of 2v2, 372 swings,
+local kicks, exits from the sidecars):
+
+| where the ball was at the swing (from the root, yaw frame) | swings | moved < 10 cm |
+|---|---|---|
+| 0.00–0.08 m ahead | 37 | 86 % |
+| 0.08–0.11 m ahead (`kick_ahead` = 0.08: where the plan puts it) | 83 | **94 %** |
+| 0.11–0.15 m ahead | 74 | 81 % |
+| 0.15–0.20 m ahead | 44 | 27 % |
+| ≥ 0.20 m ahead | 131 | 2 % |
+| **on the sweet spot** (0.06–0.10 ahead, 0.04–0.08 side) | 29 (8 %) | **100 %** |
+
+Whiff overall 50 %. The bench (`bench_kick_headdown.py`, the same offsets from the same root frame, standing start)
+whiffs **0 %** from 0.09 m ahead. So the swing that connects on the bench does not connect in play from the same
+spot, and the swings that "connect" in play are the ones where the ball was 20 cm out — which is the duck stepping
+into it, not the foot swinging through it. The line-up itself is fine: trunk-to-spot at the swing median 0.019 m
+(`lineup_tol` 0.03). The plan is stale: median age 3.6 s, spot-to-ball 0.166 m against the 0.08 planned, ball drift
+since the plan 0.06 m median, 0.29 m at the 90th percentile. And the camera cannot see the spot it is kicking at
+unless the head is down: at the level command the floor is visible from 0.30 m out; at the 0.6 command, from 0.12 m
+to 0.90 m — the head joint at the swing is a median 0.40 rad, i.e. the ball at 0.08 m is *below the frame* at the
+moment that matters, and the tracker's dead reckoning is what the swing fires on.
+
+### The asks
+
+**12a. A swing replay: why does the bench kick connect and the play kick not?** — the diagnosis everything else waits on.
+Record, for 50 play swings, the full state at swing start (root pose, joint angles, walker phase, ball position and
+velocity, head/neck joints) and replay each on the bench from that exact state. Three candidates, each falsifiable:
+(i) the arrival pose — the walker's settle does not reach the standing HOME pose the kick trained from (compare joint
+angles at the swing with `C.DEFAULT_POSE`; the kick recipe spawns from HOME ± nothing); (ii) the ball is moving —
+pushed by the settling feet in the last 0.3 s (ball speed at swing start; the recipe trains on a resting ball);
+(iii) the standing leg — with the ball at 0.08 m the support foot or the shin hits it first. Command: extend
+`probe_kick_line.py` with `--dump-swings out.jsonl`, and `bench_kick_headdown.py --from-swings out.jsonl`.
+Number: bench whiff from replayed play states. If it is 0 %, the sim of the swing is wrong; if it is ~90 %, one of
+(i)–(iii) is the cause and the recipe has to train on it.
+
+**12b. Train the kick on the ball where it actually is.** The recipe (`behaviors/kick.py`) spawns the ball at
+(0.09, ±0.042) ± 0.015, standing, resting. Play puts it at a median 0.13–0.15 m ahead, 0.07 m to the side, sometimes
+rolling, with the duck arriving from a walk. The local loop trains a kick in four minutes now, so this is cheap:
+spawn from the *measured* joint distribution (12a's dump), over the measured ahead/side box (0.05–0.25 × 0.02–0.14),
+with the ball given the measured residual velocity, and pay the same terms. Number: the funnel above re-measured with
+the new kick — the target is the 0.08–0.15 m rows under 30 %. Ship rule as always: discovery block, fresh block.
+
+**12c. Close the loop in the last metre.** The plan is made once (median 3.6 s before the swing) and walked to. Re-plan
+the spot every tick from the freshest ball while inside `approach_back` (0.22 m), and gate the swing on the ball being
+inside the kick's box *now* (from the tracker, with the sigma the tracker already carries): no swing at a ball the
+tracker has not seen for more than 0.3 s or whose sigma is over 5 cm. Number: spot-to-ball at the swing (0.166 → under
+0.05 m), on-box rate (8 % → over 50 %), and the swings-per-minute that this refuses (the cost). This is the item 7
+"walk-in" lever the roadmap already names, made concrete.
+
+**12d. See the ball at the feet: a standing look-down before the swing.** The walking gaze is capped at 0.6 (0.95 rad
+absolute) because deeper looks while *walking* cost falls (4c). The swing starts from a settle, standing. Let the
+settle look all the way down (the joints reach 84°; 1.3 rad absolute puts the floor from 0.05 m in the frame) for the
+0.3 s before the swing, and fire only on a sighting. The "settle that raises the head" (item 7, 2026-09-06) measured
+off — but that was with the *shipped* kick, which whiffed 12/12 head-down; the local kicks do not. Number: sightings in
+the last 0.3 s before a swing (now: the ball is below the frame, so ~0), then whiff.
+
+**12e. The ToF as the last-20-cm ball sensor.** `tof_ball_m` exists and ships at 0: the floor-ball blob from the ToF
+array. With the ball at the feet below the camera, the ToF is the sensor that is pointed at it. Turn it on for the
+line-up state only, and measure the same funnel; the risk is false blobs from a teammate's foot, which `_beside`
+already knows about.
+
+**12f. Keep a resting ball.** The ball does not roll forever any more, but the tracker still forgets it: `lost_s` 2 s,
+then a search that flinches (the dip) 33 times a run a duck. A ball last seen inside 0.3 m with speed under 0.05 m/s
+and nothing else touching it should be *kept where it is* until something is seen to move it (the board publishes
+`ball_vel`; the arena knows contacts) — a "resting ball" prior in `Tracker`, with a long memory and no search.
+Number: searches a run a duck (~33 → ?), time from losing the ball to the next swing, and the own-goal ledger (a kept
+ball that is not there is a swing at nothing).
+
+**12g. When the swing is not the tool: push it.** At the boards and with the ball under the body, the push-first arms
+measured +3.2 s/min of possession against the kick (A.4) and the walker touches the ball 50/50 times walking through
+it. The selector already has the push as an action (`kick_select_push`, off). The ask is the *situational* rule: a ball
+inside 0.12 m ahead, or against a board, is pushed out to a kickable spot first, then kicked. Number: whiff on the
+0.00–0.11 rows (86–94 %) → the push's touch rate, and possession.
+
+**12h. A learned last metre.** Item 5's learned striker could not reach the ball; the local loop can now train a
+closed-loop "approach and kick" from 12a's state distribution with the ball in the observation (the striker env's
+contract carries it), rewarded on ball speed along the goal line — the walk-in, the settle and the swing as one
+policy instead of a planned spot plus a blind swing. Number: the funnel, against 12b+12c.
+
+**Order.** 12a first — it is a day, and it decides between 12b (recipe) and 12c/12d/12e (sensing/timing). 12f and
+12g are independent of it and a morning each. 12h only after 12b has shown what a better swing is worth.
