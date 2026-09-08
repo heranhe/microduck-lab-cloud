@@ -2,7 +2,9 @@
   "run": "kick-left-headdown-v1",
   "behavior": "kick_left",
   "trained": "2026-09-07, this Mac, 2M steps (~4 min)",
-  "exit_rad": -0.16,
+  "exit_rad": 0.26,
   "bench": "scripts/bench_kick_headdown.py: 0% whiff from every gaze pose, 1.0-1.3 m at 1.2-1.5 m/s peaking at 0.14-0.19 s, no falls",
-  "in_play": "2v2 kick probe, 48 seeds pooled: whiff 61% -> 40% (p=0.0025), on the sweet spot 5 -> 16%; 3v3 ledger flat, back-kicks fewer"
+  "in_play": "2v2 kick probe, 48 seeds pooled: whiff 61% -> 40% (p=0.0025), on the sweet spot 5 -> 16%; 3v3 ledger flat, back-kicks fewer",
+  "exit_bench_rad": -0.16,
+  "exit_measured": "in play, 2026-09-08, probe_kick_line --seconds 300 --per-side 2 --ball-out-s 5. Discovery block seeds 0-23 (sidecar still at the bench's -0.16): 52 kicks that moved the ball, +15.0 deg off the body heading (sd 48.5, SE 6.7), systematic error against the intended line +29.6 deg. Fresh block seeds 100-123 with 0.26: 33 kicks, +2.7 deg off the body (SE 12.2), systematic error -4.5 deg (median -12.2). Pooled raw exit +12 +- 6 deg, 3.6 SE from the bench's -9.2; 0.26 rad is within 0.5 SE of it. The right foot's bench 0.0 agreed with play (+2.1 then +9.9 deg, pooled +6 +- 3, not decisive; kept)."
 }

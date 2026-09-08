@@ -67,10 +67,10 @@ def wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
-def run(seed: int, seconds: float, per_side: int) -> list[dict]:
+def run(seed: int, seconds: float, per_side: int, ball_out_s: float = 0.0) -> list[dict]:
     sc = make_pitch(per_side=per_side)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
-    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed)
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, ball_out_s=ball_out_s)
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
     rng = np.random.default_rng(seed)
@@ -203,8 +203,10 @@ def main() -> None:
     ap.add_argument("--per-side", type=int, default=2)
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--out", default=None, help="write every kick as a JSON line")
+    ap.add_argument("--ball-out-s", type=float, default=0.0,
+                    help="the ball-out rule (World.ball_out_s); the lab's pitches play at 5 - it more than doubles the kicks a run")
     args = ap.parse_args()
-    todo = [(s, args.seconds, args.per_side)
+    todo = [(s, args.seconds, args.per_side, args.ball_out_s)
             for s in range(args.seed0, args.seed0 + args.seeds)]
     rows: list[dict] = []
     if args.jobs > 1 and len(todo) > 1:
@@ -222,7 +224,7 @@ def main() -> None:
                 fh.write(json.dumps(r) + "\n")
     hit = [r for r in rows if r.get("err") is not None]
     print(f"{len(rows)} kicks over {args.seeds} seeds (from {args.seed0}) x {args.seconds:g} s of "
-          f"{args.per_side}v{args.per_side}; {len(rows) - len(hit)} moved the ball < 10 cm (a whiff)")
+          f"{args.per_side}v{args.per_side}, ball-out {args.ball_out_s:g} s; {len(rows) - len(hit)} moved the ball < 10 cm (a whiff)")
     print(f"MICRODUCK_CHASE={os.environ.get('MICRODUCK_CHASE', '')!r}\n")
     print(f"{'foot':<12}{'n':>5}{'mean err':>10}{'median':>9}{'sd':>8}{'wrong side':>12}"
           f"{'the map says':>14}{'mean off heading':>18}")

@@ -104,7 +104,8 @@ def test_the_local_kicks_are_the_default_and_their_exits_reach_the_brain(monkeyp
     sc = make_pitch()
     w = World(sc, seed=1)
     kw = brain_kwargs(sc.ducks[0], w, {})
-    assert kw["p"].kick_exit_right == side["exit_rad"] and kw["p"].kick_exit_left == -0.16
+    left = json.loads(World.skill_path("kick_left").with_suffix(".json").read_text())
+    assert kw["p"].kick_exit_right == side["exit_rad"] and kw["p"].kick_exit_left == left["exit_rad"] == 0.26   # measured in play 2026-09-08
     assert w.start_skill(w.ducks[sc.ducks[0].id], "kick_right")                     # and it loads
     monkeypatch.setenv("MICRODUCK_CHASE", "kick_exit_left=0.5")                     # the command line is the caller's
     assert Chase(**brain_kwargs(sc.ducks[0], w, {})).p.kick_exit_left == 0.5    # named on the command line: the brain reads it itself
