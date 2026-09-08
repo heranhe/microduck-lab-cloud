@@ -327,6 +327,22 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--seed", type=int, default=0)
+    # "Every run is a record" (AGENTS.md). Brains got title/description/group
+    # after a board of 49 runs called p-batch-s14 and z1 became unreadable;
+    # behavior runs had the same problem and none of the cure — a ladder of
+    # five stages called getup-l1..l5 says nothing about which rung failed.
+    # The run NAME stays the identifier (--init-from, the directory); these
+    # are what a person reads. They survive a warm restart that omits them.
+    ap.add_argument("--title", default=None, metavar="TEXT",
+                    help="human name for this run, shown in place of the run name")
+    ap.add_argument("--description", default=None, metavar="TEXT",
+                    help="one or two sentences: what it tests, against what, and "
+                         "— once known — what it found. Write the finding back in "
+                         "when the experiment resolves (edit behavior.json, or "
+                         "relaunch with --init-from at the same dir)")
+    ap.add_argument("--group", default=None, metavar="NAME",
+                    help="the question this run belongs to (e.g. getup-ladder), "
+                         "so a chain of stages files as one experiment")
     ap.add_argument("--init-from", default=None,
                     help="run dir with model.zip + vecnormalize.pkl: continue that "
                          "training (a different --envs is fine — that's the point); "
@@ -469,12 +485,32 @@ def main() -> None:
     # The clip too: an imitation run is about ONE authored motion, and the
     # lab re-seats finished runs from this file (TrainingJob.adopt) — without
     # it a ✨ fine-tune silently practiced the recipe's default clip.
-    (out / "behavior.json").write_text(json.dumps(
-        {"behavior": b.id, "steps": steps, "weights": weights,
-         "symmetry_coef": symmetry_coef, "desired_kl": args.desired_kl,
-         "net_arch": args.net_arch, "shared_trunk": args.shared_trunk,
-         "n_epochs": args.n_epochs,
-         "clip": resolve_clip_name(b)}))
+    # Written fresh each launch, so a warm RESTART of the same run must not
+    # blank the title someone already set (--init-from at the same dir passes
+    # no --title). Previous values survive unless this launch overrides them.
+    prior = {}
+    prior_path = out / "behavior.json"
+    if prior_path.is_file():
+        try:
+            prior = json.loads(prior_path.read_text())
+        except (OSError, ValueError):
+            prior = {}
+    record = {"behavior": b.id, "steps": steps, "weights": weights,
+              "symmetry_coef": symmetry_coef, "desired_kl": args.desired_kl,
+              "net_arch": args.net_arch, "shared_trunk": args.shared_trunk,
+              "n_epochs": args.n_epochs,
+              "clip": resolve_clip_name(b)}
+    for key, value in (("title", args.title), ("description", args.description),
+                       ("group", args.group)):
+        chosen = value if value is not None else prior.get(key)
+        if chosen:
+            record[key] = chosen.strip()
+    if args.init_from:
+        record["init_from"] = str(args.init_from)
+    if not record.get("title"):
+        print(f"{run_name}: no --title — a run with no name but its own is a "
+              "run nobody can read a day later (AGENTS.md, 'Every run is a record')")
+    prior_path.write_text(json.dumps(record, indent=2))
 
     # Fork workers BEFORE importing torch. A torch-initialized parent has
     # OpenMP/Accelerate thread pools; forking them deadlocks on macOS.

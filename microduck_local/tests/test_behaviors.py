@@ -1928,3 +1928,141 @@ def test_deep_squat_recipe_contract():
         if terminated or truncated:
             break
     env.close()
+
+
+# --------------------------------------------------------------- the get-up
+# (roadmap B.1 / bead mdl-0ad, 2026-09-08)
+
+def test_getup_ladder_carries_no_reward_edits():
+    """Same contract as the headstand's ladder (AGENTS.md): a stage may
+    ladder PHYSICS, SPAWNS and STRICTNESS, never the pay. What moves down
+    the getup ladder is the tilt window (how far from upright it wakes up),
+    the actuator model, and which falls are in the mix — nothing else."""
+    b = BEHAVIORS["getup"]
+    assert len(b.curriculum) >= 4
+    ALLOWED = {"MICRODUCK_ACTUATOR", "MICRODUCK_BAM_CURRENT_SCALE",
+               "MICRODUCK_GETUP_TILT_LO", "MICRODUCK_GETUP_TILT_HI",
+               "MICRODUCK_SPAWN_FAMILY_PROBS", "MICRODUCK_EPISODE_S",
+               "MICRODUCK_GETUP_SETTLE_S"}
+    for st in b.curriculum:
+        assert set(st.env) <= ALLOWED, f"stage '{st.label}' smuggles a knob"
+    # The ladder only ever gets HARDER: the tilt window never walks back up
+    # toward upright, or a later rung would be rehearsing an earlier one.
+    los = [float(st.env["MICRODUCK_GETUP_TILT_LO"]) for st in b.curriculum]
+    his = [float(st.env["MICRODUCK_GETUP_TILT_HI"]) for st in b.curriculum]
+    assert los == sorted(los) and his == sorted(his), (los, his)
+    # Settle ladders WITH tilt, and must: a duck posed at a 30 deg lean and
+    # then settled for a second is flat on the floor, so a ladder that tilts
+    # without settling has five copies of its last rung. The first rung is a
+    # mid-topple CATCH (settle 0); the last starts from a duck that has
+    # finished falling.
+    settles = [float(st.env["MICRODUCK_GETUP_SETTLE_S"]) for st in b.curriculum]
+    assert settles == sorted(settles), settles
+    assert settles[0] == 0.0 and settles[-1] >= 1.0
+    # Strong servos first (BAM from scratch never ignites — the headstand
+    # proved that five ways), honest servos last, and the last rung must be
+    # properly flat on the floor or the skill was never trained.
+    assert b.curriculum[0].env["MICRODUCK_ACTUATOR"] == "xml"
+    assert b.curriculum[-1].env["MICRODUCK_ACTUATOR"] == "bam"
+    assert "MICRODUCK_BAM_CURRENT_SCALE" not in b.curriculum[-1].env
+    assert float(b.curriculum[-1].env["MICRODUCK_GETUP_TILT_LO"]) >= 80.0
+    # All three ways of falling by the end, and a slice of standing starts so
+    # the policy is also asked to leave a stand alone.
+    probs = [float(x) for x in
+             b.curriculum[-1].env["MICRODUCK_SPAWN_FAMILY_PROBS"].split(",")]
+    assert len(probs) == 3 and all(p > 0.0 for p in probs)
+    assert 0.0 < 1.0 - sum(probs) <= 0.20
+    # The discovery-tax lesson (headstand 4d93a6: smoothness charged -1.9/step
+    # against a +1.3 salary). A get-up is a violent move; taxing the throw
+    # during discovery is the attempt tax AGENTS.md warns about.
+    keys = {t.key for t in b.terms}
+    assert "getup_hold" in keys and "still_on_the_floor" in keys
+    for tax in ("smooth_moves", "gentle_joints", "save_energy"):
+        assert tax not in keys
+
+
+def test_getup_hold_needs_all_four_gates():
+    """The salary is gated on both feet down, NOTHING else down, upright and
+    tall. The third gate is the one this recipe learned the hard way: its
+    first run (getup-probe-s3) parked in a tripod — both feet planted, jaw on
+    the floor, trunk at 0.105 of 0.120 — and collected on three of four."""
+    from microduck_local.behaviors.getup import (
+        STAND_GZ,
+        _getup_hold_raw,
+        _getup_prop_pen,
+        _getup_props_down,
+    )
+    env = _quiet_env("getup", standing_spawns=True)
+    # The STAND keyframe spawns a few mm clear of the floor (walk_env adds
+    # up to 1 cm of z noise), so the feet are not in contact until the duck
+    # has settled onto them — assert on the settled state, not on frame 0.
+    for _ in range(12):
+        env.step(np.zeros(14, np.float32))
+    # A real stand: feet down, nothing else down, upright, tall.
+    assert env.foot_contact_state == {"left": True, "right": True}
+    assert _getup_props_down(env) == 0
+    assert _getup_hold_raw(env) > 0.5
+    assert _getup_prop_pen(env) == 0.0
+    # Now fold the jaw onto the floor without leaving the feet: the tripod.
+    # Reached by hand rather than by hoping a rollout finds it — the pose is
+    # the whole point of the gate.
+    import mujoco
+    env.data.qpos[2] -= 0.035
+    env.data.qpos[env.joint_qpos_adr[5]] += 1.0     # neck down
+    env.data.qpos[env.joint_qpos_adr[6]] += 1.0     # head down
+    mujoco.mj_forward(env.model, env.data)
+    env._step_cache.clear()
+    props = _getup_props_down(env)
+    assert props > 0, "the folded pose is supposed to put something on the floor"
+    assert _getup_hold_raw(env) == 0.0, "a duck propped on its face is not standing"
+    assert _getup_prop_pen(env) < 0.0
+    assert _getup_prop_pen(env) >= -1.0, "the rent must stay bounded"
+    # And the upright gate is the recipe's constant, not a magic number here.
+    assert -1.0 < STAND_GZ < -0.5
+    env.close()
+
+
+@pytest.mark.parametrize("pose,axis,sign", [("back", 0, -1.0), ("front", 0, +1.0)])
+def test_getup_spawns_land_the_duck_on_the_floor(pose, axis, sign):
+    """Each spawn family really lies the duck down, the way the obs can see:
+    on its back gravity reads (-1, 0, 0) in the trunk frame, on its front
+    (+1, 0, 0). Nothing about a fall is hidden, which is why one policy can
+    serve all three."""
+    from microduck_local.behaviors.getup import _getup_hold_raw, _getup_props_down
+    probs = {"back": "1,0,0", "front": "0,1,0", "side": "0,0,1"}[pose]
+    env = _quiet_env("getup", spawn_overrides={
+        "MICRODUCK_SPAWN_FAMILY_PROBS": probs,
+        "MICRODUCK_GETUP_TILT_LO": "85", "MICRODUCK_GETUP_TILT_HI": "95"})
+    env.reset(seed=4)
+    assert env.last_spawn == pose
+    for _ in range(5):          # settle onto the floor (the spawn places it 3 mm clear)
+        env.step(np.zeros(14, np.float32))
+    g = env._projected_gravity()
+    assert sign * float(g[axis]) > 0.8, f"{pose}: gravity {g}"
+    # It is DOWN: on the floor, not standing, and paying rent for it.
+    assert _getup_props_down(env) > 0
+    assert _getup_hold_raw(env) == 0.0
+    env.close()
+
+
+def test_getup_shepherds_pay_progress_not_state():
+    """Anti-parking: symmetric potential shaping means a duck that lies still
+    earns nothing from the two shepherds, and a spawn banks nothing either
+    (the baselines anchor to the first post-spawn state). The headstand paid
+    three graduates in a row to park before this shape replaced the
+    annuities."""
+    env = _quiet_env("getup", spawn_overrides={
+        "MICRODUCK_SPAWN_FAMILY_PROBS": "1,0,0",
+        "MICRODUCK_GETUP_TILT_LO": "85", "MICRODUCK_GETUP_TILT_HI": "95"})
+    env.reset(seed=1)
+    for _ in range(30):
+        env.step(np.zeros(14, np.float32))   # limp: lie there
+    sums = env.reward_sums
+    shepherds = ("rise_gain", "lift_gain")
+    missing = [k for k in shepherds if k not in sums]
+    assert not missing, f"shepherd terms renamed or dropped: {missing}"
+    # Weight 30 each: a per-step annuity for merely lying at the spawn
+    # potential would be worth hundreds over 30 steps. Telescoping shaping
+    # pays only what the pose actually moved.
+    assert sum(sums[k] for k in shepherds) < 8.0
+    env.close()
