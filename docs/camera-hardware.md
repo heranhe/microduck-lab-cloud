@@ -68,7 +68,22 @@ here. The repo names the driver overlay, not the lens. Nothing in the sim has
 been re-baselined on 39 × 22.5 — the durable point is that **62 × 48 is the
 full-array figure and the robot does not run the full array**.
 
-## 2. The replacement sensor and lens (vendor datasheet, 2026-09)
+## 2. THE FITTED sensor and lens (vendor datasheet, 2026-09)
+
+> **RENAMED 2026-09-09. This section described a "replacement" and it is the
+> camera the robot has.** Jonathan supplied this module's own FOV table, which
+> answers §1's standing question: the fitted lens is the wide M12 board, not the
+> stock f = 3.04 mm. So everywhere below (and in §3, §4 and roadmap 12n/12u)
+> that says "the replacement module", read **"the camera"** — and everywhere
+> that treats 62 × 48 as the baseline, read it as a lens nobody has.
+>
+> The consequence runs opposite to what §1 was written to warn about: the fitted
+> camera is **wider** than the sim modelled, and on the soccer ledger it **beats**
+> it (possession 36.4 → 40.1 s/min, p = 0.011). The live constraint is not the
+> lens but the **detector input** — 116° at 320 px is 158 px/rad against the old
+> default's 294, so §3's "needs 640 px to break even" is now a statement about
+> the robot rather than about a purchase.
+
 
 | | |
 |---|---|
