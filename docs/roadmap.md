@@ -5328,3 +5328,41 @@ p=0.001), which 12n attributes to `kick_ahead_max` refusing swings it can now
 see are out of reach. That is a knob, not a law, and it is a kick question —
 so it belongs in `scripts/kick_gym.py` at ~0.8 CPU-seconds an event rather than
 on the pitch at ~15.
+
+### The duel's three nulls were guaranteed: the rule fires on 0.07% of ticks (2026-09-09)
+
+microduck-62's re-frame of the camera result (12n) was that the duel nulls are
+"underpowered by population" rather than evidence the rule does nothing. That
+is a number, and nobody had taken it — including me, whose own playbook rule 5
+says measure the opportunity rate BEFORE spending a battery.
+
+`scripts/probe_contest.py` (new) runs the contest arm with its gate set and
+counts how far down the chain of preconditions a duck actually gets. 135,000
+duck-ticks, 3 seeds x 150 s of 3v3, on the sim's camera:
+
+| the chain of preconditions | ticks | share |
+|---|---|---|
+| the duck can see the ball | 51,346 | 38.03% |
+| sees the ball **and** a live opponent | 41,247 | 30.55% |
+| …and that opponent is within `duck_touch` | 560 | **0.41%** |
+| **the rule fires** (`Chase.contesting`) | 97 | **0.07%** |
+
+**One tick in fourteen hundred.** No whole-match average can move on a
+population that size whatever the rule does when it fires, and the battery
+that judged it could only resolve a 19% change in ballAdvance to begin with.
+The null was not a finding; it was arithmetic.
+
+That settles the reading of all three duel results. `lineup_keepout`,
+`opp_keepout` and `contest_margin` are **not** "the duel does not matter" —
+they are "a rule that acts on 0.07% of ticks cannot be measured by a
+whole-match metric". The two are completely different claims and this repo
+published the first one three times.
+
+**What it does not license.** It is not evidence the duel WOULD pay; the
+population is the ceiling on the effect, not a promise about it. The way to
+find out is to build the population instead of waiting for it — a contested
+placement in `scripts/kick_gym.py`, where the event is created rather than
+hoped for, at ~0.8 CPU-seconds each. And per 12n, the population itself is a
+function of the camera: at 42.7% team-blindness (the calibrated replacement)
+contests become common, where at the crop's 85.2% they essentially never
+happen. **The duel is a question about the camera, not about geometry.**

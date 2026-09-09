@@ -187,3 +187,32 @@ def test_the_check_is_a_warning_and_never_raises():
     proof, and `is_identical` remains the ground truth."""
     for spec in ("contest_margin=0.15", "nonsense_knob=1", "", "opp_keepout=0.3"):
         warning_for(spec)          # no exception, whatever the spec says
+
+
+# --- the probe must not fall into the trap it exists to measure -----------
+
+def test_probe_contest_sets_its_own_gate():
+    """`probe_contest.py` measures how often the contest rule fires. If it
+    forgot `use_color` it would measure zero and look like a profound result
+    -- the exact failure this module exists for, one level up."""
+    import pathlib
+    import re
+    src_text = (pathlib.Path(__file__).resolve().parents[1]
+                / "scripts" / "probe_contest.py").read_text()
+    m = re.search(r'MICRODUCK_CHASE",\s*"([^"]+)"', src_text)
+    assert m, "probe_contest.py no longer sets a MICRODUCK_CHASE default"
+    spec = m.group(1)
+    assert "contest_margin" in spec, spec
+    assert warning_for(spec) is None, f"the probe's own arm is gated: {warning_for(spec)}"
+
+
+def test_probe_contest_sets_the_arm_before_importing_the_brain():
+    """Playbook rule 0: `brain_kwargs` reads `ChaseParams.from_env()` at
+    construction, so the env var must be set above the brain imports or the
+    probe measures the shipped path."""
+    import pathlib
+    src_text = (pathlib.Path(__file__).resolve().parents[1]
+                / "scripts" / "probe_contest.py").read_text()
+    assert (src_text.index("MICRODUCK_CHASE")
+            < src_text.index("from microduck_local.brain import")), \
+        "the arm is set after the brain import -- it will not reach the brain"
