@@ -5858,6 +5858,14 @@ once. Had it been a share, spread would have had to be the primary instead.
 
 **RESULT: the primary is a NULL, and a tight one. `board_margin` does not ship.**
 
+> **Read 12v first if you are arriving at this item cold.** The mechanism found
+> after these arms landed reframes what they were testing: the gate is whether
+> the plan put the kick spot where the duck's body can stand, `board_margin =
+> 0.10` is the duck's footprint rather than a tuning value, and the shipped 0.0
+> is an unphysical default rather than a neutral one. The null below is still
+> the null — the knob does not ship — but the reason is sharper than "it does
+> not pay".
+
 Read through the registered lens first and alone (`scratchpad/read_primary.sh`
 prints the possession row and withholds the other eight, so the primary was
 seen before anything that could have tempted a different story):
@@ -6000,3 +6008,154 @@ probe answers in under a second, because the knob's reachable set is a property
 of the code and not of the football. **Ask what a knob CAN do before paying to
 find out whether it does.**
 
+### 12u. The camera ledger, confirmatory block — the metric registered BEFORE launch (2026-09-09)
+
+12n read nine metrics across three camera arms with **none named in advance**,
+and its own multiplicity note says possession on the crop (p 0.007) and on the
+replacement (0.011) do not survive the family-wise correction. They are recorded
+there as *suggestive*. This block exists for one purpose: to promote that claim
+or kill it. It is the confirmatory run 12n says is owed.
+
+**Registered at 13:39:43Z, BEFORE the arms were launched**
+(`scratchpad/prereg-camera-confirm.txt`, sha256 76528d0e...):
+
+> PRIMARY: possession (s/min, summed over the pair). Fresh seeds **100-123** —
+> the discovery block was 0-23, and a confirmatory run on the discovery seeds
+> would prove nothing.
+>
+> DIRECTIONAL PREDICTIONS from the discovery block: crop vs sim possession
+> **DOWN** (discovery −3.73), replacement vs sim possession **UP** (+3.11).
+>
+> DECISION RULE: two contrasts, paired by seed, **ONE-SIDED in the predicted
+> direction**, Bonferroni over the two → alpha = 0.025 each. A contrast
+> REPLICATES only at one-sided p < 0.025 in the predicted direction. The
+> two-sided p is reported too, and a significant effect in the OPPOSITE
+> direction is a **FAILED REPLICATION**, never a null.
+>
+> POWER: possession ran at 5% MDE on 24 seeds in 12t; the discovery effects are
+> ~10% and ~9% of baseline. If they are real this block should see them
+> comfortably, so a null here is informative rather than a shrug.
+>
+> PRIOR: I expect the crop contrast to replicate — its ballAdvance row survived
+> every threshold in 12n, so something real is there — and I am genuinely
+> unsure about the replacement. If neither replicates, 12n's possession rows
+> come out of the roadmap as a finding and stay only as a caveat.
+
+The arms: `cam-sim` (shipped 62 × 48, 320 px), `cam-crop`
+(`fov_h_deg=39,fov_v_deg=22.5`), `cam-repl`
+(`fov_h_deg=116,fov_v_deg=60,px_h=640`), 24 seeds × 300 s of 2v2,
+`--ball-out-s 5`, get-up on.
+
+**Positive control run before trusting a single row**, on the lesson that a
+harness which cannot see the effect reports a clean zero: `MICRODUCK_CAMERA` is
+read on the world path (`world/arena.py:476`, `spec=DetectorSpec.from_env()`),
+a mistyped field raises rather than being ignored, and the three frustums admit
+**9.3% / 31.0% / 79.3%** of a fixed grid of sample directions. The knob acts.
+
+**RESULT: pending — the arms are running as this is written.**
+
+### 12v. The gate is the SPOT, not the ball — and `board_margin` was never a tuning knob (2026-09-09)
+
+The whole boards line was framed as "should we bias the kick line near a
+board". The measurement says the question was wrong. **The gate is whether the
+planner put the kick spot somewhere the duck's body can physically be.**
+
+**First, what was already known, because this is a confirmation and not a
+discovery.** `controllers.py:544-556` (roadmap 11b) already documents it: *"A
+kick spot laid closer than this to the boards — inside them, or inside the
+walker's own `tof_stop` of them — is never reached: the line-up stands against
+the wall for `lineup_s` and times out (measured: the ball is at the boards 72%
+of a 3v3 run and 0 of 36 kicks were taken there, every boards line-up a
+timeout)."* The gate is `lineup_tol = 0.03` — the trunk must reach within 3 cm
+of the planned spot to swing — and `lineup_s = 4.0` ends the attempt. What
+follows is that behaviour measured at 2240 episodes with a denominator, which
+11b's 36 kicks could not support.
+
+**The other session's mechanism re-bin** (2239 of 2240 episodes carrying a
+latched plan, the spot recorded on no-swing rows — the fix for a selection
+error one level down from the `place_board` one):
+
+| where the PLAN put the spot | episodes | swings | rate |
+|---|---|---|---|
+| inside the board (< 0) | 165 | **0** | **0%** |
+| 0.000 - 0.050 m | 187 | 0 | 0% |
+| 0.050 - 0.095 m | 197 | 2 | 1% |
+| 0.095 - 0.150 m | 269 | 10 | 4% |
+| 0.150 - 0.250 m | 299 | 41 | 14% |
+| 0.250 - 0.400 m | 328 | 134 | 41% |
+| 0.400 m and beyond | 794 | 672 | **85%** |
+
+Split at **0.095 m**, the body figure the code derives itself: **549 episodes
+where the body cannot stand, 0.4% swing; 1690 where it can, 50.7% — a factor of
+127.**
+
+**The discriminating test, and it is the reason this is causal and not a
+correlation.** Fix the spot's distance and the *ball's* distance stops
+mattering in the collapse region:
+
+| spot→board | ball 0.04-0.20 | ball 0.20-0.45 | ball 0.45+ |
+|---|---|---|---|
+| 0.000-0.095 | **1%** (206) | **0%** (140) | **0%** (38) |
+| 0.095-0.250 | 6% (249) | 13% (242) | 6% (77) |
+| 0.250-0.450 | — | 45% (220) | 57% (178) |
+| 0.450+ | 58% (26) | 63% (84) | 90% (599) |
+
+In the top row the ball's position adds nothing — 1%, 0%, 0%. **The ball's
+distance predicts the swing only THROUGH the spot**, exactly where the 12p
+cliff lives. Higher up the table both still matter, so the spot is not the whole
+story above the body radius (approach length is the obvious remaining
+candidate); that is stated rather than papered over.
+
+**Why corners are ~50x worse than a flat board at the same distance
+(`scripts/probe_board_geometry.py`).** The shipped brain runs
+`board_margin = 0.0`, so `_clear_of_boards` accepts any spot inside the pitch
+line and ignores the body entirely. Measuring the duck's footprint from the
+compiled MJCF — 70 collision geoms, **max horizontal extent 0.116 m** from the
+trunk centre, 90th percentile **0.091 m** — and asking how often the planned
+spot is unreachable:
+
+| gap | flat board (r .116 / .091) | CORNER (r .116 / .091) |
+|---|---|---|
+| 0.04 | 77.8% / 66.7% | **100.0%** / 91.7% |
+| 0.10 | 55.6% / 47.2% | 80.6% / 72.2% |
+| 0.15 | 38.9% / 30.6% | 63.9% / 55.6% |
+| 0.20 | 18.1% / 0.0% | 36.1% / 0.0% |
+| 0.25 | 0.0% | 0.0% |
+
+**In a corner at gap 0.04 it is 100% — every aim direction, both feet.** The
+constraint is *conjunctive*: the spot must clear two walls at once, so the
+unreachable fraction SATURATES where on a flat board it merely rises. Same
+gate, two populations: one it sometimes lets through, one it never does. That
+is the shape of the other session's corner arm — **2 swings in 2240 episodes,
+0.09%**, against 79% in the far field.
+
+**Two numbers that agree by different routes.** The code derives the body
+clearance as *"a ball against the wall (radius 0.035) with the `kick_side`
+offset (0.06) puts the trunk 0.095 m from it"*; the compiled model gives 0.091
+at the 90th percentile. **Agreement to 4 mm, from arithmetic and from geometry
+independently.**
+
+**WHICH REFRAMES THE KNOB.** `board_margin = 0.10` sits on the duck's body. It
+is not a tuning value, and **the shipped 0.0 is not a neutral default — it is
+an unphysical one**: it permits the planner to choose spots inside a wall, and
+165 episodes above did exactly that and swung zero times. The question was never
+"should we bias the kick line"; it is **"should the planner be allowed to plan
+somewhere the robot cannot stand".**
+
+**What this does NOT license.** Turning `board_margin` up is still not the fix,
+and 12t's null stands: the knob conflates two jobs — *rejecting* an unreachable
+spot (the trigger) and *escaping* along the wall (the remedy) — behind one
+number, so raising it makes both fire more and fail more. In a corner the escape
+has nowhere to go: at 0.25 every corner ball inside gap 0.20 is a guaranteed
+fall-through, and at 0.10 the corner branch wastes as often as it acts. **A
+corner needs a different move, because in a corner there is no other side to
+stand on.**
+
+**The next item is a design question, not a sweep.** Reachability belongs in
+`kickselect` as a CONSTRAINT on candidate spots — the selector already ranks by
+p_goal then value, and it can rank only reachable spots — rather than as a
+post-hoc rescue in `_hold_target` after a spot has been chosen. That separates
+rejection from escape, gives the corner case somewhere to fall back to (a push,
+a different aim, an approach from the open side), and would be measured on
+`kick_gym` where a swing costs 0.8 CPU-s. Not attempted here; written down so
+the next person starts from the mechanism rather than the knob.
