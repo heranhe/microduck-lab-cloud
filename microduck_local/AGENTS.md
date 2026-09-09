@@ -206,6 +206,19 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    caution — **it predicted which findings would survive replication**, which is
    the only evidence that it is doing work rather than making you timid.
 
+   **A falsifier that scores a refutation and a discovery identically is badly
+   built.** A registered rule read "~99% means the mechanism holds, ~60% means
+   it does not". But ~60% was two opposite worlds: the surviving cases sitting
+   *beyond* the gate would mean it was failing to act (a refutation), and the
+   same 60% with them sitting *inside* it would mean the duck had waited until
+   its plan was no longer stale — the mechanism wrong and the knob better than
+   anyone had described. The original rule would have filed the second as
+   "unsupported" and stopped. **Before registering a threshold, ask what else
+   could produce the number you are about to treat as a refutation** — and if
+   an interesting outcome and a boring one land on the same side of it, the
+   rule needs a second dimension, not a tighter cut. (Here: the fraction of
+   surviving cases inside the gate, which separated them at 94.4% against 0.7%.)
+
    **MDE is per-METRIC, not per-battery — so never say a battery "found
    nothing".** One 24-seed `eval-pitch` run settled `board_margin` on
    possession at an MDE of **5% of baseline** (a real null, tight enough to
