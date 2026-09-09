@@ -6625,6 +6625,28 @@ state" — a different claim, and one that weakens rather than strengthens the
 brief. Registered so that outcome cannot be read afterwards as a variation on
 the same story.
 
+**AND THE INFERENCE IS ROBUST TO THE ANSWER, which is worth deriving before it
+arrives rather than after.** Decompose the crop's gate-ON whiff as a mix of the
+two swing types, using the rates already measured (seen swings 92%, sim's blind
+swings 37%):
+
+    0.636 = f x w_blind + (1 - f) x 0.92          f = the blind fraction being measured
+
+| f | implied crop blind whiff |
+|---|---|
+| 1.00 | 0.636 |
+| 0.90 | 0.604 |
+| 0.70 | 0.514 |
+| 0.60 | 0.447 |
+| **0.516** | **0.370 — the sim's blind rate** |
+
+**The crossover is f ≈ 0.52.** For any blind fraction above that, the crop's
+blind swing whiffs more than the sim's, and "the blind state the crop reaches is
+worse" holds *whatever the arm returns* — 0.52 is far below the sim arm's 97.9%
+and below even the gate-OFF 60.3%. So the measurement can still surprise on the
+selection question (how the crop gets to a swing at all), but the claim the
+brief rests on does not hinge on its exact value.
+
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
 what 12u now supports on possession and ball advance. If the replacement ships,
