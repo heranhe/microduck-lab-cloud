@@ -6760,3 +6760,64 @@ improvement figure transfers. Item 12a's whiff 47% → 36% is a sim result; the
 same brain sits at 63.6% on the crop and the gate recovers ~40% of what it
 recovers in the sim. The supported claim is directional and mechanistic — the
 sim is optimistic, the camera is why — not a promise of a number on hardware.
+
+### 12y. The 1080p crop is buying frame rate at a price the game will not pay — UN-PIN THE SENSOR MODE (2026-09-09)
+
+Jonathan asked why the soccer does not work well and noted that the camera
+"goes up to 1080". It does, and **that is the problem** — and the fix looks like
+one line of Rust rather than a new camera.
+
+**What the repo says, not assumed:**
+
+- The IMX219 **boots in 3280 × 2464** — the full array, **62.3° × 48.8°**, 21 fps.
+- `mediad`'s `pin_sensor_mode` (`pipeline.rs:930`) then calls
+  `media-ctl --set-v4l2 "…[fmt:SRGGB10_1X10/1920x1080]"`, and
+  `scripts/setup-rkaiq.sh` says why in its own words: *"which is also what gets
+  30 fps rather than 21"*.
+- On this sensor 1920 × 1080 is a **crop, not a downscale** — 59% of the
+  columns, **44% of the rows** → **39.0° × 22.5°** (§1 of camera-hardware.md).
+- Detection runs YOLO at a **320 × 320** input, so the 1080p pixels are
+  discarded before inference. **The crop's extra sharpness is never used.**
+
+**So the robot sold 23° of horizontal and 26° of vertical view for 9 fps**, and
+12w measured that field-of-view difference at whiff 34.5% → 63.6%.
+
+**Registered at 14:45:30Z before launch** (`scratchpad/prereg-sensor-mode.txt`,
+sha e94892de…): primary possession, ONE contrast so alpha 0.05 one-sided,
+prediction **mode-full higher**, fresh seeds 200-223.
+
+| | crop, 30 Hz (today) | **full array, 21 Hz** | Δ | |
+|---|---|---|---|---|
+| **possession** s/min | 33.009 | **36.183** | **+3.173** | **one-sided p 0.010, MDE 8% — PRIMARY, holds** |
+| ballAdvance m/min | 0.690 | **1.185** | **+0.495** | p 0.000, MDE 26% — survives any correction here |
+| kicks (events) | 90 | **147** | **+63%** | exploratory, no MDE |
+| goals (events) | 10 | 29 | — | **not quotable**: MDE 143% |
+
+**The registered prediction holds, and it holds in the conservative direction.**
+In the sim `rate_hz` *is* the detection rate, so this arm charges the **full**
+30 → 21 penalty. On hardware the detection rate is `min(camera fps, NPU rate)`,
+and the NPU is estimated at 15-30 Hz for YOLOv8n/11n at 320 px
+(`microduck/docs/ideas/autonomous_behavior.md:74` — an **estimate, never
+measured**). **If the NPU sits at or below 21 Hz the frame-rate cost on the
+robot is zero and this result is a floor.**
+
+**RECOMMENDED, and it is a hardware test rather than a blind ship:**
+
+1. **Measure the NPU's actual inference rate** at 320 px. If it is ≤ 21 Hz, the
+   crop is buying frames nothing consumes and the trade is pure loss.
+2. **Check whether the driver exposes IMX219's 1640 × 1232 2×2-binned mode** —
+   full field of view at ~41 fps, which would give both and make the trade
+   vanish. `v4l2-ctl --list-formats-ext` on the device settles it. **This is the
+   first thing to check**, because it may make step 3 unnecessary.
+3. If neither, **un-pin the mode** — but note `setup-rkaiq.sh` pins the same
+   geometry for `rkaiq_3A_server`, which reads the sensor resolution once at
+   startup and **fails every capture with `CIF_ISP_PIC_SIZE_ERROR` if the two
+   disagree**. Both places must change together or the camera delivers no frame
+   at all, which "reads as *the camera is broken* rather than *two components
+   disagree by a resolution*".
+
+**What this does NOT establish:** that the sim's frame-rate model matches the
+robot's. The sim drops detections at `rate_hz`; the real pipeline may degrade
+differently. And 12x's caveat stands — no specific figure here transfers. The
+supported claim is directional: **at 320 px detection, field of view beats frame
+rate, and the robot is currently on the wrong side of that trade.**
