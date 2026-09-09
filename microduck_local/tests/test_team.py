@@ -972,6 +972,13 @@ def test_a_line_up_already_on_the_kick_line_walks_straight_in():
     spot = (0.5, 0.06, "kick_right", 0.0, "kick")             # kick spot, line along +x
 
     def at(brain, odom, t=1.0):
+        # Deliberately re-poses ONE brain at a fixed `t`: each call is an
+        # independent question about the line-up decision, not a tick of a
+        # run, and the state it depends on is set explicitly just below.
+        # `t` is held constant because the state clock is reset with it and
+        # advancing it would change `t - t_state`. Clearing `_last_step_t`
+        # says that to the re-entry guard, which is otherwise right to object.
+        brain._last_step_t = None
         brain._senses = Senses(t=t)
         brain.state, brain.t_state, brain.lined = "lineup", 0.0, False
         brain.spot = spot

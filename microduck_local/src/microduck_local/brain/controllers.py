@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import os
+import warnings
 from dataclasses import dataclass, fields, replace
 from typing import ClassVar
 
@@ -486,6 +487,17 @@ class Follow:
         head_yaw = float(np.clip(p.head_yaw_gain * self.last_bearing, -0.6, 0.6)) if self.last_seen_t else 0.0
         self.last = (vx, vy, wz)
         return Intent(twist=self.last, head=(0.0, 0.0, head_yaw, 0.0), note=self.state)
+
+
+class ReentrantStepWarning(RuntimeWarning):
+    """A brain was stepped twice for the same tick.
+
+    Raised for INSTRUMENTS, not harnesses: `Chase.step` mutates state from its
+    first line, so a probe that re-enters it to compare two variants advances
+    the gait, the localiser and every counter twice and measures neither. One
+    such probe reported a 7.56% firing rate that a direct sweep of the same
+    knob showed was zero (roadmap 12o). Read the flags AFTER a single step.
+    """
 
 
 @dataclass(frozen=True)
@@ -2195,6 +2207,10 @@ class Chase:
         # The tracker's uncertainty model is the detector's datasheet
         # (roadmap C.1): `det_noise` is the duck's detector preset, which
         # brain_kwargs passes from the scenario.
+        # Re-entry detection (roadmap 12o). Cheap: two attributes and one
+        # float compare a tick, warned at most once per brain.
+        self._last_step_t: float | None = None
+        self._reentry_warned = False
         self.tracker = Tracker(TrackerParams.for_detector(
             det_noise, rest_coast_s=self.p.rest_coast_s, rest_vel=self.p.rest_vel))
         self.gait = GaitWatch()
@@ -2205,6 +2221,9 @@ class Chase:
         self.reset()
 
     def reset(self) -> None:
+        # A new episode may legitimately restart the clock, so the re-entry
+        # comparison starts over with it rather than firing on the boundary.
+        self._last_step_t = None
         self.kicks = 0
         self.pushes = 0
         self.declines = 0          # swings refused by `kick_side_max`
@@ -2529,6 +2548,23 @@ class Chase:
                 "lineup", "seen", "hunt", "seek", "search")
 
     def step(self, senses: Senses) -> Intent:
+        # This method mutates from its next few lines on -- `gait.update`, the
+        # localiser, every counter below -- so being called twice for one tick
+        # double-advances all of it. A probe that did exactly that (wrapping
+        # `_hold_target` and calling the real method again to compare) reported
+        # a 7.56% firing rate a direct sweep showed was zero. The harnesses get
+        # this right; only an instrument gets it wrong, which is why it warns
+        # rather than raises, and once per brain rather than once a tick.
+        if (self._last_step_t is not None and senses.t == self._last_step_t
+                and not self._reentry_warned):
+            self._reentry_warned = True
+            warnings.warn(
+                f"{type(self).__name__}.step() called twice at t={senses.t:.4f}. It mutates "
+                "state on entry, so the second call double-advances the gait, the localiser "
+                "and every counter -- whatever it returns is not a measurement of either "
+                "variant. Step once and read the flags afterwards.",
+                ReentrantStepWarning, stacklevel=2)
+        self._last_step_t = senses.t
         self._senses = senses
         p = self.p
         t = senses.t
