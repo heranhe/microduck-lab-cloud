@@ -720,6 +720,27 @@ against a probe, a live battery against a process check, a worked example
 against an analysis — never because they read well. Budget for the second,
 independent measurement; it is the one that does the work.
 
+**A check whose failure mode is SILENCE returns the answer you expect for a
+reason you did not check.** Three instances in one day, and all three were in
+checks used to decide *when it was safe to act*, not in measurements — which is
+the more dangerous place for them to live:
+
+| check | what it returned | what it meant |
+|---|---|---|
+| `pgrep -fl python \| grep 'eval_pitch'` | no match | the console script is `eval-pitch`, hyphen — it never could match |
+| `pgrep -fl … \| wc -l` | 286 | a count of *lines*; a multi-line cmdline is one process printed many times |
+| `git log origin/development..HEAD 2>/dev/null` | empty | **"no such ref"**, swallowed by the redirect — not "nothing pending" |
+
+**The general fix is to prefer a check whose answer is non-empty.** `git
+ls-remote --heads origin` returns `refs/heads/main` and nothing else: a
+non-empty answer that does not contain the branch you asked about is positive
+evidence it was never pushed, where an empty result from a revision range is
+ambiguous between "nothing there" and "the range was invalid". **An empty
+result is ambiguous; a non-empty result missing the thing you looked for is
+not.** When a check gates an action — is anything running, is this safe to
+edit, has this been pushed — build it so that a broken check looks different
+from a clean one.
+
 ### The one failure none of this catches: a favourable framing accepted in silence
 
 Every mechanism above works on a number or on a claim someone has already made.
