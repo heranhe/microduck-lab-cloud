@@ -64,6 +64,21 @@ class Track:
     # truth by scripts/probe_shot_gate.py.
     sig_meas: float = 0.0
     vel_sig: float = 0.0
+    # THE RESTING BALL (roadmap Track 4 item 12f). Set when something may
+    # have moved this track since its last hit - our own kick, a body next
+    # to it - so it stops counting as at rest until a fresh sighting says
+    # otherwise. Cleared by any hit.
+    rest_block: bool = False
+
+    def at_rest(self, rest_vel: float) -> bool:
+        """Has this track been MEASURED to be standing still, and has
+        nothing since been seen that might have moved it?
+
+        Deliberately not "we have no velocity for it": a ball seen once,
+        rolling, also has no velocity, and treating that as at rest is how
+        a memory becomes a lie. It takes two hits agreeing it is slow."""
+        return (self.xy is not None and not self.rest_block
+                and self.vel_hits >= 2 and math.hypot(*self.vel) < rest_vel)
 
     def sigma(self, t: float, vel_prior: float = 0.06, vel_sig_after_s: float = 0.0) -> float:
         """The 1-sigma position uncertainty (m) of `predict(t)`: the last
@@ -126,6 +141,18 @@ class TrackerParams:
     # goals). Recorded so nobody re-derives it. docs/camera-hardware.md 3c.
     smooth: float = 0.6
     coast_s: float = 2.5           # a track survives this long without a hit
+    # …unless it has been measured AT REST, in which case it survives
+    # `rest_coast_s` (roadmap Track 4 item 12f). The floor has had rolling
+    # resistance since 2026-09-06 - a ball that stops STAYS stopped - but the
+    # tracker still forgot it on the same 2.5 s clock as a ball that might
+    # have rolled anywhere, and the kick plan is a median 3.6 s old when the
+    # swing fires. So at the moment that decides the kick, the brain is
+    # reasoning about a ball whose track expired a second earlier, which is
+    # why the ahead gate could only fire on 5% of swings on its own.
+    # `rest_vel` is what counts as still. 0 = off, the 2.5 s clock for
+    # everything, which is every number measured before this.
+    rest_vel: float = 0.05
+    rest_coast_s: float = 0.0
     confirm_hits: int = 2          # hits before a brain should trust it
     vel_smooth: float = 0.5        # weight of a new velocity sample (hits 0.05-1 s apart)
     vel_min_dt: float = 0.05
@@ -218,8 +245,33 @@ class Tracker:
             if pos is not None and yaw is not None:
                 for tr in hit:
                     self._place(tr, frame.t, pos, yaw)
-        self.tracks = [tr for tr in self.tracks if t - tr.last_t <= p.coast_s]
+        self.tracks = [tr for tr in self.tracks
+                       if t - tr.last_t <= (p.rest_coast_s
+                                            if (p.rest_coast_s > 0.0 and tr.at_rest(p.rest_vel))
+                                            else p.coast_s)]
         return self.tracks
+
+    def disturb(self, cls: str, xy: tuple[float, float] | None = None,
+                radius: float = 0.0) -> int:
+        """Something may have moved it: stop these tracks counting as at rest
+        until a fresh sighting. With `xy` and `radius`, only the tracks whose
+        remembered position is inside that circle; without, every track of
+        the class. Returns how many were marked.
+
+        This is the honest half of a resting-ball memory. Keeping a ball that
+        nothing has touched is a good prior; keeping one that a foot just went
+        through is a duck swinging at a place where the ball is not.
+        """
+        n = 0
+        for tr in self.tracks:
+            if tr.cls != cls or tr.rest_block:
+                continue
+            if xy is not None and radius > 0.0 and tr.xy is not None:
+                if math.dist(tr.xy, xy) > radius:
+                    continue
+            tr.rest_block = True
+            n += 1
+        return n
 
     def _place(self, tr: Track, t: float, pos: tuple[float, float], yaw: float) -> None:
         """A hit: the track's odometry-frame position, and a velocity sample
@@ -322,6 +374,7 @@ class Tracker:
             tr.hits += 1
             tr.misses = 0
             tr.last_t = t
+            tr.rest_block = False          # a fresh look settles it either way
             if d.name:
                 tr.names[d.name] = tr.names.get(d.name, 0) + 1
                 tr.name = max(tr.names, key=tr.names.get)

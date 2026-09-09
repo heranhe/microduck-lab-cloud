@@ -51,7 +51,17 @@ def run(policy: str, foot: str, seeds: int, steps: int, gain_ratio: float = 1.0)
         travel, peak, peaks_t, exits, whiffs, falls = [], [], [], [], 0, 0
         for s in range(seeds):
             env = BehaviorEnv(f"kick_{foot}", seed=1000 + s, max_episode_s=steps * C.CTRL_DT + 0.5,
-                              domain_rand=False, random_yaw=False)
+                              domain_rand=False, random_yaw=False,
+                              # The ARENA reads `WorldDuck.obs` straight off
+                              # mjData with no observation noise, so a bench
+                              # that leaves `obs_noise` at its training default
+                              # of True is grading the kick on a noisier world
+                              # than the one it is being compared with. That is
+                              # half of why the bench and play numbers were
+                              # never the same experiment (2026-09-08 review;
+                              # the other half was the frictionless ball, now
+                              # fixed in `contract.scene_walk_ball_xml`).
+                              obs_noise=False, action_delay=False)
             obs, _ = env.reset(seed=1000 + s)
             if gain_ratio != 1.0:
                 # What the arena does for a kick window (`_set_gain_ratio`,
@@ -119,7 +129,17 @@ def replay(rows: list[dict], steps: int, gain_ratio: float, variants=VARIANTS) -
             infer[foot] = onnx_infer(Path(f"policies/kick/kick_{foot}.onnx"))
         for variant in variants:
             env = BehaviorEnv(f"kick_{foot}", seed=1000 + i, max_episode_s=steps * C.CTRL_DT + 0.5,
-                              domain_rand=False, random_yaw=False)
+                              domain_rand=False, random_yaw=False,
+                              # The ARENA reads `WorldDuck.obs` straight off
+                              # mjData with no observation noise, so a bench
+                              # that leaves `obs_noise` at its training default
+                              # of True is grading the kick on a noisier world
+                              # than the one it is being compared with. That is
+                              # half of why the bench and play numbers were
+                              # never the same experiment (2026-09-08 review;
+                              # the other half was the frictionless ball, now
+                              # fixed in `contract.scene_walk_ball_xml`).
+                              obs_noise=False, action_delay=False)
             env.reset(seed=1000 + i)
             if gain_ratio != 1.0:
                 env.model.actuator_gainprm[:, 0] *= gain_ratio

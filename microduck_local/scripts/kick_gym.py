@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from concurrent.futures import ProcessPoolExecutor
 
 import mujoco
@@ -41,6 +42,7 @@ import numpy as np
 from microduck_local import contract as C
 from microduck_local.brain import REGISTRY, Senses
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
+from microduck_local.brain.controllers import ChaseParams
 from microduck_local.world.arena import World
 from microduck_local.world.metrics import CARRY_S
 from microduck_local.world.scenario import Ball, Duck, Scenario, Wall
@@ -113,7 +115,16 @@ def _place(w: World, rng: np.random.Generator, spread: float):
     return q, v
 
 
-def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s: float = 0.0) -> list[dict]:
+def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s: float = 0.0,
+        knobs: str = "") -> list[dict]:
+    # An ARM is a `MICRODUCK_CHASE` string, applied here so it lands in the
+    # worker process before any brain is built (`brain_kwargs` reads
+    # `ChaseParams.from_env()`). Every arm of a comparison runs the same seeds
+    # and the same episodes, so the difference is the knob and nothing else.
+    if knobs:
+        os.environ["MICRODUCK_CHASE"] = knobs
+    else:
+        os.environ.pop("MICRODUCK_CHASE", None)
     sc = gym_scenario(opponents=opponents)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
     w = World(sc, infer_for={x.id: infer for x in sc.ducks}, seed=seed, ball_out_s=ball_out_s)
@@ -122,6 +133,10 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
     brains = {x.id: REGISTRY.make("chase", **bk(x, w, teams)) for x in sc.ducks}
     brain = brains["d0"]
     d = w.ducks["d0"]
+    # Playbook rule 0: read the knobs back off the CONSTRUCTED brain, never
+    # off a fresh ChaseParams(), so an arm that changes nothing says so.
+    live = {k: getattr(brain.p, k) for k in sorted(ChaseParams.env_names())} if knobs else {}
+    live["_tracker_rest_coast_s"] = brain.tracker.p.rest_coast_s
     rng = np.random.default_rng(seed)
     rows = []
     for ep in range(episodes):
@@ -165,7 +180,7 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                 break
             prev_skill = d.skill
         if swing is None:
-            rows.append({"ep": ep, "swing": False})
+            rows.append({"ep": ep, "swing": False, "arm": knobs, "live": live})
             continue
         # let the ball run, then measure how far the swing actually sent it
         ts = w.t
@@ -174,7 +189,8 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
             w.step()
         bx1, by1 = float(w.data.qpos[q]), float(w.data.qpos[q + 1])
         travel = math.dist(swing["ball0"], (bx1, by1))
-        swing.update(swing=True, travel=travel, whiff=travel < WHIFF_M, seed=seed)
+        swing.update(swing=True, travel=travel, whiff=travel < WHIFF_M, seed=seed,
+                     arm=knobs, live=live)
         swing.pop("ball0")
         rows.append(swing)
     return rows
@@ -230,6 +246,48 @@ def report(rows: list[dict]) -> None:
           "only the match has.")
 
 
+def compare(arms: "dict[str, list[dict]]") -> None:
+    """Two or more arms on the same seeds, read the way this repo reads a
+    soccer result: the funnel per arm, then the whiff as a PROPORTION of the
+    swing events with a two-proportion z on the pooled counts. Swings are
+    reported beside it, because a gate that improves the rate by refusing
+    most of the touches has not improved anything (playbook rule 6)."""
+    labels = list(arms)
+    print("\n" + "=" * 78)
+    print("A/B on the same seeds and episodes")
+    print("=" * 78)
+    for lab in labels:
+        sw = [r for r in arms[lab] if r.get("swing")]
+        live = next((r.get("live") for r in arms[lab] if r.get("live")), None) or {}
+        changed = {k: v for k, v in live.items() if not k.startswith("_")}
+        print(f"\n--- {lab} --- {len(arms[lab])} episodes, {len(sw)} swings"
+              + (f"   [tracker rest_coast_s={live.get('_tracker_rest_coast_s')}]" if live else ""))
+        report(arms[lab])
+        if changed:
+            on = {k: v for k, v in changed.items() if v}
+            print("  live knobs (off the constructed brain):", on or "none set")
+    if len(labels) < 2:
+        return
+    base = labels[0]
+    b_sw = [r for r in arms[base] if r.get("swing")]
+    print("\n" + "-" * 78)
+    print(f"{'arm':<28}{'swings':>8}{'whiff':>9}{'vs base':>10}{'p':>9}")
+    n1, x1 = len(b_sw), sum(r["whiff"] for r in b_sw)
+    print(f"{base + ' (base)':<28}{n1:>8}{100 * x1 / max(n1, 1):>8.0f}%{'—':>10}{'—':>9}")
+    for lab in labels[1:]:
+        sw = [r for r in arms[lab] if r.get("swing")]
+        n2, x2 = len(sw), sum(r["whiff"] for r in sw)
+        if not (n1 and n2):
+            continue
+        pooled = (x1 + x2) / (n1 + n2)
+        se = math.sqrt(pooled * (1 - pooled) * (1 / n1 + 1 / n2)) if 0 < pooled < 1 else 0.0
+        z = (x1 / n1 - x2 / n2) / se if se else 0.0
+        pv = math.erfc(abs(z) / math.sqrt(2))
+        print(f"{lab:<28}{n2:>8}{100 * x2 / n2:>8.0f}%"
+              f"{100 * (x2 / n2 - x1 / n1):>+9.0f}%{pv:>9.3f}")
+    print("\nA drop in whiff on FEWER swings is not a win: read both columns.")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -241,20 +299,33 @@ if __name__ == "__main__":
                     help="contesting ducks to add (0 = the clean gym; 1 = the match's one difference)")
     ap.add_argument("--ball-out-s", type=float, default=0.0,
                     help="the referee's throw-in, as the match funnel was measured (World.ball_out_s)")
+    ap.add_argument("--arm", action="append", default=None, metavar="LABEL=KNOBS",
+                    help="an arm to measure, as a MICRODUCK_CHASE string: "
+                         "--arm 'shipped=' --arm 'memory=rest_predict_s=6,rest_coast_s=20'. "
+                         "Repeat it; every arm runs the SAME seeds and episodes. "
+                         "Without it the ambient environment is measured as one arm.")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s) for s in range(a.seed0, a.seed0 + a.seeds)]
-    rows: list[dict] = []
-    if a.jobs > 1 and len(args) > 1:
-        with ProcessPoolExecutor(a.jobs) as ex:
-            for r in ex.map(_run, args):
-                rows += r
+    specs = [(s.split("=", 1)[0], s.split("=", 1)[1] if "=" in s else "") for s in (a.arm or ["ambient="])]
+    arms: dict[str, list[dict]] = {}
+    for label, knobs in specs:
+        args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s, knobs)
+                for s in range(a.seed0, a.seed0 + a.seeds)]
+        rows: list[dict] = []
+        if a.jobs > 1 and len(args) > 1:
+            with ProcessPoolExecutor(a.jobs) as ex:
+                for r in ex.map(_run, args):
+                    rows += r
+        else:
+            for x in args:
+                rows += run(*x)
+        arms[label] = rows
+        if a.out:
+            with open(a.out, "a") as fh:
+                for r in rows:
+                    fh.write(json.dumps({**r, "label": label}) + "\n")
+    if len(arms) == 1:
+        report(next(iter(arms.values())))
     else:
-        for x in args:
-            rows += run(*x)
-    if a.out:
-        with open(a.out, "w") as fh:
-            for r in rows:
-                fh.write(json.dumps(r) + "\n")
-    report(rows)
+        compare(arms)

@@ -1607,6 +1607,26 @@ class ChaseParams:
     # ball progress. The gate is what makes it free - see `yaw_clear`.
     ball_decel: float = 0.3
     predict_s: float = 1.0         # how long a prediction is worth acting on after the last hit (0: off)
+    # …and how long a ball MEASURED AT REST is worth acting on (roadmap Track
+    # 4 item 12f). The floor has had rolling resistance since 2026-09-06, so
+    # a ball that stops stays stopped, but `predict_s` treats a 1.1 s old
+    # sighting of a motionless ball exactly like a 1.1 s old sighting of one
+    # that was rolling. That is the coverage problem under `kick_ahead_max`:
+    # the plan is a median 3.6 s old at the swing, so the gate has nothing to
+    # judge on and fails OPEN. A resting ball is the one case where an old
+    # fix is still a good fix. `TrackerParams.rest_coast_s` has to be on too,
+    # or the track is gone before this can use it. 0 = off.
+    rest_predict_s: float = 0.0
+    # …and the two `TrackerParams` halves of the same memory, mirrored here so
+    # a battery sets the whole thing through one `MICRODUCK_CHASE`. Without
+    # `rest_coast_s` the track expires on the 2.5 s clock and there is nothing
+    # left for `rest_predict_s` to act on.
+    rest_coast_s: float = 0.0
+    rest_vel: float = 0.05
+    # A body this close to the remembered ball may have moved it, so the
+    # memory stops counting (`Tracker.disturb`). Our own kick and push always
+    # do. Without this the prior is not a memory, it is a lie with a clock.
+    rest_clear_m: float = 0.30
     head_yaw_gain: float = 0.9
     head_yaw_max: float = 1.4          # the walker's trained head-yaw range (upstream curriculum: +-1.40 rad)
     # Only let the head leave the walking line while the ToF says the line is
@@ -2149,7 +2169,8 @@ class Chase:
         # The tracker's uncertainty model is the detector's datasheet
         # (roadmap C.1): `det_noise` is the duck's detector preset, which
         # brain_kwargs passes from the scenario.
-        self.tracker = Tracker(TrackerParams.for_detector(det_noise))
+        self.tracker = Tracker(TrackerParams.for_detector(
+            det_noise, rest_coast_s=self.p.rest_coast_s, rest_vel=self.p.rest_vel))
         self.gait = GaitWatch()
         self.blocker = Interceptor()
         self._kick_rng = None              # kick_select's generator, seeded from the duck id on first use
@@ -2509,8 +2530,21 @@ class Chase:
         self.predicted: tuple[float, float] | None = None
         self.predicted_sigma: float | None = None            # its 1-sigma error (roadmap C.1)
         pred_bearing: float | None = None
-        if ball is not None and ball.xy is not None and ball.age(t) <= p.predict_s:
+        self.ball_resting = (p.rest_predict_s > 0.0 and ball is not None
+                             and ball.at_rest(self.tracker.p.rest_vel))
+        horizon = max(p.predict_s, p.rest_predict_s) if self.ball_resting else p.predict_s
+        if ball is not None and ball.xy is not None and ball.age(t) <= horizon:
             px, py = ball.predict(t, p.ball_decel)
+            # The sigma needs NOTHING special for a resting ball, and the
+            # first draft here that gave it a smaller velocity prior was a
+            # no-op dressed as a fix. `Track.sigma` already switches from the
+            # generic `vel_prior` to the track's OWN measured velocity scatter
+            # once the fix is older than `vel_sig_after_s` (1 s) - and a ball
+            # that has been seen twice standing still has a tiny scatter, so
+            # its uncertainty stays usable at four seconds by construction.
+            # `at_rest` requires those same two hits, so every resting ball is
+            # already on that branch. Measured: at dt = 4 s the two priors
+            # give the identical sigma.
             self.predicted_sigma = ball.sigma(t, self.tracker.p.vel_prior, self.tracker.p.vel_sig_after_s)
             if self.bounds is not None:
                 px = float(np.clip(px, -self.bounds[0] + 0.1, self.bounds[0] - 0.1))
@@ -2538,6 +2572,19 @@ class Chase:
                 self._mates.append((math.hypot(mx - odom[0], my - odom[1]),
                                     _wrap(math.atan2(my - odom[1], mx - odom[0]) - odom[2])))
         other = self.tracker.best("duck", t, min_hits=1)
+        if p.rest_predict_s > 0.0 and ball is not None and ball.xy is not None:
+            # Anything we know the position of, that is standing on the ball we
+            # are remembering, voids the memory until we look again: our own
+            # bump, a teammate off the board, a duck we can see.
+            near = [c for _, c in (self.team.mates(self.duck_id, t) if self.team is not None else [])]
+            if other is not None and other.xy is not None and other.age(t) <= p.lost_s:
+                near.append((other.xy[0], other.xy[1], 0.0))
+            if senses.bumped:
+                near.append((odom[0], odom[1], 0.0))
+            for mx, my, _ in near:
+                if math.dist((mx, my), ball.xy) <= p.rest_clear_m:
+                    self.tracker.disturb(p.target_cls, ball.xy, p.rest_clear_m)
+                    break
         # The nearest duck ahead to avoid: a seen one, or a teammate by the board.
         threats = [(r, b) for r, b in self._mates if r < p.mate_keepout and abs(b) < p.duck_bearing]
         if other is not None and other.age(t) <= 0.6 and abs(other.bearing) < p.duck_bearing:
@@ -2764,6 +2811,7 @@ class Chase:
                 elif t - self.t_state >= p.settle_s:
                     if mode == "push":
                         self.pushes += 1
+                        self.tracker.disturb(p.target_cls)     # walking through it moves it too
                         self.state = "push"
                         self.t_state = t
                         vx, wz = p.push_speed, 0.0
@@ -2779,6 +2827,7 @@ class Chase:
                         skill = foot
                         self._last_foot = foot
                         self.kicks += 1
+                        self.tracker.disturb(p.target_cls)     # we just hit it: the memory is void
                         self.spot = None
                         self.state = "kick"
                         # Where the ball is going — which is NOT `u`, the line

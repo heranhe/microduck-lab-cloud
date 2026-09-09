@@ -95,6 +95,12 @@ def quat_rotate_inverse(quat_wxyz: np.ndarray, vec: np.ndarray) -> np.ndarray:
                      v2 - w * t2 + (x * t1 - y * t0)), dtype=np.float32)
 
 
+# The play world's rolling resistance (`world/scenario.py` `Ball.rolling`): a
+# short carpet, the floor a home robot lives on. Mirrored here so the training
+# and bench scene is the same ball as the match.
+BALL_ROLLING = 0.002
+
+
 def scene_walk_ball_xml() -> Path:
     """The walk scene with upstream's 70 mm / 15 g kick ball (roadmap item 7,
     4c revisit): `scene_walk.xml` rewritten beside SYMLINKS to every file of
@@ -113,6 +119,31 @@ def scene_walk_ball_xml() -> Path:
     for entry in d.iterdir():
         link = out / entry.name
         target = entry.resolve()
+        if entry.name == "ball.xml":
+            # THE BALL THE ROBOT ACTUALLY PLAYS WITH. Upstream's ball.xml
+            # carries `friction="0.5 0.005 0.0001"` on a geom with no
+            # `condim`, and MuJoCo's default of 3 applies the SLIDING
+            # coefficient only - so its rolling value is silently ignored and
+            # the ball rolls until a wall stops it. `world/compose.py` fixed
+            # exactly this for the play world on 2026-09-06 (condim 6,
+            # `Ball.rolling`); the training and bench scene kept the frictionless
+            # one, so the kick was trained and benched on a ball that behaves
+            # nothing like the one it meets in a match. Found by the
+            # 2026-09-08 review, which is also why the bench's 0% whiff and
+            # its 1.0-1.3 m travel numbers were never comparable with play.
+            # Patched here rather than in the pinned checkout, which is never
+            # written to.
+            txt = target.read_text()
+            if 'name="ball_geom"' in txt and "condim" not in txt:
+                txt = txt.replace('name="ball_geom"', 'name="ball_geom" condim="6"')
+                txt = txt.replace('friction="0.5 0.005 0.0001"', f'friction="0.5 0.005 {BALL_ROLLING}"')
+            if link.is_symlink():
+                link.unlink()
+            if not link.exists() or link.read_text() != txt:
+                tmp = link.with_name(f".{link.name}.{os.getpid()}.tmp")
+                tmp.write_text(txt)
+                os.replace(tmp, link)
+            continue
         if link.is_symlink():
             if os.readlink(link) == str(target):
                 continue
