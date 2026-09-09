@@ -6157,6 +6157,35 @@ explanation is wrong and the kick drop is something else — detection latency o
 approach length are the next suspects. **Registering that prediction here, in
 advance, because that is the only thing that makes the check worth running.**
 
+**THE FALSIFIER PASSED, DECISIVELY, IN THE REGISTERED DIRECTION (2026-09-09).**
+Run by the other session, 2240 episodes an arm, `--at-boards 1.00`, `gate_on=`
+against `gate_off=kick_ahead_max=0`:
+
+| | swings | whiff | **connected kicks** |
+|---|---|---|---|
+| gate ON (shipped 0.15) | 846 | **35%** | **550** |
+| gate OFF (disabled) | 1044 | **60%** | **418** |
+
+Disabling the gate: swings **+23%**, whiff **+25 points** (p < 0.0001, MDE 5%).
+So the gate **buys +32% more connected kicks from 19% FEWER swings** — exactly
+the registered prediction, fewer kicks each worth more. **And it is not a ratio
+artefact:** the absolute count of connected kicks is higher with the gate armed,
+550 against 418. A duck swinging blind is not trading quantity for quality, it
+is losing on both.
+
+**So the replacement's ~42% kick drop moves from the cost column to the benefit
+column, and 12n's "a wider camera is not a free win" was too pessimistic.**
+`_too_far` disables itself when `predicted` is None; a blind camera swings with
+the safety off; the replacement keeps the ball in view, keeps the gate armed,
+and the gate declines exactly the swings that would have missed.
+
+The boundary the other session put on it, kept: this is the **gym** at
+`--at-boards 1.00`, not a match, and the gym's blindness profile is not the
+crop's. The *mechanism* is confirmed and its *direction* matches the three-arm
+dose-response above, but the "69% more advance per kick" figure is still the
+match arms' and is not reproduced here. **Two independent routes agreeing on
+sign and mechanism, not one number confirmed twice.**
+
 
 ### 12v. The gate is the SPOT, not the ball — and `board_margin` was never a tuning knob (2026-09-09)
 
