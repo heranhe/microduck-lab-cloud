@@ -6546,10 +6546,11 @@ case is refuted on its own evidence.**
     REGISTERED   ~99% None on gate-ON; under 80% unsupported
     OBSERVED      97.9%  (829 of 847)      gate-OFF was 60.3%
 
-The third case *happens* and accounts for nothing: of the gate-ON swings that
-did have a prediction, 94.4% were inside the gate (against gate-off's 0.7%) —
-but there are only **18 of them, 2% of the arm**. Right in kind, negligible in
-size, which its author noted is worse than being wrong. The other 829 are blind.
+The third case is **filed as "exists, does not account for the result" rather
+than "refuted"**, at its author's request and correctly: of the gate-ON swings
+that did have a prediction, 94.4% were inside the gate against gate-off's 0.7%,
+so the alignment mechanism is **real and correctly signed** — there are simply
+only **18 of them, 2% of the arm**. "Refuted" would discard a true thing. The other 829 are blind.
 
 **And the `\|ahead\|` distribution separates "deferred until close" from
 "deferred until merely lost", which the None fraction alone could not:**
@@ -6605,6 +6606,24 @@ entirely" — is right about the *sighting* and too strong about the *estimate*:
 close it: it explains why the crop's close-blind swing is worse, not why the
 crop's gate benefit lands *below* the collapsed 0.71 rather than at it. Left
 open in these terms rather than implying the chain is understood end to end.
+
+**AND THE INFERENCE IS BEING CONVERTED TO A MEASUREMENT — expectation registered
+before it lands.** The other session is running the crop at gate-ON with
+`pred_ahead` recorded (2240 episodes, `--at-boards 1.00`, seed0 800). Their
+registered expectation is ~98%, matching the sim arm. **Mine is ≥98%** — the
+crop is blinder everywhere, so if anything it should be *more* blind, not less.
+
+**The outcome that would refute me is more plausible than it looks, and naming
+it is the point of registering.** The crop takes far fewer swings (662 against
+892 on the same design), so its swing population is *selected*. If the duck's
+blind approach fails more often under the crop, the episodes that still produce
+a swing may be disproportionately the ones where it kept sight of the ball —
+which would push the None fraction **down**, not up. That would mean the crop
+does not reach the close-blind state less *effectively* but less *often*, and
+"the blind state it reaches is worse" would become "the crop reaches a different
+state" — a different claim, and one that weakens rather than strengthens the
+brief. Registered so that outcome cannot be read afterwards as a variation on
+the same story.
 
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
