@@ -4872,7 +4872,7 @@ closed-loop "approach and kick" from 12a's state distribution with the ball in t
 contract carries it), rewarded on ball speed along the goal line — the walk-in, the settle and the swing as one
 policy instead of a planned spot plus a blind swing. Number: the funnel, against 12b+12c.
 
-**12i. A post-kick look that looks.** — SHIPPED 2026-09-08 as `look_sweep` 0.8 rad at `look_sweep_range` 1.0 m (with 12c's knobs): connected kicks seen again within 2 s 37 → 46 % (seeds 0–23), whiff 31 → 26 % there and 41 → 38 % on the fresh block, connected kicks a run 3.8 → 4.2 and 3.6 → 3.8; the ledger check is in 12c's paragraph. (Jonathan, from the /sim page, 2026-09-08: "it kicks and then shoots off to
+**12i. A post-kick look that looks.** — SHIPPED 2026-09-08, and **it fixed the wrong axis: see 12ab** (the local kick turns the body 100°, so the ball is 164° BEHIND the nose when this look runs). Shipped as `look_sweep` 0.8 rad at `look_sweep_range` 1.0 m (with 12c's knobs): connected kicks seen again within 2 s 37 → 46 % (seeds 0–23), whiff 31 → 26 % there and 41 → 38 % on the fresh block, connected kicks a run 3.8 → 4.2 and 3.6 → 3.8; the ledger check is in 12c's paragraph. (Jonathan, from the /sim page, 2026-09-08: "it kicks and then shoots off to
 the opposite side".) After a swing the brain stands and looks for `look_s` 0.8 s at `look_range` 0.3 m — a range
 chosen for a whiffed ball 0.17 m ahead — then hunts the PREDICTED line (aim + exit angle) for 3 s. The exit scatter is
 40–70° a foot, 40–48 % of kicks leave on the other side of that line, and a kicked ball is 0.5–1.3 m out, outside the
@@ -7113,7 +7113,7 @@ The second is why the duck's 124 s and the ball's 16 s are different quantities:
 **the duck is not stuck ON the ball. It is stuck where the ball used to be.**
 
 **THE FIX IS A TRIGGER, NOT A BEHAVIOUR** (`support_unstick_s`, **shipped at
-0.0 — off — pending the falls question below**; `support_unstick_m` 0.30 m).
+4.0**; `support_unstick_m` 0.30 m).
 `support_unstick_s` seconds of supporting closer
 than `support_unstick_m` to a board fires **the retreat the brain already has**
 — `retreat_turn_s` then walk, already tuned, already third in the priority
@@ -7206,10 +7206,57 @@ written down in this file: the retreat turns and then walks near a board, and
 wall or a kicked turn creeping into one"*. A rule that deliberately drives
 ducks off the boards is the rule most likely to find that failure.
 
-So the knob is built, measured, documented and **left off** until a battery
-with the events to settle it says otherwise — 96 seeds an arm is running as
-this is written. Turning it on is one number, and the corner table above is
-what it buys.
+**AT 96 SEEDS AN ARM THE FALLS ARE REAL, AND THEN THE DOSE SWEEP TOOK THEM
+BACK.** falls 5 (shipped) / **13** at `support_unstick_s` 2.0 (p 0.045 paired) /
+**8** at 4.0 (p 0.32, MDE 119% — not separable). Three points monotone in the
+firing rate is dose-response, which is stronger evidence of causation than
+either arm's p, and it makes the dose a dial rather than a coin flip.
+
+**AND 4.0 BEATS 2.0 ON EVERY AXIS, WHICH IS THE SURPRISE** (48 seeds x 180 s):
+
+| | shipped | **4.0** | 2.0 |
+|---|---|---|---|
+| corner time a duck a run | 2.1 s | **0.5 s** | 0.9 s |
+| worst corner visit | 123.8 s | 17.6 s | 14.0 s |
+| corner visits over 30 s | 5 | **0** | **0** |
+| flat-board time a duck a run | 20.1 s | 16.7 s | 16.7 s |
+| flat-board visits over 30 s | 20 | **6** | **6** |
+| falls, 96 seeds | 5 | **8** | 13 |
+
+Firing LATER removes MORE corner time. Each firing at 4 s is an escape the duck
+actually needed; a share of the 2 s firings interrupt a search that was about to
+succeed on its own, paying the escape's risk for nothing. **4.0 ships.**
+
+**AND THE FALLS ARE NOT THE ESCAPE.** Instrumented ON `run_one` (`Chase.step`
+records the pose, `World.step` watches the counter it increments — nothing
+reimplemented), the six falls the fix's arm produced on its first six seeds:
+
+| seed | duck | t | state | to a board | since the rule fired |
+|---|---|---|---|---|---|
+| 10 | d3 | 85.1 | avoid | 0.59 | never |
+| 12 | d1 | 41.6 | lineup | 0.21 | never |
+| 13 | d3 | 131.9 | turn | 0.35 | 36.8 s |
+| 23 | d0 | 78.1 | lineup | 0.27 | never |
+| 24 | d0 | 149.3 | avoid | 0.51 | 66.6 s |
+| 29 | d1 | 93.0 | turn | 0.51 | 66.6 s |
+
+**Zero of six within 4 s of the rule firing**, the nearest 36.8 s, and on four
+of them the rule never fired in that run at all. Every fall is in `avoid`,
+`lineup` or `turn` — ordinary play. So the dose-response is real and the
+mechanism is not "the escape trips the duck": **a duck frozen in a corner cannot
+fall.** The shipped brain's low count is partly an artefact of ducks parked out
+of play, and the fix buys falls by putting them back in the duels and line-ups
+where falls happen. That is a cost, and it is a different cost from a dangerous
+manoeuvre.
+
+**Locked by a test** (`test_a_blind_supporter_in_a_corner_retreats_instead_of_spinning`):
+the duck spins at the measured trap pose before the clock runs out and is in
+`retreat` after it. It fails with `support_unstick_s=0`, which is the check that
+it tests the rule and not the scaffolding. Two things it had to learn the hard
+way: a turn in place carries `TURN_KICK` (0.2) of forward command, so "spinning"
+is not `vx == 0`; and `Intent.note` reports the ROLE for a non-attacking duck, so
+a supporter's note reads "support" through the whole retreat — assert on
+`Chase.state`.
 
 **AND IT IS VISIBLE, WHICH IS HOW IT SHOULD HAVE BEEN CHECKED FIRST.**
 `record-world pitch-2v2 --seed 30 --skip 60 --seconds 60` on the LAB path, so
@@ -7230,3 +7277,82 @@ chance-level control, `--csv` per visit) and `scripts/probe_board_livelock.py`
 run the LAB's pitch — `PITCH_BALL_OUT_S`, the get-up and `throw_in_brains` —
 because that is where the observation came from; `eval-pitch`'s defaults are a
 different pitch and would have measured a different thing.
+
+
+### 12ab. The duck pirouettes 100° inside its own kick — which is why it never looks at the ball again (2026-09-09)
+
+Jonathan, from the `/sim` page: *"it tried to kick the ball and miss, but it
+never looks to the direction afterwards to confirm that it kicked, and then it
+stumbled around trying to kick it."* This is the same observation that opened
+12i (*"it kicks and then shoots off to the opposite side"*), and 12i fixed the
+wrong axis.
+
+**The local kicks turn the body a quarter turn, every single swing.**
+Measured on 249 swings in the kick gym (`scripts/probe_kick_recover.py`,
+6 seeds × 50 episodes), reading the trunk yaw at the swing and again at the
+first frame of the post-kick `look`:
+
+| foot | n | body turn through the swing | same sign | carried forward |
+|---|---|---|---|---|
+| `kick_left` | 114 | **−95°** (quartiles −106 / −95 / −82, sd 19) | **100 %** | 0.09 m |
+| `kick_right` | 121 | **+104°** (+96 / +104 / +114, sd 21) | **99 %** | 0.10 m |
+
+It is not scatter and it is not the walker: the SHIPPED Pollen kicks, run
+through the identical probe (`MICRODUCK_SKILL_KICK_LEFT/RIGHT=…`), turn the
+body a median **2°** (whiff) / 18° (connected). The pirouette belongs to
+`policies/kick/*.onnx` — the local export from `behaviors/kick.py`, item 7 —
+and it is there because **nothing in that behavior's reward mentions the
+body's heading**: `ball_forward`, `ball_overshoot`, `support_foot`,
+`legs_home`, `head_home`, and `_kick_dir` is latched at reset, so the ball's
+progress is scored along the ORIGINAL heading and the duck may spin as far as
+it likes while earning it. An un-penalised degree of freedom, found by the
+usual route.
+
+**What it does to the eyes.** By the first frame of the `look` the ball is a
+median **164°** off the nose after a whiff (135° after a connected kick), and
+**100 %** of the whiff's look frames have it outside the camera's ±58°
+half-field. The look therefore sees the whiffed ball in **3 of 639 frames**
+(4 % of whiffs get a single frame); after a connected kick, where the ball at
+least stays in front of somebody, it manages 38 %. 12i's ±0.8 rad head sweep
+cannot reach 164°, and `head_yaw_max` would stop it long before.
+
+**What it does to the play** — the "stumbling around", per kick, over the 6 s
+after the swing:
+
+| | whiffed (n=67) | connected (n=182) |
+|---|---|---|
+| ball seen again inside 6 s | **48 %** | 78 % |
+| …of which, after the first second | 7 % | 6 % |
+| seconds in `hunt` + `search` | **3.75 s** | 1.94 s |
+| ended FURTHER from the ball than at the swing | **99 %** | 98 % |
+
+The brain compounds it by design: at the swing it calls
+`tracker.disturb()` ("we just hit it: the memory is void") and sets `_hunt_u`
+to the predicted exit line, then hunts that line for `hunt_s` 3 s at
+0.3 m/s. **Nothing anywhere asks whether the ball moved.** After a whiff that
+is a duck walking away from a ball that never left, in a direction chosen by
+a kick that missed.
+
+**Two gaze fixes are nulls, and that is the useful part.** `look_sweep=0`
+(the older 0.3 m dip) and a deliberately deep look
+(`look_sweep=0,look_range=0.15,gaze_neck=0.5`, which reaches 50° of
+depression and by `probe_head_pitch`'s standing table can see a ball at
+0.14 m) both leave the whiffed re-acquisition at 37–39 % against shipped's
+40 %: two-proportion p = 0.84, **MDE 18 pp** — ~190 whiffs an arm would be
+needed for a 10 pp shift, so read these as "no instrument", not "no effect".
+The reason they cannot work is the yaw, not the pitch: pointing the head
+further DOWN does nothing about a ball that is BEHIND.
+
+**The fix is upstream, in the behavior.** Add a heading-hold term to
+`behaviors/kick.py` (the body's yaw against `_kick_dir`, which is already
+latched at reset) and re-export both feet — 2 M steps, ~4 min a foot on this
+Mac per the sidecar. Then re-run this probe: the number to move is the body
+turn, 100° → under 20°, and the number that must not move is the whiff rate
+that bought the local kicks in the first place (61 % → 40 % in play, item 7).
+The brain-side "did it actually move?" check is worth having too, but it is
+second: with the ball 164° behind, there is nothing for it to check WITH.
+
+**Instrument:** `scripts/probe_kick_recover.py` — the kick gym's episode plus
+a `--recover` window after the swing, recording re-acquisition, the states
+walked through, the body turn through the swing, and where the ball was on
+each camera frame of the `look`. `--arm LABEL=KNOBS` for a paired A/B.

@@ -1798,7 +1798,14 @@ class ChaseParams:
     # reason. `support_unstick_m` is below `support_margin`, so a duck parked
     # on a legitimately clamped post is never inside the zone; only one deeper
     # than any post can reach fires it. 0 disables the rule.
-    support_unstick_s: float = 0.0
+    # 4.0 and not 2.0, which was the surprise: firing LATER is better on every
+    # axis measured. 48 seeds x 180 s of 2v2 — corner time a duck a run 2.1 s
+    # (off) / 0.9 (at 2.0) / **0.5 (at 4.0)**, visits over 30 s 5 / 0 / 0, and
+    # falls over 96 seeds 5 / 13 (p 0.045) / 8 (p 0.32, not separable). Each
+    # firing at 4 s is an escape the duck actually needed; at 2 s a share of
+    # them interrupt a search that was about to succeed on its own, which costs
+    # the escape's own risk for nothing. 0 disables the rule.
+    support_unstick_s: float = 4.0
     support_unstick_m: float = 0.30
     # Where a duck with a static ROLE stands when it is not the one on the
     # ball (roadmap Track 4.3). All three are a spot to hold, not a new state

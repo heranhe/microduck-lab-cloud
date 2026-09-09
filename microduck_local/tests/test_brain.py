@@ -263,3 +263,57 @@ def test_follow_dodges_when_the_person_walks_at_it():
     assert any(n == "dodge" and tw[2] != 0.0 for n, tw in with_)
     without = run(False)
     assert not any(n == "dodge" for n, _ in without)
+
+
+def test_a_blind_supporter_in_a_corner_retreats_instead_of_spinning(monkeypatch):
+    """The corner trap (roadmap 12aa). `_support`'s no-ball branch is
+    `turn(1.0, cold)` and nothing else, so a supporter that loses the ball
+    against the boards turns there for as long as the ball stays lost —
+    measured at 123.4 s in one corner, with the duck making ZERO state
+    transitions for the last 67 s of a 120 s recording.
+
+    `support_unstick_s` seconds of supporting inside `support_unstick_m` of a
+    board hands the duck to the retreat, which is the escape the brain already
+    has. The rule the shipped default arms is the one asserted here; the
+    control is the same duck one clock tick earlier, still spinning.
+
+    Deliberately NOT a scenario test: the trap needs a supporter, a lost ball
+    and a corner at once, and driving a real 2v2 there takes ~57 s of sim. This
+    drives `step` directly at the corner pose instead, which is what the rule
+    reads.
+    """
+    from microduck_local.brain import REGISTRY
+    from microduck_local.brain.runtime import Senses
+    b = REGISTRY.make("chase", goal=(1.7, 0.0), goal_w=0.7, bounds=(1.7, 1.425), duck_id="d0")
+    b.role = "support"                       # no team board: hold the role the board would give
+    corner = (1.60, 1.33, 0.0)               # 0.10 m off BOTH boards — the measured trap pose
+    assert b.p.support_unstick_s > 0.0, "the shipped default arms this rule"
+    assert b.p.support_unstick_m < b.p.support_margin, \
+        "a duck on a legitimately clamped post must never be inside the zone"
+
+    from microduck_local.brain.gait import TURN_KICK
+    t, dt = 0.0, 0.02
+    spun = False
+    while t < b.p.support_unstick_s - dt:    # before the clock runs out: it turns on the spot
+        it = b.step(Senses(t=t, speed=0.0, odom=corner))
+        b.role = "support"
+        # A turn IN PLACE is `wz != 0` with vx no more than the gait's cold
+        # kick — `turn()` carries `TURN_KICK` (0.2) of forward command to start
+        # the gait, so "spinning" is not "vx == 0", a distinction the brain
+        # itself makes everywhere it tests for one.
+        if b.state in ("support", "wait") and it.twist[2] != 0.0 and it.twist[0] <= TURN_KICK:
+            spun = True
+        t += dt
+    assert spun, "the control failed: this duck was supposed to be spinning in the corner"
+
+    # `b.state`, NOT `intent.note`: the note reports the ROLE whenever the duck
+    # is not attacking (controllers.py, `note=self.role if ... else self.state`),
+    # so a supporter's note reads "support" through the whole retreat.
+    while t < b.p.support_unstick_s + 1.0:   # …and then the retreat takes it
+        it = b.step(Senses(t=t, speed=0.0, odom=corner))
+        b.role = "support"
+        if b.state == "retreat":
+            break
+        t += dt
+    else:
+        raise AssertionError(f"no retreat by t={t:.2f}s: the duck is still in the corner")
