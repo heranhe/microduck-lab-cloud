@@ -569,6 +569,33 @@ If the reconstruction and the call disagree, **the call wins**, and the
 reconstruction is the thing to throw away. See also: when a probe and a direct
 sweep disagree, the sweep wins.
 
+### A rate's denominator must come from the same population as its numerator
+
+The sixth shape, and the only one that produces a *correct* number answering a
+question nobody asked. A gym re-bin recorded the planned kick spot on every
+SWING row and found **0.0% of 862 swings had the spot inside a board** — a real
+measurement, from real calls, over 862 real episodes. It is worthless: a swing
+happens only when a legal spot was found, so conditioning on the swing
+guarantees the spot is legal. The selection produced the statistic, not the
+physics.
+
+The others above were wrong numbers and a reader could in principle have caught
+them by re-measuring. This one survives re-measurement — it reproduces exactly,
+forever — because the defect is in the population, not the arithmetic. **Ask
+what a row had to do to be IN your sample before reading a rate off it.** If
+the answer involves the outcome, the rate is about your filter.
+
+**The instrumentation form:** record the episode's inputs at the episode's
+start, on every row, not inside the branch where the interesting thing
+happened. Here `ball_board` was written only on swing rows, so the rate had a
+numerator and no denominator — the whole measurement had to be re-run.
+
+**And attack a mechanism from the denominator side where you can.** The same
+question — "does the collapse happen because no legal spot exists?" — was
+answerable by drawing placements and calling the planner directly, with no
+outcome in the loop and so no way for selection to bite. Two routes that cannot
+share a bias are worth more than two runs of the route that can.
+
 ### Every mechanical check here was wrong on first contact
 
 Worth knowing before you trust a new one — over a single day: a `pgrep`
