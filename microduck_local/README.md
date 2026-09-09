@@ -1866,9 +1866,20 @@ panel shows the three per-team rates live (the signed one in red when a
 team is losing ground) and a number on the page is the number the battery
 reports.
 
-**The camera, as a hardware question — three batteries, one answer.** The
-detector's field of view is one constant (`DetectorSpec.fov_h_deg`,
-62° × 48° as shipped — an assumption about a Pi-camera-class module), so
+**The camera, as a hardware question — three batteries, one answer.**
+
+> **⚠ The numbers in this section are on a lens the robot does not have.**
+> They were taken when `DetectorSpec` defaulted to 62° × 48°, an *assumption*
+> about a Pi-camera-class module. On 2026-09-09 the fitted module's own FOV
+> table settled it: **116° × 60°**, a wide M12 board. The default is now that
+> (equidistant projection, 640 px — the pixel count is an assumption of its
+> own, labelled in `sensors/detector.py`). What survives here is the
+> **reasoning** — that the size thresholds are pixel facts, so a wider lens on
+> the same sensor finds distant things less often, and that pixels buy the
+> reach back. What does not survive is any row calling 62° "shipped".
+> `docs/camera-hardware.md` §1–2 and roadmap 12z have the correction.
+
+The detector's field of view is one constant (`DetectorSpec.fov_h_deg`), so
 the sim can price a wide-angle camera. It has to price it *honestly*:
 the two apparent-width thresholds that decide whether a target is found
 were written as angles but justified in **pixels** of a 320 px frame
