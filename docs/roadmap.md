@@ -4602,6 +4602,59 @@ whiffs **0% from every gaze pose**; travel is 0.85–1.00 m where the
 frictionless ball gave 1.0–1.3 m. The headline verdict of item 7 stands, on
 numbers that now mean what they say.
 
+## The duel (C.4 second half, bead mdl-23b): the blocker is gone, the cheap fixes are still null (2026-09-08)
+
+The open-field duel is the largest remaining block of dead time — 263 of 508
+3v3 line-ups die to `avoid` inside 0.4 s with an opponent 0.33 m ahead — and
+it has been parked on one sentence: a duck cannot tell a teammate from an
+opponent close in, because one frame of the classifier is a coin. Nobody had
+measured the **vote**, which is what `_is_mate` actually reads.
+
+**It survives contact range** (`scripts/probe_duck_color.py`, 4 seeds × 300 s
+of 3v3, 620 000 live duck-track ticks against the truth):
+
+| range band | ticks | voted a colour | …and RIGHT |
+|---|---|---|---|
+| 0.00–0.35 m | 22 862 | 100% | **95%** |
+| 0.35–0.50 m | 39 620 | 100% | **95%** |
+| 0.50–0.80 m | 67 154 | 100% | 92% |
+| 0.80–1.50 m | 158 402 | 61% | 84% |
+| ≥ 1.50 m | 269 865 | 8% | 68% |
+
+Counterfactually (the decision is gated on `use_color`, which ships off, so
+asking `_is_mate` would answer "no" every time): at contact range it would
+call an opponent a teammate on **1.4%** of ticks — the dangerous error — and a
+teammate a stranger on 3.6%, which is merely wasteful since unknown already
+counts as an opponent. What is hopeless is the FAR field, and the duel does
+not need it. **The premise the bead was parked on is refuted.**
+
+*Caveat worth carrying:* accuracy at contact range is 98–99% for tracks with
+under 20 hits and **91% at 20 or more**. More frames making a vote worse is
+the signature of an identity switch keeping a stale tally, not of classifier
+noise — so anything built on this should decay or reset the vote on a
+re-association.
+
+**And the sense being available does not, by itself, fix anything.** The first
+arm with it switched on (`use_color=1, opp_keepout=0.5`, i.e. give an opponent
+a wider berth than a teammate), 12 seeds × 300 s of 3v3 on the ball-out floor:
+
+| paired | shipped | use_color + opp_keepout | p |
+|---|---|---|---|
+| kicks (events) | 63 | **48** | — |
+| ballAdvance | 1.069 | 0.973 | 0.28 |
+| ballProgress | 0.380 | 0.226 | 0.31 |
+| possession s/min | 41.50 | 42.17 | 0.72 |
+| falls (events) | 3 | 7 | 0.40 |
+| back-kicks | 25% of 63 | 25% of 48 | 0.96 |
+
+Nothing resolves, and every direction that moves is the wrong one: a quarter
+fewer touches for no gain. Together with `lineup_keepout` (measured null on
+the same floor), that is **two independent geometric answers to the duel, both
+null**. Avoiding the opponent harder is not the fix; the duck has to CONTEST
+the ball — shield it, get a body between the opponent and it — and that is a
+behaviour to design, not a radius to widen. The sense it needs is now known to
+be there.
+
 ## Track 4, item 12 — the last 30 centimetres (2026-09-08): a ball at the feet is lost, then missed — ASKS
 
 **The complaint, from the /sim page.** A duck walks the ball to the boards, has it at its feet, loses track of it,
