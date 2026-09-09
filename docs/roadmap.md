@@ -5200,6 +5200,8 @@ measures directly.
 
 ### 12n. The soccer ledger on the cameras that actually exist — MEASURED (2026-09-09)
 
+**⚠ READ 12z FIRST.** The camera this item calls "the sim's" (62 × 48) is not fitted, and "the crop" (39 × 22.5) does not exist. The arm labelled **"the replacement" (116 × 60) is the robot's actual camera** — those rows are the useful ones. The visibility fractions and the shape of every comparison stand; the labels and the levels do not.
+
 `docs/camera-hardware.md` measured all three frustums on *tidy* and on the
 soccer *line-up*, but never the soccer ledger. Jonathan asked whether the
 device's field of view is not larger than the sim's, which it is — in both
@@ -6014,6 +6016,8 @@ find out whether it does.**
 
 ### 12u. The camera ledger, confirmatory block — the metric registered BEFORE launch (2026-09-09)
 
+**⚠ READ 12z FIRST.** Same relabelling: the "replacement" arm (116 × 60) **is** the fitted camera and the "sim" arm is a camera nobody has. The replication itself stands — it is the strongest evidence in this document that the multiplicity correction predicted which rows would survive — but read "replacement beats sim" as **"the real camera beats the one we were modelling"**.
+
 12n read nine metrics across three camera arms with **none named in advance**,
 and its own multiplicity note says possession on the crop (p 0.007) and on the
 replacement (0.011) do not survive the family-wise correction. They are recorded
@@ -6390,6 +6394,8 @@ above and is now bounded by a number rather than an intuition.
 
 ### 12w. Does the whiff gate work on the camera the ROBOT has? — MEASURED (2026-09-09)
 
+**⚠ WITHDRAWN IN PART — READ 12z FIRST.** Every number here is measured against the 39 × 22.5 crop, which is an artefact of a lens the robot does not have. **The 63.6% whiff and the 0.396 gate ratio are withdrawn.** What survives is the mechanism: `_too_far` disables itself when `predicted` is None, so a duck without a track swings with the safety off — and the deferral finding, that `kick_ahead_max` replaces far seen swings with close blind ones. Those are comparisons between geometries and do not depend on which lens is fitted.
+
 `_too_far` returns `False` when `predicted is None`: **the gate that took whiffs
 47% → 36% disables itself whenever the duck has no live track.** The robot today
 runs a 1080p crop at 85.2% team blindness (12n). So the question that decides
@@ -6708,6 +6714,8 @@ the whiff work starts paying what the sim says it should.
 
 ### 12x. The camera question, consolidated — what is supported, what is not, and what decides it (2026-09-09)
 
+**⚠ SUPERSEDED BY 12z.** This consolidation is built on the wrong cameras throughout, and its headline — "the sim overstates the robot" — is **backwards**: the fitted camera beats the modelled one on possession. The structure (supported / explained-not-measured / open / gating) is still the right shape; the contents need re-reading against 12z.
+
 Items 12n, 12u and 12w each registered a metric, ran a block and wrote a
 verdict. A reader arriving at the camera question should not have to assemble
 one conclusion out of three registrations. This is that assembly and nothing
@@ -6762,6 +6770,8 @@ recovers in the sim. The supported claim is directional and mechanistic — the
 sim is optimistic, the camera is why — not a promise of a number on hardware.
 
 ### 12y. The 1080p crop is buying frame rate at a price the game will not pay — UN-PIN THE SENSOR MODE (2026-09-09)
+
+**⚠ WITHDRAWN — READ 12z FIRST.** This un-pins a 1080p sensor crop that only costs field of view if the **stock** f = 3.04 mm lens is fitted. It is not. The upstream branch `camera/full-array-sensor-mode` is not to be merged. What it fixed incidentally is still real and worth salvaging separately: `mediad` and `setup-rkaiq.sh` each carried their own hardcoded copy of the sensor geometry, and a drift between them kills the camera outright with `CIF_ISP_PIC_SIZE_ERROR`.
 
 Jonathan asked why the soccer does not work well and noted that the camera
 "goes up to 1080". It does, and **that is the problem** — and the fix looks like
@@ -6821,3 +6831,72 @@ robot's. The sim drops detections at `rate_hz`; the real pipeline may degrade
 differently. And 12x's caveat stands — no specific figure here transfers. The
 supported claim is directional: **at 320 px detection, field of view beats frame
 rate, and the robot is currently on the wrong side of that trade.**
+
+### 12z. THE CAMERA WAS NEVER THE ONE WE MODELLED — a correction to 12n, 12u, 12w, 12x and 12y (2026-09-09)
+
+Jonathan supplied the fitted module's own FOV table: **D 142.2°, H 116°, V 60°**,
+max DFOV 165°. That answers the question `docs/camera-hardware.md` §1 has carried
+since it was written — stock Pi Camera v2 at f = 3.04 mm, or a third-party wide
+M12 board — and **it is the wide board**.
+
+**So every camera this repo has reasoned about was the wrong one.** The sim's
+62.3 × 48.8 was the *stock* lens's full array, which is not fitted. The
+39.0 × 22.5 "1080p crop" was derived from that same wrong lens, so it does not
+exist either. Both were load-bearing.
+
+**WHAT IS WITHDRAWN, and the direction of the error is the surprise.**
+
+| claim | where | status |
+|---|---|---|
+| "every number in this repo is measured on a camera the robot does not have, **and is optimistic**" | 12w, 12x | **half right.** The premise is correct — the camera was wrong. The *direction* is backwards: on the soccer ledger the real camera **beats** the modelled one, possession 36.4 → **40.1 s/min** (p = 0.011), because it is nearly twice as wide. The sim was **pessimistic** about the robot's camera, not optimistic. |
+| whiff **63.6%** on "the robot's camera" | 12w | **withdrawn.** Measured on the 39 × 22.5 crop, which does not exist. |
+| the gate is worth **0.396** of its value on "the robot's camera" | 12w | **withdrawn**, same reason. The mechanism (`_too_far` self-disables when `predicted` is None) stands; the ratio does not. |
+| `board_margin` / sensor-mode work | 12y | **withdrawn.** It un-pins a 1080p crop that only costs field of view if the stock lens is fitted. The upstream branch is not to be merged. |
+| the "replacement module" arms | 12n, 12u | **re-labelled, not withdrawn.** 116 × 60 was never a replacement — it is the fitted camera. Those arms are the most useful in the document: they measured the real thing under the wrong name. |
+
+**WHAT SURVIVES, AND IT IS MOST OF THE METHOD.** Every result whose subject was
+a *comparison between two geometries* holds, because neither side depended on
+which lens is fitted: that field of view drives possession and whiff; that
+`_too_far` disables itself without a track; that `kick_ahead_max` **replaces**
+far seen swings with close blind ones; the corner geometry, the 6.8 cm floor,
+and the whole `board_margin` mechanism (which is geometry, not optics). What
+falls is every **level** — the actual whiff rate, possession, kick counts.
+
+**THE SIM IS RE-BASELINED** (`sensors/detector.py`, commit a9a4829):
+
+    fov 116 x 60      MEASURED, from the module's datasheet
+    equidistant       the lens is not rectilinear -- a pinhole focal length
+                      solved from 116/60/142.2 gives 1.65/2.57/1.04 mm and
+                      disagrees; r = f*theta agrees to ~10% near the 2.9 mm EFL
+    px_h 640          ASSUMED, and the biggest assumption in the file
+
+**On the 640.** Upstream runs YOLO11n at 320 × 320. At 320 the fitted lens is
+**158 px/rad** — a duck at 3 m is 4.7 px, under the "sometimes found" floor. At
+640 it is **316 px/rad** and 9.5 px, so the width costs no reach. Nobody has
+measured the NPU's real p50/p95 at either size (`camera-hardware.md` §5 open
+question 1, still open). **640 is a decision taken on Jonathan's instruction, not
+a measurement**, and if the NPU cannot sustain it every number below is
+optimistic by roughly that ratio.
+
+**A REGRESSION THE RE-BASELINE EXPOSED.** `tidy`'s basket-avoidance routing
+fails on the real camera: the duck still notes the basket, routes round it and
+picks the toy, but comes within **0.151 m of the rim against a 0.19 m guard** and
+falls twice. Verified to be the camera alone — it passes under the old geometry.
+The mechanism is the one that test's docstring already named ("every fall in 8
+traced runs was an approach at the rim"): a wider lens sees the rim earlier and
+from further out, which is the input the staging logic keys on. Marked
+`xfail(strict)` so the mark comes off when it is fixed, with the assertions left
+saying what the brain should do.
+
+**HOW THE ERROR SURVIVED SO LONG, which is the transferable part.** The wrong
+camera was a *default*, and defaults are invisible. Eight tests asserted things
+about the 62 × 48 geometry — "outside a 62° FOV", "below a 48° vertical field",
+`px_per_rad == 295.72`, a bearing bound of `0.6 rad` that was silently the old
+half-angle — and every one of them inherited it rather than naming it. So the
+geometry was pinned in eight places and stated in none, and moving it produced
+nine unrelated-looking failures instead of one clear "the camera changed". They
+now name it, via a documented `NARROW_REF` constant. **A characterisation that
+silently follows a default stops characterising anything the day the default
+moves.**
+
+**RE-MEASURED BASELINES: pending — the arms are running as this is written.**
