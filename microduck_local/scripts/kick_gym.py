@@ -165,6 +165,50 @@ def _place_at_boards(w: World, rng: np.random.Generator, margin: float):
     return q, v
 
 
+def _place_at_corner(w: World, rng: np.random.Generator, margin: float):
+    """The ball in a CORNER — within `margin` of TWO boards — and the duck a
+    normal walk-in away, spawned on the diagonal into the pitch.
+
+    This exists to falsify the feasibility model, not to explore. Measured by
+    a 1 cm sweep of real `_along_the_boards` calls on `gym_scenario()` bounds:
+    a corner spot for `board_margin` 0.25 is **infeasible for every gap below
+    0.33 m**, so a draw capped at 0.30 or under can never let that knob act.
+
+    The cap therefore matters more than it looks. At `--at-corners 0.35` or
+    above, part of the draw is genuinely feasible, a real effect there would be
+    EXPECTED, and reading it as a falsification would be a false rejection —
+    the opposite direction to every other error in this file. Keep the cap at
+    0.30 or below and the whole draw sits inside the infeasible region.
+    """
+    bx_h, by_h = _board_rect(w)
+    d = w.ducks["d0"]
+    r_ball = w.scenario.balls[0].radius
+    lo, hi = r_ball + 0.01, max(margin, r_ball + 0.02)
+    sx = 1.0 if rng.random() < 0.5 else -1.0
+    sy = 1.0 if rng.random() < 0.5 else -1.0
+    bx = sx * (bx_h - float(rng.uniform(lo, hi)))
+    by = sy * (by_h - float(rng.uniform(lo, hi)))
+    base = math.atan2(-sy, -sx)                       # the diagonal, into the pitch
+    for _ in range(40):
+        rng_m = float(rng.uniform(0.45, 1.4))
+        th = base + float(rng.uniform(-0.9, 0.9))
+        dx, dy = bx + rng_m * math.cos(th), by + rng_m * math.sin(th)
+        if abs(dx) < bx_h - 0.25 and abs(dy) < by_h - 0.25:
+            break
+    else:
+        dx = float(np.clip(bx - 0.9 * sx, -bx_h + 0.25, bx_h - 0.25))
+        dy = float(np.clip(by - 0.9 * sy, -by_h + 0.25, by_h - 0.25))
+    yaw = math.atan2(by - dy, bx - dx) + float(rng.uniform(-0.25, 0.25))
+    d.spawn = (dx, dy, yaw)
+    w._respawn(d)
+    j = w._ball_joint
+    q, v = int(w.model.jnt_qposadr[j]), int(w.model.jnt_dofadr[j])
+    w.data.qpos[q:q + 7] = [bx, by, r_ball + 0.005, 1.0, 0.0, 0.0, 0.0]
+    w.data.qvel[v:v + 6] = 0.0
+    mujoco.mj_forward(w.model, w.data)
+    return q, v
+
+
 def _place(w: World, rng: np.random.Generator, spread: float):
     """One episode's start: the duck on its spawn (a little yaw jitter so the
     approach is never the same twice), the ball ahead of it at a drawn range
@@ -190,7 +234,7 @@ def _place(w: World, rng: np.random.Generator, spread: float):
 
 
 def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s: float = 0.0,
-        knobs: str = "", at_boards: float = 0.0) -> list[dict]:
+        knobs: str = "", at_boards: float = 0.0, at_corners: float = 0.0) -> list[dict]:
     # An ARM is a `MICRODUCK_CHASE` string, applied here so it lands in the
     # worker process before any brain is built (`brain_kwargs` reads
     # `ChaseParams.from_env()`). Every arm of a comparison runs the same seeds
@@ -222,7 +266,8 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
     last_out_t = None                  # when the referee last teleported the ball
     rows = []
     for ep in range(episodes):
-        q, v = (_place_at_boards(w, rng, at_boards) if at_boards > 0.0
+        q, v = (_place_at_corner(w, rng, at_corners) if at_corners > 0.0
+                else _place_at_boards(w, rng, at_boards) if at_boards > 0.0
                 else _place(w, rng, spread))
         # THE EPISODE'S INPUT, recorded at placement and put on EVERY row.
         # A rate needs its denominator binned on the same axis as its
@@ -309,8 +354,19 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                 break
             prev_skill = d.skill
         if swing is None:
+            # The LATCHED PLAN goes on the no-swing rows too. `place_board`
+            # gave the rate a denominator; the mechanism question -- is the
+            # collapse "no legal spot exists"? -- needs the spot on the
+            # episodes that did NOT swing, which are exactly the ones it is
+            # about. Recording it only where a swing happened is the same
+            # selection error one level down.
             rows.append({"ep": ep, "swing": False, "arm": knobs, "live": live,
-                         "place_board": place_board, "place": [round(c, 4) for c in place_xy]})
+                         "place_board": place_board, "place": [round(c, 4) for c in place_xy],
+                         "spot": None if last_spot is None
+                         else [round(float(last_spot[0]), 4), round(float(last_spot[1]), 4),
+                               last_spot[2] or last_spot[4]],
+                         "spot_board": None if last_spot is None
+                         else round(to_board(float(last_spot[0]), float(last_spot[1])), 4)})
             continue
         # let the ball run, then measure how far the swing actually sent it
         ts = w.t
@@ -510,10 +566,23 @@ if __name__ == "__main__":
                          "the open-play draw, which reaches within 0.40 m of a board on "
                          "only 6.2%% of episodes — there is no boards population in it to "
                          "measure. Try --at-boards 0.25.")
+    ap.add_argument("--at-corners", type=float, default=0.0, metavar="M",
+                    help="place the ball within M of TWO boards (a corner). Keep M <= 0.30: "
+                         "a corner spot for board_margin 0.25 is infeasible below a 0.33 m "
+                         "gap, so 0.30 and under is a clean falsifier and 0.35+ silently "
+                         "stops being one. EXPECTED VERDICT FOR 0.25 HERE IS *BROKEN*.")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     specs = [(s.split("=", 1)[0], s.split("=", 1)[1] if "=" in s else "") for s in (a.arm or ["ambient="])]
+    if a.at_corners > 0.0:
+        print(f"\n--at-corners {a.at_corners}: EXPECTED VERDICT for board_margin >= 0.20 is"
+              "\n  BROKEN, and here that is the PASS. The feasibility model says no corner"
+              "\n  spot exists below a 0.33 m gap, so the knob cannot act and must reproduce"
+              "\n  the baseline episode for episode. Any effect FALSIFIES the model."
+              "\n  A BROKEN line here is the prediction holding, not a defect -- do not"
+              "\n  'fix' the knob until it stops. It also does NOT show that acting in a"
+              "\n  corner would help: that is a separate question this arm cannot answer.\n")
     # Preflight, before a minute of compute is spent: a knob gated behind a
     # knob that ships off measures the shipped path and reports a null about
     # nothing.  `is_identical` catches that afterwards; this catches the
@@ -524,7 +593,8 @@ if __name__ == "__main__":
             print(f"\n[{label}] {warn}\n")
     arms: dict[str, list[dict]] = {}
     for label, knobs in specs:
-        args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s, knobs, a.at_boards)
+        args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s, knobs,
+                 a.at_boards, a.at_corners)
                 for s in range(a.seed0, a.seed0 + a.seeds)]
         rows: list[dict] = []
         if a.jobs > 1 and len(args) > 1:
