@@ -6454,6 +6454,16 @@ stands. It needs repeated attempts on the same ball, which means
 the arm, or a gym that does not end the episode at the first swing. Recorded so
 nobody spends a battery discovering the harness cannot answer the question.
 
+> **This limit is narrower than the sentence above may suggest, and the
+> distinction matters.** What one swing per episode rules out is comparing a
+> *replacement* swing to the one it replaced — that needs two swings in one
+> episode. It does **not** rule out asking whether the gate changes *which*
+> swing ends up being the episode's first one: the gate suppresses an attempt,
+> the episode continues, and the swing that eventually happens is still that
+> episode's first. That question is answered by comparing the swing
+> **populations** between arms, on exactly these rows. Same data, different
+> comparison — and it is the test the deferral mechanism below actually needs.
+
 **THREE RESULTS FROM THE OTHER SESSION'S VALUE-MODEL ARM (2240 episodes, gate
 off, `pred_ahead` added to every swing row — the quantity `_too_far` actually
 gates on, the brain's own belief rather than the true ball).**
