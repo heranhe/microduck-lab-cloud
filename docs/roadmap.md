@@ -6297,10 +6297,27 @@ unreachable** — its reach is concentrated where it can do least.
 **And the floor.** A legal along-the-boards spot needs `gap ≥ margin −
 kick_side`; a *usable* spot needs `margin ≥ the body's own extent`. Substituting:
 
-    gap  >=  body - kick_side  =  0.116 - 0.060  =  0.056 m
+    gap  >=  body - kick_side  =  0.129 - 0.060  =  0.069 m
 
-**A ball closer than ~5.6 cm to a board — about 1.6 ball radii — has no legal
-kick spot at ANY margin.** The probe confirms it: at m=0.116 the act region
+**A ball closer than ~6.8 cm to a board — about 2 ball radii — has no legal
+kick spot at ANY margin.**
+
+> **Corrected from 5.6 cm, and my caveat pointed the wrong way.** I first used
+> the nominal-pose extent (0.116 m) and warned the floor might be a *range* as
+> low as 3.1 cm, because a 90th percentile over the duck's geoms is 0.091. That
+> percentile is meaningless here: it is taken **over geoms**, and a body's
+> footprint is set by its **outermost** geom, so the max is the physical
+> quantity and a percentile over parts is not a smaller body. The variation
+> worth checking was across **poses**, and measuring that (the other session
+> first, reproduced here independently with the walk policy driving) gives
+> **0.1292 m max over 499 walking ticks with 0.4 mm of spread** — theirs 0.1275
+> with 0.5 mm. A walking duck is **wider** than a standing one by ~13 mm, so the
+> floor goes UP, and it is a constant rather than a range. One caveat kept from
+> them: `geom_rbound` is a bounding-*sphere* radius, so 0.129 is an upper bound
+> on the true horizontal extent; the pose-to-pose *difference* is the
+> trustworthy part. My own first attempt at this measured 0.215 m and was
+> invalid — I built the World with `infer_for=None`, so no policy was driving
+> the ducks and I measured a limp one sagging; the 98 mm spread was the tell. The probe confirms it: at m=0.116 the act region
 covers gap 0.06-0.20 and gap 0.04 is 0% act, 78% wasted. This is not a tuning
 problem and no value of `board_margin` reaches it. It also shows why raising the
 margin to the true body extent is a wash rather than a fix — it buys reach at
@@ -6337,7 +6354,7 @@ acceptance test of a placement nobody was changing.
 
 Near a board, then, the duck **does not need a better place to stand, it needs a
 different action** — a push,
-or a nudge that puts the ball more than 5.6 cm out before any kick is planned.
+or a nudge that puts the ball more than ~6.8 cm out before any kick is planned.
 `kickselect` already ranks pushes; giving it the reachability constraint would
 let it choose one exactly when no kick spot exists, which is the design change
 above and is now bounded by a number rather than an intuition.
