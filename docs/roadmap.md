@@ -6445,7 +6445,14 @@ recovers in the sim. Two candidate reasons the gate is worth less, neither
 tested here: it is armed less often (measured, 43.8% vs 66.4% of line-up ticks),
 and — not in anyone's model so far — **when it does decline a swing under the
 crop the replacement swing is nearly as bad**, since even gate-armed crop swings
-miss 63.6% of the time. Declining is only worth what the next attempt is worth.
+miss 63.6% of the time. Declining is only worth what the next attempt is worth. **That second one is NOT testable in
+`kick_gym`** — checked rather than assumed: every episode contains exactly one
+swing (2001 swings across 2001 episodes, none with two), so there is no
+"subsequent swing" to compare and no gym arm can answer it as the harness
+stands. It needs repeated attempts on the same ball, which means
+`probe_kick_line.py` reading swings out of a contested match with the camera as
+the arm, or a gym that does not end the episode at the first swing. Recorded so
+nobody spends a battery discovering the harness cannot answer the question.
 
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
