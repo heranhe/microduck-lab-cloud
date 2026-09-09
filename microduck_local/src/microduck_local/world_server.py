@@ -80,6 +80,19 @@ from .world.scenario import NAME_RE, TOF_PRESETS, ScenarioError, validate_scenar
 # defaults to 0 (the benchmark's baseline) and takes --ball-out-s.
 PITCH_BALL_OUT_S = 5.0
 
+# …and a fallen duck on a pitch GETS UP instead of vanishing and reappearing
+# (roadmap B.1). Without this the lab respawns it the instant it falls, which
+# is the one thing on /sim that is plainly not what a robot does. The shipped
+# `alpha_stand` recovers from lying on the back, front and side 100% of the
+# time on the bench, and 3 of 3 real falls over 24 runs of 3v3, with the
+# ledger flat (possession, advance, progress all unmoved) — so this is honesty
+# on the page bought for nothing measurable. `PITCH_GETUP_S` is the TIMEOUT: a
+# duck that cannot make it up in that long is respawned as before. Batteries
+# are unaffected — `eval-pitch` still defaults to the teleport, and takes
+# `--getup-policy` to opt in — so no published number moves.
+PITCH_GETUP_S = 5.0
+PITCH_GETUP_POLICY = "pollen:alpha_stand"
+
 TICK_HZ = 50
 SEND_EVERY = 2
 MAP_EVERY = 12               # occupancy maps ride every 12th frame (~2 Hz): 3–4 kB each per duck
@@ -258,6 +271,13 @@ class WorldState:
         world = World(scenario, infer_for=infer, seed=seed)
         if world.goal_width > 0:
             world.ball_out_s = PITCH_BALL_OUT_S      # the referee's throw-in (arena.py, roadmap Track 4 item 11b)
+            # A real get-up, when the policy is there. `infer_for` already
+            # degrades to None on a missing checkout, which is exactly the
+            # teleport this replaces — so a lab without the shipped policies
+            # behaves as it always did.
+            getup = self.infer_for(PITCH_GETUP_POLICY)
+            if getup is not None:
+                world.getup_infer, world.getup_s = getup, PITCH_GETUP_S
         self.brains = {}
         self.teams = {}
         self.goal_seq = world.goal_seq

@@ -129,3 +129,34 @@ def test_the_walker_gets_it_back_only_once_it_STAYS_up():
     _run_until_up(w)
     assert d.down_until < 0.0 and w.getups == 1
     assert w.t - first_up >= w.getup_hold_s                    # it had to hold it
+
+
+def test_the_lab_pitches_get_up_and_rooms_and_batteries_do_not():
+    """On /sim a fallen duck used to vanish and reappear, which is the one
+    thing on that page a robot plainly does not do: the lab built its World
+    with `getup_s` 0, i.e. respawn on the tick it fell. Pitches now get the
+    real thing. Rooms are left alone (a duck carrying a toy is another
+    question) and eval-pitch still defaults to the teleport, so no published
+    number moves."""
+    from microduck_local.world_server import (
+        PITCH_GETUP_POLICY,
+        PITCH_GETUP_S,
+        WorldState,
+    )
+    st = WorldState(None)                      # load_infer None: no policies available
+    st.preload("pitch-2v2")
+    assert st.world.getup_infer is None        # …degrades to exactly the old teleport
+    assert PITCH_GETUP_S > 0 and PITCH_GETUP_POLICY == "pollen:alpha_stand"
+
+    stand = onnx_infer(POLICIES_DIR / "alpha_stand.onnx")
+    lab = WorldState(lambda pid: stand if pid == PITCH_GETUP_POLICY else None)
+    lab.preload("pitch-2v2")
+    assert lab.world.getup_infer is not None and lab.world.getup_s == PITCH_GETUP_S
+    room = WorldState(lambda pid: stand if pid == PITCH_GETUP_POLICY else None)
+    room.preload("living-room")
+    assert room.world.getup_infer is None and room.world.getup_s == 0.0
+
+    import inspect
+
+    from microduck_local.eval_pitch import run_one  # the benchmark is untouched
+    assert inspect.signature(run_one).parameters["getup_policy"].default is None
