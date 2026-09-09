@@ -6588,6 +6588,24 @@ swings are also ~98% blind. That is very likely — the crop is blinder
 everywhere — but it is **unmeasured**, and `pred_ahead` on a crop gate-ON arm
 would settle it. Recorded as the next question if this line continues.
 
+**THE PRECISE CLAIM THE ARMS SUPPORT, since two nearby ones are wrong.** The
+other session's framing — that the camera's help is "upstream of the swing
+entirely" — is right about the *sighting* and too strong about the *estimate*:
+
+- **Wrong:** "a wider camera lets the duck see the ball as it kicks." These arms
+  actively contradict it. Gate-ON swings are 97.9% blind in *both* arms; the
+  duck never sees the ball at the moment of a good swing.
+- **Also wrong:** "the camera only helps upstream, so the swing is
+  camera-independent." Blind is not information-free.
+- **Supported:** *the camera never contributes at the instant of the swing — the
+  duck is blind by then, by design. It determines how good the last sighting
+  was, and every swing, seen or blind, flies on that.*
+
+**STILL OPEN.** The inference above narrows the fourth question but does not
+close it: it explains why the crop's close-blind swing is worse, not why the
+crop's gate benefit lands *below* the collapsed 0.71 rather than at it. Left
+open in these terms rather than implying the chain is understood end to end.
+
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
 what 12u now supports on possession and ball advance. If the replacement ships,
