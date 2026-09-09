@@ -509,7 +509,17 @@ def test_the_tof_sees_a_ball_at_the_feet_when_the_head_dips():
 
 def test_the_chase_brain_tracks_a_ball_the_tof_sees_at_its_feet():
     """`tof_ball_m`: with no ball in the camera frame, the ToF's floor blob
-    becomes a ball sighting for the tracker; off, the brain has no ball."""
+    becomes a ball sighting for the tracker; off, the brain has no ball.
+
+    `tof_ball_lineup` (shipped True) restricts that to `lineup`/`settle`, and
+    the restriction is the feature rather than an optimisation of when to
+    consult a good sensor. Restricted to lineup/settle the blob is the ball 97%
+    of the time, and 85% in the case it exists for (the camera blind), against
+    85% pooled over every state and 30% in the pooled blind case — so pooled,
+    the sensor looks useless in exactly the situation it was built for, and
+    split by state it clears the bar. In `search` a ball-height blob 0.3 m away
+    is usually another duck's foot, and lining up on a foot is a fall. Event
+    counts and the full table: roadmap 12e, `scripts/probe_tof_ball.py`."""
     import mujoco
 
     from microduck_local.brain import Senses
