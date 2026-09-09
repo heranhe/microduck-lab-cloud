@@ -4910,3 +4910,53 @@ two things that could — a wider or second down-pitched lens
 (`DetectorSpec.bottom_pitch_deg` exists as a sensitivity test, and a camera
 this robot does not have is not a fix), or **the ToF, which already points
 there (item 12e, `tof_ball_m`, ships at 0)**. 12e is now the live one.
+
+
+### 12e. The ToF as the last-20-cm ball sensor, gated to the line-up — MEASURED OFF (2026-09-08), third time and on much better terms
+
+The blob had been measured off twice by pooling EVERY tick it fired. That
+population was the flaw: it also fires in `search`, `avoid`, `retreat` and
+`support`, where the duck is anywhere on the pitch and a ball-height thing
+0.3 m away is usually somebody's foot. `scripts/probe_tof_ball.py` (6 seeds ×
+180 s of 2v2, 1830 events) splits it the way the decision would use it:
+
+| population | events | camera had it | IS THE BALL |
+|---|---|---|---|
+| every tick it fires | 1830 | 70 % | 85 % |
+| lineup / settle | 1379 | 82 % | **97 %** |
+| lineup / settle, nobody beside | 1354 | 82 % | 97 % |
+| …and the camera blind (the case for it) | 241 | 0 % | **85 %** |
+
+So the sensor is not the problem. In the population that matters it is right
+85 % of the time, not the 30 % the pooled number reported, and it clears the
+four-in-five bar the probe names. **`tof_ball_lineup` (new, default True)**
+restricts the blob to `lineup`/`settle` with no body beside; False reproduces
+the always-on behaviour the earlier measurements killed. Locked in
+`tests/test_kickselect.py`.
+
+**And it still does not pay.** `MICRODUCK_CHASE=tof_ball_m=0.5`, 2v2 ×  300 s,
+`--ball-out-s 5`, get-up on, discovery (0–23) then fresh (100–123):
+
+| | discovery | fresh | pooled (48) |
+|---|---|---|---|
+| ballAdvance | +0.095 (p 0.043) | +0.039 (p 0.375) | +0.067 (p **0.036**) |
+| ballProgress | +0.116 (p 0.083) | +0.038 (p 0.471) | +0.077 (p 0.070) |
+| goals | 22 → 33 | 24 → **24** | 46 → 57 (p 0.195) |
+| falls | 0.33 → 0.50 | 0.04 → **0.29** (p 0.070) | 0.19 → 0.40 (p 0.108) |
+| kicks a run | 5.96 → 5.96 | 6.29 → 6.21 | flat |
+
+**The fresh block did not confirm it** — the headline metric went from p 0.043
+to p 0.375 and goals landed dead flat — so the pooled p 0.036 is carried by the
+discovery block, which is the exact pattern this repo has been wrong about
+before. And falls trend worse in BOTH blocks (0.19 → 0.40 pooled), the same
+direction that killed the ungated version twice; at 48 seeds that is not
+resolvable (falls want ~376), which is a reason to distrust it, not to discount
+it.
+
+Also worth recording: whiff was FLAT with the blob on (26 → 29 %, 10 of 24 seeds
+better, `probe_kick_line` on the same seeds) and the kick count identical, so
+whatever advance gain exists is not a better swing — it is the line-up. If this
+is ever re-opened, that is the mechanism to instrument.
+
+`tof_ball_m` stays 0. The gate stays, because it makes the next attempt start
+from the right population instead of the one that produced 30 %.

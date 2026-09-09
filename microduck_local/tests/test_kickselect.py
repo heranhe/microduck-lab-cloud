@@ -425,3 +425,31 @@ def test_the_post_kick_look_sweeps_the_head_around_the_exit_line_when_asked():
             assert all(abs(y) < 1e-9 for y in yaws)
         else:
             assert yaws and max(yaws) > 0.9 and min(yaws) < 0.1        # sweeps to the left of 0.5 and back across it
+
+
+def test_the_tof_blob_speaks_only_in_the_lineup_when_the_gate_is_on(monkeypatch):
+    """Roadmap 12e: the blob is 97% the ball in `lineup`/`settle` and 85% there
+    with the camera blind, against 85%/30% pooled over every state it fires in
+    (scripts/probe_tof_ball.py) - so `tof_ball_lineup` restricts it to that
+    population. Off, it is offered in every state, which is what the two
+    earlier measurements killed."""
+    import microduck_local.brain.controllers as ctl
+    from microduck_local.brain.runtime import Senses
+    from microduck_local.sensors.tof import TofFrame
+
+    assert ChaseParams().tof_ball_lineup is True and ChaseParams().tof_ball_m == 0.0
+    monkeypatch.setattr(ctl, "tof_floor_ball", lambda fr, r_max=0.5: (0.1, 0.25))
+    # An empty-but-real frame: nothing in view, so only the patched blob speaks.
+    frame = TofFrame(t=1.0, depth_mm=np.zeros((8, 8), np.uint16), valid=np.zeros((8, 8), bool),
+                     mount_pos=np.array([0.05, 0.0, 0.21]), mount_rot=np.eye(3),
+                     dirs_local=np.tile(np.array([1.0, 0.0, 0.0]), (8, 8, 1)))
+    got = {}
+    for gated in (True, False):
+        for state in ("lineup", "search"):
+            b = Chase(ChaseParams(tof_ball_m=0.5, tof_ball_lineup=gated), goal=(1.5, 0.0))
+            b.state = state
+            b.step(Senses(t=1.0, tof=frame, tof_age=0.0, det=None, det_age=None,
+                          speed=0.0, odom=(0.0, 0.0, 0.0), skill=None, bumped=False))
+            got[(gated, state)] = b.tof_ball is not None
+    assert got[(True, "lineup")] and not got[(True, "search")]      # gated: the line-up only
+    assert got[(False, "lineup")] and got[(False, "search")]        # off: everywhere, as before

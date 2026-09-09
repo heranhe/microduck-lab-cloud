@@ -1850,6 +1850,27 @@ class ChaseParams:
     # docs/camera-hardware.md 3d). Better optics shrink this feature's job
     # faster than they improve it.
     tof_ball_m: float = 0.0
+    # WHERE the blob is allowed to speak (roadmap item 12e, 2026-09-08). The
+    # two measurements above pooled EVERY tick it fired, and that population
+    # is what made it look useless: it fires in `search`, `avoid`, `retreat`
+    # and `support` too, where the duck is anywhere on the pitch and a
+    # ball-height thing 0.3 m away is usually a foot. Split by the state the
+    # decision would actually use it in (`scripts/probe_tof_ball.py`, 6 seeds
+    # x 180 s of 2v2, 1830 events):
+    #
+    #   population                              events  camera had it  IS THE BALL
+    #   every tick it fires                       1830           70%          85%
+    #   lineup / settle                           1379           82%          97%
+    #   lineup / settle, nobody beside            1354           82%          97%
+    #   …and the camera blind (the case for it)    241            0%          85%
+    #
+    # 85% in the blind line-up is a different sensor from the 30% the pooled
+    # number reported, and it clears the bar the probe names (four times in
+    # five, because the cost of the other case is a line-up on a foot). With
+    # this True the blob is offered only in `lineup`/`settle` with no body
+    # beside; False reproduces the old always-on behaviour those two
+    # measurements killed.
+    tof_ball_lineup: bool = True
     # SELF-LOCALISATION from the goal posts (brain/localize.py; roadmap Track
     # 4 s6 C.2 and item 10). The brain's odometry is dead reckoning that
     # drifts (`OdomNoise`): at `datasheet` two teammates' frames wander
@@ -2514,7 +2535,8 @@ class Chase:
             self.attack = odom[2]                  # placed facing the goal it attacks (make_pitch does)
         det_in = senses.fresh_det(self.DET_MAX_AGE)
         self.tof_ball: tuple[float, float] | None = None
-        if p.tof_ball_m > 0 and (det_in is None or not any(d.cls == "ball" for d in det_in.detections)):
+        blob_ok = not p.tof_ball_lineup or (self.state in ("lineup", "settle") and not self._beside(t))
+        if p.tof_ball_m > 0 and blob_ok and (det_in is None or not any(d.cls == "ball" for d in det_in.detections)):
             tof_fr = senses.fresh_tof(self.TOF_MAX_AGE)
             blob = None if tof_fr is None else tof_floor_ball(tof_fr, r_max=p.tof_ball_m)
             if blob is not None:
