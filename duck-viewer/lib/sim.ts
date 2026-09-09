@@ -217,6 +217,18 @@ export interface BrainInputs {
     memory: [number, number] | null; predicted: [number, number] | null; spot: [number, number, string] | null;
     bumped?: number | null; tofBall?: [number, number] | null;
   };
+  /** The TEAM's blackboard, as this duck sees it. `ball` is the shared
+   *  belief — the freshest teammate sighting, or the inverse-variance fusion
+   *  of all of them when the board is fusing — which is what a supporter
+   *  steers by. Absent when nobody on the team has seen the ball. */
+  team?: {
+    name: string;
+    attacker: string | null;
+    ball?: [number, number];
+    ballVel?: [number, number];
+    jobs?: Record<string, string>;
+    claims?: Record<string, { dist: number | null; cost: number | null; age: number; pos?: [number, number, number] }>;
+  };
 }
 export interface SimDuck {
   id: string;

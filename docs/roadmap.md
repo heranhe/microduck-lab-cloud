@@ -5366,3 +5366,379 @@ hoped for, at ~0.8 CPU-seconds each. And per 12n, the population itself is a
 function of the camera: at 42.7% team-blindness (the calibrated replacement)
 contests become common, where at the crop's 85.2% they essentially never
 happen. **The duel is a question about the camera, not about geometry.**
+
+
+### 12o. The corner post: a fix built on a case that does not occur — RETRACTED (2026-09-09)
+
+**Claimed and then withdrawn the same hour.** From /sim: a duck walking into
+the corner and holding there, its own camera preview showing board and **0
+det**. The proposed mechanism was that the DEFENDER's post is laid from its own
+goal along the line to the ball, so with the ball in its own corner the post
+lands inside the wall — hand-computed as (−1.66, 0.49) against bounds of
+1.70 × 1.425, four centimetres out. `post_margin` clamped every post inside the
+boards and shipped at 0.25.
+
+**It does not happen in play.** Swept directly on `eval-striker` with a
+defender+striker roster on both sides, 2 seeds × 60 s, everything else fixed:
+
+| `post_margin` | cream possession, seeds 0 and 1 |
+|---|---|
+| 0.0 (off) | 9.32, 21.46 |
+| **0.25 (as shipped)** | **9.32, 21.46 — bit-identical** |
+| 0.30 | 9.32, 21.46 — bit-identical |
+| 0.40 | 32.42, 11.76 — binds |
+
+A clamp that changes nothing at 0.30 is a clamp no post ever came within 0.30 m
+of triggering. So posts do not reach the boards in real play, the hand-built
+corner case is not one the brain produces, and **the knob is reverted** rather
+than shipped inert. At 0.40 it does bind, but that is no longer a correctness
+fix for an impossible post — it is a positional knob that moves supporters
+generally, and it would need its own discovery and fresh block.
+
+**Four ways I got a confident zero from a question I had not asked**, all on
+this one item, all in one hour, recorded because the pattern is the lesson:
+
+1. **Wrong subject** — tested the clamp on the STRIKER, whose post is never
+   near a wall, and called it a no-op.
+2. **Wrong harness** — ran the A/B through `eval-pitch`, which is the
+   deliberately role-free control, so a role-only knob could not fire. Nine
+   metrics identical to three decimals; the skill file says this in bold.
+3. **Measured through the fix** — a population probe that called
+   `_hold_target` while `post_margin` was already the default, so it counted
+   CLAMPED posts and reported 0.000%.
+4. **Instrumentation that lied** — a wrapper that called `_hold_target` twice
+   per tick to compare clamped against unclamped, reporting a 7.56% firing
+   rate that the direct sweep contradicts. Re-entering a method with side
+   effects is not a measurement of it.
+
+Only the fourth needed the direct sweep to catch; the other three would have
+fallen to one positive control — show the measurement produce a non-zero on
+something already believed, before quoting a zero (playbook rule 6, 077a0a0).
+
+**What this leaves of the /sim observation:** the corner-walking is NOT
+explained by post geometry. 12m's measurement stands — the duck is at a board
+with the ball within 0.5 m on 79.7% of that time — and 12p gives the mechanism:
+a ball at a board is a ball almost nothing can be done with. Corners are also
+not traps (3.79 s a visit against 5.17 s at a flat wall).
+
+### 12p. Why the boards eat the game: the swing rate against distance to a board — MEASURED (2026-09-09)
+
+The dead-ball budget said the boards are 72% of dead-ball time with **0 kicks
+taken there**, which is a statement about a whole match and does not say
+whether that is the ball's fault or the duck's. `kick_gym --at-boards`
+(microduck-4a, eadbe47) asks it directly: one duck, one ball, one placement,
+one swing, the real `chase` brain doing the walk-in and the settle, with the
+ball drawn near a board instead of in open play and the duck spawned the SAME
+0.45–1.40 m walk-in either way — so the two modes differ in where the ball is
+and not in how far the duck walks, which matters because approach length
+already drives the whiff through plan staleness.
+
+**The swing rate falls monotonically as the ball is drawn nearer a board, from
+85% in open play to 4% when it is drawn within 0.15 m** (200 episodes an arm,
+8 seeds 800–807, shipped brain throughout, the open-play control from the same
+seeds and episode count):
+
+| ball drawn within | mean ball-to-board distance sampled | episodes producing a swing |
+|---|---|---|
+| 0.15 m | 0.10 m | **4%** |
+| 0.30 m | 0.18 m | 9% |
+| 0.60 m | 0.33 m | 26% |
+| 1.00 m | 0.53 m | 35% |
+| open play | (much larger) | **85%** |
+
+**READ THE ROWS AS CUMULATIVE, NOT AS A RESPONSE CURVE.** `--at-boards M`
+draws uniformly in [radius + 0.01, M], so the 0.60 m arm contains balls at
+0.06 m as well as at 0.59 m; each row is the average over everything inside
+its cap, which is why the mean-distance column is there. The endpoints are
+clean and the monotonicity is real; the intermediate points are not a
+per-distance response and must not be quoted as one. A proper response curve
+means binning by each episode's ACTUAL placement, which needs the ball's
+position kept in the row (`kick_gym` currently drops it — `swing.pop("ball0")`,
+and a no-swing row keeps nothing). Four minutes of compute once someone adds
+the field; not done.
+
+**This is the strongest statement of item 12's problem yet**, and it is a
+positive control as well as a result: the rate recovers toward open play as
+the ball comes off the board, so the harness is working rather than failing to
+find swings. It also reframes what the boards cost. It is not that the ducks
+get stuck there — 12m measured them leaving a corner in 3.8 s, faster than a
+flat wall — it is that a ball at a board is a ball almost nothing can be done
+with: the kick spot lies 8 cm behind the ball along the kick line, which for a
+ball at a wall is inside the wall, and `kick_clear` refuses a swing at
+anything with a board right in front of it.
+
+**And the knob for it has been off the whole time.** `board_margin` gates the
+along-the-boards kick spot AND is the clearance it demands, and it ships at
+**0.0** — so the boards-line spot is disabled today, and the pitch null that
+retired it (11b: kicks 8.7 → 8.9, p 0.85) was measured on a knob whose shipped
+value turns the feature off. Independently, that null failed on RESOLUTION and
+not population: at 24 seeds the MDE on kicks was 28% of baseline, about 2.4
+kicks, against an observed difference of 0.2. Anything up to a 28% improvement
+was invisible. Unlike the duel's nulls (0.07% firing rate) this one
+is worth re-running, and the gym is the instrument — at 4–9% swing rates the
+metric is **swings per episode**, never whiff rate, or a knob that takes fewer
+but better swings reads as a win.
+
+#### Reading a null against how often the rule fires
+
+A rule that only changes outcomes on the ticks it fires moves a whole-match
+metric by roughly (firing rate) × (per-firing effect), so the smallest
+per-firing effect a battery could have seen is
+
+    required per-firing effect  =  MDE (as a fraction of baseline) ÷ firing rate
+
+which turns a null into a POSITIVE claim — *this rule does not produce more
+than an X% improvement on the ticks it fires* — instead of "no significant
+difference". (microduck-4a, 2026-09-09.)
+
+**State it one-sided.** The division above assumes a firing's effect is
+consumed within its own tick. Most things here are not: a firing that lands in
+STATE — the ball somewhere else, the duck somewhere else — is inherited by
+every tick after it, so the real footprint is F ≈ min(1, k·f) for a persistence
+of k ticks, and the requirement is MDE/F. Since F ≥ f, **the formula
+OVERSTATES what you would need and therefore UNDERSTATES what the null rules
+out.** It cannot claim more than it should, which is the safe direction and the
+reason it is publishable. So: *"rules out per-firing effects above X%, and
+possibly smaller ones."* Never "rules out exactly X".
+
+| rule | fires on | MDE | bound at k=1 | with k=10 |
+|---|---|---|---|---|
+| contest_margin (the duel) | 0.07% | 19% | 27,143% | 271% at k=100 |
+| kick_ahead_max alone | 5% | 19% | 380% | 38% |
+| **board_margin (the 11b null)** | 15% | 28% | 187% | **28%** |
+
+Persistence is the axis, not action-versus-positional — `board_margin` is an
+action knob whose effect is maximally persistent, because a kick puts the ball
+somewhere else and the rest of the run inherits it. So the 11b null is more
+informative than the k=1 bound suggests, and "never measured in any meaningful
+sense" (an earlier draft of this section) was too strong. The duel's verdict is
+the one that needs no assumption: 27,143% survives a 100× persistence
+multiplier at 271%, two orders of magnitude clear.
+
+Rule of thumb where the confined case does hold: **a null is quotable when the
+firing rate exceeds about twice the MDE.** Measuring k directly means comparing
+paired trajectories after a single firing and counting ticks to reconvergence;
+with a between-arm correlation of r = 0.05 at 300 s the prior is that k is
+large for nearly everything. Not done.
+
+**The consequence is about the instrument, not this knob.** At this repo's
+MDEs almost nothing fires often enough for a whole-match null to be quotable on
+the confined reading, which retroactively weakens much of Track 4's
+shelved-knob list. That does NOT license re-opening them: it licenses the
+smaller claim that they were not shown to be ineffective. Anyone re-opening one
+should compute MDE ÷ firing rate first, with a persistence estimate if the
+effect lands in state, and proceed only if the answer is a number worth having.
+
+
+### 12q. The along-the-boards kick line WORKS, and ships disabled — MEASURED (2026-09-09)
+
+`board_margin` gates the kick spot laid ALONG a board (rather than 8 cm behind
+the ball, which for a ball at a wall is inside the wall) and supplies the
+clearance it demands. It ships at **0.0**, i.e. off, and its only prior
+measurement — 11b, kicks 8.7 → 8.9 on a 24-seed pitch battery, p 0.85 — was
+taken on the disabled knob's own scenario at an MDE that could not have seen a
+187% per-firing effect (see 12p).
+
+Measured properly in `kick_gym --at-boards`, **swings per episode** as the
+metric (at these rates whiff is secondary: a knob that takes fewer but better
+swings would read as a win). 2240 episodes an arm, 8 seeds × 280, shipped
+brain otherwise:
+
+| ball drawn within | arm | swings/episode | |
+|---|---|---|---|
+| **0.30 m of a board** | shipped (`board_margin` 0.0) | **7.05%** | |
+| | **`board_margin` 0.25** | **11.25%** | **1.59×, z +4.87, p < 0.0001** |
+| | `board_margin` 0.40 | 7.10% | inert (p 0.95) |
+| 0.15 m | shipped | 3.66% | |
+| | `board_margin` 0.25 | 3.48% | nothing (p 0.75) |
+| | `board_margin` 0.40 | 3.66% | **flagged BROKEN — baseline episode for episode** |
+
+Whiff among the swings that did happen went 26% → 22% at 0.30 m (p 0.34, not
+resolvable) — so this is MORE swings, not fewer-and-better ones.
+
+#### The headline is diluted about 2.5× — the rule cannot act on most episodes
+
+A boards spot exists exactly when **`board_margin ≤ ball_gap + 0.05`**, where
+`ball_gap` is the ball's distance from the board. Measured by calling
+`_along_the_boards` at 1 cm steps for eight gaps on the side board (gym
+bounds), not reconstructed:
+
+| ball gap | 0.05 | 0.10 | 0.15 | 0.20 | 0.25 | 0.30 | 0.40 | 0.60 |
+|---|---|---|---|---|---|---|---|---|
+| largest feasible margin | 0.11 | 0.16 | 0.20 | 0.26 | 0.31 | 0.36 | 0.46 | 0.65 |
+
+The feasible FRACTION of a draw has to be measured, not derived from that law:
+the draw is 2-D (a position along the board as well as a gap), a placement near
+a corner is bound by both boards, and `_along_the_boards` picks which board to
+line along — none of which a 1-D estimate expresses. Measured by drawing as
+`_place_at_boards` does and calling the rule on each actual (x, y), 4000 draws:
+
+| | 1-D estimate | measured, wrong pitch | **measured, `gym_scenario()`** |
+|---|---|---|---|
+| `--at-boards 0.30`, margin 0.25 | 39.2% | 36.5% | **35.8%** |
+| `--at-boards 0.15`, margin 0.10 | 95.2% | 96.0% | **95.2%** |
+| `--at-boards 0.15`, margin 0.15 | 47.6% | 53.5% | **52.8%** |
+| `--at-boards 0.15`, margin 0.25 | 0% | — | **0.00%** (4000 draws) |
+
+The estimate errs in BOTH directions — worse at 0.30 where corners bind, better
+at 0.15/0.15 where the rule can line along the board it is further from — so it
+could not have been patched with a correction factor. (Independently measured
+by microduck-4a at 35.8 / 95.2 / 52.8 on its own draw; agreement to a point.)
+
+**Name the pitch a draw came from, not just "a real call".** The feasibility
+LAW is pitch-invariant, so a draw built on the wrong pitch
+(`make_pitch(per_side=2)`, bounds 1.7 × 1.425, instead of the gym's own
+1.5 × 1.25) still gives the right law — but the FRACTIONS are not invariant,
+because `_place_at_boards` picks a board in proportion to its length and
+corners bind differently, and the corner SHARE is a ratio of areas and moves
+further still (16.3% wrong-pitch against 19.2% right). The wrong pitch was
+caught on the corner share, where the error was large, and only then found to
+have shifted the fractions too — the same mistake hiding in four numbers and
+visible in one. Every measurement in this section is on `gym_scenario()`
+unless it says otherwise. That is the whole shape of 12q:
+
+- the 0.15 m "null" is not a result — the knob was never once able to act;
+- 0.40 is inert because it disables itself, as above;
+- and the 0.30 m headline averages 39.2% acting episodes with 60.8% that ran
+  the baseline path.
+
+~~Undiluted on the measured 35.8%, 7.05% → 18.8% per acting episode, 2.66×.~~
+**WITHDRAWN — see 12r.** The division assumes the per-acting effect is constant
+in the margin, and the `--at-boards 0.15` arm shows it is not (a margin feasible
+on 52.8% of the draw out-performed one feasible on 95.2%). The headline
+1.46–1.71× stands; no per-acting figure does.
+
+**And 19.2% of the `--at-boards 0.30` placements are corner-ish** — both board
+distances under 0.30 m, drawn on the gym's own `gym_scenario()` floor
+(3.5 × 3.0, bounds 1.5 × 1.25) — where margin 0.25 provably never fires — so the corner limit
+below is not about some other scenario, it is about a sixth of the episodes in
+this very result.
+
+#### Pitch-size invariant, and structurally dead in corners
+
+Both by direct call (1 cm sweep, bounds read from `make_pitch` and the
+`floor/2 − 0.25` the brain uses — microduck-4a, verified independently here):
+
+| largest feasible margin | gap 0.05 | 0.10 | 0.15 | 0.20 | 0.30 |
+|---|---|---|---|---|---|
+| mid-board, 1v1 / 2v2 / 3v3 (identical) | 0.11 | 0.16 | 0.20 | 0.26 | 0.36 |
+| **corner**, 1v1 / 2v2 / 3v3 (identical) | **none** | 0.02 | 0.06 | 0.11 | 0.21 |
+
+**Pitch size does not matter.** The law depends on the ball's gap from the NEAR
+board and the spot's offset from the ball, not on where the other boards are,
+so a margin tuned in the gym cannot go inert on 3v3 bounds. That ship criterion
+is satisfied rather than deferred.
+
+**Corners are a different law** — roughly `margin ≤ gap − 0.09` against
+`gap + 0.05` mid-board — and at 0.05 m into a corner **no margin is feasible at
+all**. The candidate 0.25 would need the ball 0.34 m off BOTH boards, which is
+not a corner. So this rule helps along a board and **has never once fired in a
+corner**, which matters because 12m measured corners as a real population.
+Anyone reading "the boards line works" should not expect it there.
+
+This argues for BUILDING the knob split independently of any battery: a corner
+needs a large trigger (the ball is deep inside any sensible radius) and a tiny
+clearance (or nothing is feasible), which is exactly the pair one number cannot
+be. **It does not argue that acting in a corner helps** — that is the
+"the rule can now act" versus "the rule improves anything" gap this whole
+section is about, and the existing arms cannot close it, since 0.25 never fires
+in the corner population. Three separate fates: the split is NECESSARY (settled
+by the table), the split is worth BUILDING (follows), and acting in corners
+PAYS (open, wants an `--at-corners` arm).
+
+**This caveat is stronger than the MDE/firing-rate bound's, and should not be
+discounted the same way.** There, confinement is an assumption: an effect may
+persist past the ticks it fires on. Here it is not assumed — on a non-acting
+episode `_along_the_boards` returns None and the code runs the *identical*
+baseline path, and the BROKEN flag at `board_margin` 0.40 (baseline episode for
+episode) is the proof rather than the argument.
+
+**It has a working range, and the reason is a FLAW IN THE KNOB rather than a
+fact about walls** (microduck-4a's diagnosis, confirmed against the code
+2026-09-09). `board_margin` does two opposing jobs: it is the TRIGGER (the
+boards line is used when the normal spot is `not _clear_of_boards`, so a bigger
+margin fires more often — controllers.py:2416) and it is also the FEASIBILITY
+test the replacement spot must itself pass (`_along_the_boards` returns None
+when neither foot's spot is ≥ `board_margin` from every bound). Forcing them
+equal means asking to switch early *and* demanding more room, which are
+opposite wants. Asked of the code directly, for a ball at a given gap from a
+side board:
+
+| margin | ball 0.30 m off a board | ball 0.15 m off |
+|---|---|---|
+| 0.15 | never triggers | triggers, **spot found** |
+| 0.25 | triggers, spot found | triggers, **no spot** |
+| 0.40 | triggers, **no spot** | triggers, no spot |
+
+So **0.40 is inert because it disables itself at the top of its range**, and
+the 0.15 m null is the feasibility half refusing a spot that a SMALLER margin
+finds — not the geometry running out. (An earlier draft of this section said
+"even the along-the-board spot is inside the wall that close". That was wrong
+and is corrected here rather than silently edited.) The fix is to split the
+knob — `board_trigger` large, `board_clear` small — and the prediction that
+small margins work at 0.15 m is under test before that code is written.
+
+And **0.40 is inert at both distances**:
+the gym's broken-versus-null flag (microduck-4a, c4c8138 lineage) caught it
+reproducing the baseline episode for episode and refused to call it a null.
+Sweeping only the larger value would have published a clean null on a knob that
+never reached its code — the same failure class as the 11b null it was
+re-testing.
+
+**Ship criterion added:** the feasible window depends on `kick_ahead` AND on
+the pitch bounds, so a margin tuned in the 3.0 × 2.5 gym can ship INERT on
+another pitch — this same failure, silently, on a knob believed to be on.
+Anything that ships must be checked on the 2v2 and 3v3 bounds.
+
+Status: **discovery block only.** Fresh seeds (100–107), the `--opponents 1`
+match-realistic arm and the small-margin prediction test are running; 12p's curve is one duck, and a real ball at a
+board usually has a body beside it, which can only suppress swings further. Not
+shipped until both land.
+
+
+### 12r. The boards line REPLICATES and survives an opponent — but the registered prediction FAILED and the 2.66× is withdrawn (2026-09-09)
+
+All on `gym_scenario()`, 2240 episodes an arm, swings per episode:
+
+| | baseline | `board_margin` | | |
+|---|---|---|---|---|
+| **discovery**, seeds 0–7, `--at-boards 0.30` | 7.05% | 11.25% (0.25) | 1.59× | p < 0.0001 |
+| **fresh block**, seeds 100–107, same | 7.41% | 10.80% (0.25) | **1.46×** | **p = 0.0001** |
+| **with one opponent**, seeds 0–7, same | 4.38% | 7.50% (0.25) | **1.71×** | **p < 0.0001** |
+
+**It replicates on fresh seeds and it survives a contested ball.** The opponent
+arm is the one that matters for play: a second duck suppresses swings overall
+(baseline 7.05% → 4.38%, as 12p predicted it would), and the rule's effect is
+undiminished — if anything larger — inside that harder population.
+
+**And the pre-registered prediction failed.** At `--at-boards 0.15`, where
+`board_margin` 0.25 is infeasible on 100% of the draw, both small margins act,
+which confirms the mechanism's SIGN:
+
+| margin | feasible on | swings/episode | |
+|---|---|---|---|
+| 0.10 | 95.2% | 3.66% → 6.16% | 1.68×, p = 0.0001 |
+| 0.15 | 52.8% | 3.66% → 6.70% | 1.83×, p < 0.0001 |
+
+But the registered ratio was **1.80:1** (from the feasible fractions) and the
+observed ratio is **0.82:1** — the margin feasible on half the draw produced
+slightly MORE total effect than the one feasible on nearly all of it.
+
+**Per the falsifier as registered, the confinement assumption is wrong and the
+2.66× per-acting figure is WITHDRAWN.** What fails is not the code-path
+identity (that is established by grep: `board_margin` has three sites, the
+fall-through returns the identical shipped spot). It is the assumption that the
+per-acting effect is CONSTANT in the margin. It is not: a larger clearance
+yields a spot further off the wall, which is evidently a better spot, so total
+effect = fraction × per-acting-effect with the second term rising as the first
+falls. Dividing a headline by a feasible fraction is therefore invalid here,
+and the same objection applies to the MDE ÷ firing-rate bound whenever a knob's
+value changes the quality of what it does and not only how often it does it.
+
+**What stands:** the measured 1.46–1.71× across three independent populations.
+**What goes:** the 2.66× per-acting figure, and any per-acting number derived
+by dividing by a feasibility fraction.
+
+The prediction was registered before the run with an explicit falsifier, and it
+lost. That is the falsifier working, not a setback — an unfalsifiable version
+of it would have let the 2.66× stand.

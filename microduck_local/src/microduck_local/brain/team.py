@@ -511,7 +511,16 @@ class Team:
 
         vx, vy = self._vel
         vel = [round(vx, 2), round(vy, 2)] if math.hypot(vx, vy) >= self.vel_use else None
+        # THE SHARED BALL, so the viewer can draw what the TEAM believes
+        # beside what each duck believes (2026-09-09, asked on /sim: "are the
+        # ducks communicating where the ball is?"). This is the board's own
+        # answer - the freshest teammate sighting, or the inverse-variance
+        # fusion of all of them when `fuse` is on - and it is the value
+        # `_support` steers by, so a supporter standing somewhere odd can be
+        # read against the belief that put it there.
+        shared = self.ball(t)
         return {"name": self.name, "attacker": self.attacker(t),
+                **({"ball": [round(shared[0], 2), round(shared[1], 2)]} if shared is not None else {}),
                 **({"jobs": dict(self.jobs)} if self.jobs else {}),
                 **({"ballVel": vel} if vel is not None else {}),
                 "claims": {k: {"dist": num(c.dist), "cost": num(self.cost(k, t)), "age": round(t - c.t, 2),

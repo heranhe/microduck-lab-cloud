@@ -641,6 +641,21 @@ const MAX_CHASE = 16 * 40;
 const BUMP_LIVE_S = 0.5;
 const TOF_BALL_COLOR = "#b06cd9";
 const TOF_BALL_DIM = "#4f3162";
+/** A ball belief is drawn in the colour of the DUCK that holds it, not in a
+ *  colour for the kind — asked on /sim 2026-09-09 ("is that for each team or
+ *  each duck, it's hard to tell"), where four ducks drew identical orange and
+ *  grey rings and nothing said whose was whose. The team's shell colour gives
+ *  the hue and the duck's index within the team steps the lightness, so a ring
+ *  reads as "cream's second duck" at a glance while the two teams stay apart.
+ *  The KIND is the radius instead, ascending: line-up spot, predicted stop,
+ *  memory. (The ToF blob keeps its own violet — it is a SENSOR reading rather
+ *  than a belief, and it is off by default.) */
+const BELIEF_R = { spot: 0.04, predicted: 0.055, memory: 0.07, tof: 0.03, shared: 0.10 };
+function beliefTint(c: THREE.Color, team: string | null | undefined, idx: number, dim: boolean): string {
+  c.set(teamSwatch(team, "#9aa5b1"));
+  c.offsetHSL(0, dim ? -0.35 : 0.1, (idx % 3) * 0.13 - 0.09 + (dim ? -0.26 : 0));
+  return `#${c.getHexString()}`;
+}
 function ChaseOverlay({ client, enabled }: { client: SimClient; enabled: boolean }) {
   const lines = useRef<THREE.LineSegments>(null);
   useEffect(() => {
@@ -649,6 +664,7 @@ function ChaseOverlay({ client, enabled }: { client: SimClient; enabled: boolean
   const pos = useMemo(() => new Float32Array(MAX_CHASE * 2 * 3), []);
   const colors = useMemo(() => new Float32Array(MAX_CHASE * 2 * 3), []);
   const col = useMemo(() => new THREE.Color(), []);
+  const tintCol = useMemo(() => new THREE.Color(), []);
   useFrame(() => {
     const ls = lines.current;
     if (!ls) return;
@@ -672,23 +688,34 @@ function ChaseOverlay({ client, enabled }: { client: SimClient; enabled: boolean
     };
     if (f && enabled) {
       const sel = getSelectedDuck();
+      const drawnTeams = new Set<string>();
+      let idx = 0;
       for (const d of f.ducks) {
         const ch = d.brain?.inputs?.chase;
         if (!ch) continue;
         const dim = sel !== null && sel !== d.id;
+        const tint = beliefTint(tintCol, d.team, idx++, dim);
         const ball = d.brain.inputs.tracks?.find((t) => t.cls === "ball" && t.xy);
         if (ch.predicted) {
-          const orange = dim ? "#7a4a1a" : "#ff8c00";
-          if (ball?.xy) seg(ball.xy, ch.predicted, orange);
-          ring(ch.predicted, 0.05, orange, 8);
+          if (ball?.xy) seg(ball.xy, ch.predicted, tint);
+          ring(ch.predicted, BELIEF_R.predicted, tint, 10);
         }
-        if (ch.memory) ring(ch.memory, 0.06, dim ? "#3d4450" : "#9aa5b1", 8);
-        if (ch.spot) ring([ch.spot[0], ch.spot[1]], 0.04, dim ? "#1f5a55" : "#43c2b8", 8);
+        if (ch.memory) ring(ch.memory, BELIEF_R.memory, tint, 6);
+        if (ch.spot) ring([ch.spot[0], ch.spot[1]], BELIEF_R.spot, tint, 4);
+        // …and the TEAM's shared belief, once per team: the board's own ball,
+        // which is what a supporter steers by. Wider than any one duck's ring,
+        // so "what we collectively think" reads apart from "what I think" —
+        // the answer to whether they are communicating at all.
+        const tb = d.brain.inputs.team;
+        if (tb?.ball && !drawnTeams.has(tb.name)) {
+          drawnTeams.add(tb.name);
+          ring(tb.ball, BELIEF_R.shared, teamSwatch(d.team, "#9aa5b1"), 16);
+        }
         // The ToF blob is a bearing/range off the duck's nose; the overlay
         // is odometry-frame, so it only lands with a pose to hang it on.
         if (ch.tofBall && d.odomEst) {
           const a = d.odomEst[2] + ch.tofBall[0], r = ch.tofBall[1];
-          ring([d.odomEst[0] + r * Math.cos(a), d.odomEst[1] + r * Math.sin(a)], 0.03, dim ? TOF_BALL_DIM : TOF_BALL_COLOR, 8);
+          ring([d.odomEst[0] + r * Math.cos(a), d.odomEst[1] + r * Math.sin(a)], BELIEF_R.tof, dim ? TOF_BALL_DIM : TOF_BALL_COLOR, 8);
         }
       }
     }
