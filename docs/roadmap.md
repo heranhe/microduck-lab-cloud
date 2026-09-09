@@ -6924,4 +6924,24 @@ now name it, via a documented `NARROW_REF` constant. **A characterisation that
 silently follows a default stops characterising anything the day the default
 moves.**
 
+**THE AGENTS.md ENTRY FOR THIS IS THE OTHER SESSION'S, and is attributed here
+because the commit that carried it does not say so.** It was staged in their
+working tree when this session ran `git add -A` on documentation, so it landed
+under a commit message about a possession figure. The file content is theirs and
+correct; only the message is misleading. Their framing, which is sharper than
+this item's:
+
+> **A test that fixes a number it does not name is not a characterisation, it is
+> a hostage.** Write the constant into the assertion or read it from the spec —
+> `> spec.fov_h_deg / 2`, not `> 0.6`.
+>
+> And the triage worth keeping: sort by whether a result's subject was an
+> ABSOLUTE or a DIFFERENCE before withdrawing anything. Levels fall; shapes hold.
+
+The sweep itself is worth one line, because the guard that would have caught it
+was in place all night and was dropped in the one place neither session expected
+a collision: **the guard belongs on the operation, not on the file you happen to
+be thinking about.** `git add -A` on prose is the same operation as `git add -A`
+on source.
+
 **RE-MEASURED BASELINES: pending — the arms are running as this is written.**
