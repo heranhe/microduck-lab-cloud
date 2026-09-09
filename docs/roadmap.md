@@ -7211,6 +7211,19 @@ with the events to settle it says otherwise — 96 seeds an arm is running as
 this is written. Turning it on is one number, and the corner table above is
 what it buys.
 
+**AND IT IS VISIBLE, WHICH IS HOW IT SHOULD HAVE BEEN CHECKED FIRST.**
+`record-world pitch-2v2 --seed 30 --skip 60 --seconds 60` on the LAB path, so
+this is the /sim page and not a probe's own world:
+
+    shipped   d3's last state transition is t = 52.62 s. In the 67 s that
+              follow there is NOT ONE — `strik/support` at +1.60,+1.33, speed
+              ~0, in all twelve tiles of the sheet, ball 0.53 m away.
+    fix       71 transitions in the same window, and d3 reaches the centre
+              spot (+0.07,+0.21) before coming back into play.
+
+A duck with zero state transitions for a minute is a one-line test, and no
+aggregate this repo runs would ever have reported it.
+
 **Instruments:** `scripts/probe_corner_dwell.py` (visit distribution, the
 chance-level control, `--csv` per visit) and `scripts/probe_board_livelock.py`
 (spot reachability, the re-plan loop, the siege and its no-duck control). Both
