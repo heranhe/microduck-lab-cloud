@@ -5253,9 +5253,13 @@ possession on the replacement (0.011) is past it**; crowd (0.039) and falls
 (0.050) are well past it. What keeps the possession pair alive is not either p
 value on its own but that the two arms move possession in OPPOSITE directions,
 in the order the visibility column predicts — a dose-response, not a coin flip.
-So: suggestive, not settled. "The camera moves possession" wants one
-confirmatory battery with possession named in advance, which is the discipline
-12t registers for `board_margin`. Two things are untouched by any of this: the
+**RESOLVED BY 12u (read it before quoting anything here).** That confirmatory
+battery has since been run — fresh seeds 100-123, possession named one-sided in
+the predicted direction before launch — and **both contrasts replicated**:
+crop −4.843 s/min (one-sided p < 0.0001) and replacement +3.082 (p 0.0015),
+against −3.73 and +3.11 here. The possession rows below are therefore
+**established**, not suggestive. The crowd and falls rows are not: they were
+re-run too and did not replicate, exactly as this caveat predicted. Two things are untouched by any of this: the
 crop's ballAdvance row (p 0.000) survives every threshold above, and the
 visibility fractions — 85.2 / 61.3 / 42.7 — are descriptive counts over 120 000
 duck-ticks rather than tests, so no correction applies to them at all.
@@ -6052,7 +6056,65 @@ read on the world path (`world/arena.py:476`, `spec=DetectorSpec.from_env()`),
 a mistyped field raises rather than being ignored, and the three frustums admit
 **9.3% / 31.0% / 79.3%** of a fixed grid of sample directions. The knob acts.
 
-**RESULT: pending — the arms are running as this is written.**
+**RESULT: BOTH CONTRASTS REPLICATE. 12n's possession claim is promoted from
+suggestive to established.**
+
+Read through the registered lens alone first
+(`scratchpad/read_camera_primary.sh` prints the possession row, converts the
+two-sided p to the registered one-sided one, and withholds the other eight):
+
+| contrast | predicted | discovery (seeds 0-23) | **confirmatory (seeds 100-123)** | one-sided p | verdict |
+|---|---|---|---|---|---|
+| crop vs sim | DOWN | −3.73 s/min | **−4.843** (37.109 → 32.265) | **< 0.0001** | **REPLICATES** |
+| replacement vs sim | UP | +3.11 s/min | **+3.082** (37.109 → 40.191) | **0.0015** | **REPLICATES** |
+
+Both clear the registered alpha = 0.025 with room, on **fresh seeds**, in the
+**direction named before the run**, at a 5% MDE. The replacement's +3.082
+against the discovery block's +3.11 is agreement to 0.03 s/min on independent
+seeds — closer than the measurement deserves, and the crop's effect came back
+*larger* rather than shrinking, which is the opposite of what regression to the
+mean does to a claim that was only ever noise.
+
+This is the confirmatory run 12n said it was owed, and it passes. The camera's
+effect on possession is now a finding rather than a caveat: **the crop the robot
+runs today costs ~4.8 s/min of possession against the sim's assumed camera, and
+the calibrated replacement buys ~3.1 s/min.** Note the crop contrast would
+survive even the harshest correction applied anywhere in this document
+(0.05/9 = 0.0056) without the pre-registration; the replacement needed the
+registration to be quotable, and now has it.
+
+**THE EXPLORATORY EIGHT DID SOMETHING BETTER THAN AGREE — THEY TESTED THE
+MULTIPLICITY CORRECTION ITSELF.** 12n's caveat sorted its rows into strong
+(possession, `ballAdvance`) and marginal-and-not-to-be-leaned-on (crowd 0.039,
+falls 0.050). The confirmatory block reproduces **exactly that split**:
+
+| 12n row | discovery | confirmatory | |
+|---|---|---|---|
+| crop `ballAdvance` | −0.377 (p 0.000) | **−0.356 (p 0.000)** | **replicates** |
+| replacement kicks | 143 → 84 (−41%) | 163 → 94 (**−42%**) | **replicates** |
+| replacement crowd | +0.040 (p 0.039) | +0.017 (p 0.341) | **does not** |
+| replacement falls | 8 → 1 events (p 0.050) | 4 → 3, **NO RESULT** (MDE 139%) | **does not** |
+
+The two rows the correction said to trust came back at −0.356 against −0.377 and
+−42% against −41%. **The two it said not to lean on evaporated.** 12n called the
+falls row "the one claim not to lean on" on the strength of an 87% MDE, and it
+was right — 4 → 3 here, needing 4661 seeds to resolve. That is the family-wise
+caveat earning its keep on real data rather than in principle, and it is the
+best argument in this document for registering a primary: the correction did not
+merely make us cautious, **it correctly predicted which findings would survive.**
+
+One new exploratory row worth naming with its read count attached (1 of 27): the
+crop's `goals` fell 26 → 12, p 0.013 at a 41% MDE. Suggestive and unquotable as
+an effect — `goals` needs ~581 seeds here — but it points the same way as
+everything else the crop touches.
+
+**What the 12n/12u pair now supports, and its limit.** The camera drives
+possession and ball advance, monotonically in team blindness (85.2% crop /
+61.3% sim / 42.7% replacement). It does **not** support a falls claim. And the
+replacement still takes ~42% fewer kicks — replicated now, and still
+unexplained, with `kick_ahead_max` the leading suspect. A wider camera is not a
+free win, and 12n's original framing of that trade survives intact.
+
 
 ### 12v. The gate is the SPOT, not the ball — and `board_margin` was never a tuning knob (2026-09-09)
 
