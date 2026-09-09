@@ -411,7 +411,22 @@ does not save you either, because other shells in the session legitimately have
 then anchoring the grep on `^<pid> ` is what works: `-fl` prints multi-line
 command lines, and only the first line of each carries the PID, so the anchor
 drops the continuation lines that produce the phantom matches. The output is
-the drivers AND their spawned workers — read it, do not count it.)
+the drivers AND their spawned workers.
+
+**And do not count it with `grep -c`.** `pgrep -fl` prints a whole command line,
+and the watcher shells on this box embed newlines, so one process can print as
+many lines as it contains — `grep -c` counts lines, not processes. Measured with
+both kinds live: `grep -c` said 3 where the true count was 13. To count, drop
+`-l` and count PIDs:
+
+```bash
+pgrep -f 'kick_gym|eval-pitch|eval-striker|train-behavior|duck-lab' | wc -l
+```
+
+Use `-fl` to READ what is running and `-f | wc -l` to COUNT it. A zero from
+either is still a reliable "nothing matched", so the counting bug inflates or
+deflates a magnitude rather than manufacturing a false all-clear — that failure
+came from the *pattern*, above.)
 
 — and treat those modules as owned by whichever battery is live, not by a
 session. **The unit of ownership is the import graph, not the file.**
