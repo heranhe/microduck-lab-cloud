@@ -6263,3 +6263,53 @@ rejection from escape, gives the corner case somewhere to fall back to (a push,
 a different aim, an approach from the open side), and would be measured on
 `kick_gym` where a swing costs 0.8 CPU-s. Not attempted here; written down so
 the next person starts from the mechanism rather than the knob.
+
+**THE CENSUS SETTLES THE BOARDS QUESTION, AND A HARD GEOMETRIC FLOOR FALLS OUT
+OF IT (2026-09-09, added after 12t/12u).** The other session's firing-rate
+census — 4 seeds × 180 s, **144 000 duck-ticks, 14 184 kick plans**, act /
+wasted / clear per margin, corners split from flat boards, every kick plan in
+the denominator:
+
+| | FLAT boards (13 704 plans, 97%) | | | CORNERS (480 plans, 3%) | | |
+|---|---|---|---|---|---|---|
+| margin | act | wasted | clear | act | wasted | clear |
+| 0.10 | 5% | 1% | 94% | **83%** | 3% | 14% |
+| 0.15 | 3% | 5% | 92% | 66% | 20% | 13% |
+| 0.20 | 5% | 9% | 87% | 13% | 74% | 12% |
+| 0.25 | 5% | 13% | 82% | **1%** | **86%** | 12% |
+
+**ACT over all kick plans: 7.9% at m=0.10 and 4.6% at m=0.25**, against the 31%
+and 39% that 12t's MDE-run-backwards said were needed to see the gym effect in a
+match. Short by 3.9x and 8.5x, and seeds scale as the square: **370 seeds (8.8
+CPU-hours an arm) at 0.10, and 1 725 seeds (41 CPU-hours) at 0.25.** No
+affordable `eval-pitch` could ever have settled the scoped claim. 12t's null was
+never the test it looked like, and "the boards line belongs in the gym with the
+census beside it" is a conclusion rather than an excuse.
+
+Two things neither of us predicted. The structural no-op is confirmed exactly
+where the geometry put it — **at m=0.25 corners are 1% act and 86% wasted**, the
+branch running and falling through almost every time. And the **inversion**:
+corners are 3% of plans but the knob reaches **83%** of them at m=0.10, against
+5% of flat-board plans. **The knob has its best access to precisely the
+population where the geometry saturates and every aim direction is
+unreachable** — its reach is concentrated where it can do least.
+
+**And the floor.** A legal along-the-boards spot needs `gap ≥ margin −
+kick_side`; a *usable* spot needs `margin ≥ the body's own extent`. Substituting:
+
+    gap  >=  body - kick_side  =  0.116 - 0.060  =  0.056 m
+
+**A ball closer than ~5.6 cm to a board — about 1.6 ball radii — has no legal
+kick spot at ANY margin.** The probe confirms it: at m=0.116 the act region
+covers gap 0.06-0.20 and gap 0.04 is 0% act, 78% wasted. This is not a tuning
+problem and no value of `board_margin` reaches it. It also shows why raising the
+margin to the true body extent is a wash rather than a fix — it buys reach at
+gap 0.175-0.20 and loses gap 0.04-0.06, because the trigger and the acceptance
+move together.
+
+That is the strongest form of this item's conclusion: **near a board the duck
+does not need a better place to stand, it needs a different action** — a push,
+or a nudge that puts the ball more than 5.6 cm out before any kick is planned.
+`kickselect` already ranks pushes; giving it the reachability constraint would
+let it choose one exactly when no kick spot exists, which is the design change
+above and is now bounded by a number rather than an intuition.
