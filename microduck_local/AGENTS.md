@@ -590,6 +590,17 @@ start, on every row, not inside the branch where the interesting thing
 happened. Here `ball_board` was written only on swing rows, so the rate had a
 numerator and no denominator — the whole measurement had to be re-run.
 
+**It catches people who are looking for it.** The other session hit this shape
+two hours after we wrote it up, with the write-up open, on their own throw-in
+measurement: a fix that expired stale positions "made things worse" (49% → 63%)
+because the metric skips ticks whose track has no position, so the fix shrank
+its own denominator from 1005 duck-ticks to 451 and the survivors were a biased
+subset. It is not a knowledge failure. **The trap is that the biased metric is
+the natural one to reuse — it is already running — and reusing a probe across a
+change that alters what the probe can SEE is exactly when this bites.** Ask,
+before reusing any probe to measure a fix: does the fix change which rows the
+probe can observe?
+
 **And attack a mechanism from the denominator side where you can.** The same
 question — "does the collapse happen because no legal spot exists?" — was
 answerable by drawing placements and calling the planner directly, with no

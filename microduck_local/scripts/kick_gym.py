@@ -224,6 +224,15 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
     for ep in range(episodes):
         q, v = (_place_at_boards(w, rng, at_boards) if at_boards > 0.0
                 else _place(w, rng, spread))
+        # THE EPISODE'S INPUT, recorded at placement and put on EVERY row.
+        # A rate needs its denominator binned on the same axis as its
+        # numerator: the first version wrote the ball's distance only inside
+        # the swing branch, so the no-swing episodes had no axis at all and the
+        # curve this exists for could not be computed. `place_board` is where
+        # the ball STARTED; `ball_board` on a swing row is where it was when
+        # the skill fired, which is not the same after an approach.
+        place_xy = (float(w.data.qpos[q]), float(w.data.qpos[q + 1]))
+        place_board = round(to_board(*place_xy), 4)
         for b in brains.values():
             b.reset()
         t0 = w.t
@@ -278,6 +287,8 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                     # the arm's `--at-boards` cap (which is a cumulative bound,
                     # not a distance).
                     "ball_board": round(to_board(bx, by), 4),
+                    "place_board": place_board,
+                    "place": [round(c, 4) for c in place_xy],
                     # The planned spot READ OFF THE BRAIN at the instant the
                     # swing was decided -- never recomputed from `ball0` at
                     # analysis time. Those differ by the plan's staleness, so a
@@ -298,7 +309,8 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                 break
             prev_skill = d.skill
         if swing is None:
-            rows.append({"ep": ep, "swing": False, "arm": knobs, "live": live})
+            rows.append({"ep": ep, "swing": False, "arm": knobs, "live": live,
+                         "place_board": place_board, "place": [round(c, 4) for c in place_xy]})
             continue
         # let the ball run, then measure how far the swing actually sent it
         ts = w.t
