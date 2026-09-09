@@ -219,6 +219,20 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    rule needs a second dimension, not a tighter cut. (Here: the fraction of
    surviving cases inside the gate, which separated them at 94.4% against 0.7%.)
 
+   **The constructive form: register a quantity your hypotheses DISAGREE on,
+   not one your hypothesis predicts.** The rule above failed because the
+   `None` fraction was something the favoured mechanism predicted — and so did
+   its rival, which is why one number could not tell them apart. And the
+   deeper caution: that registered prediction came back at 97.9% against ~99%
+   and the mechanism behind it was still wrong (the gate *replaces* swings
+   rather than declining them; both models give the same number).
+   **Holding to a percentage point is not evidence that the model behind the
+   number was correct.** What exposed the real mechanism was a *distribution*
+   asked for as an extra — the true `|ahead|` of the surviving swings, which
+   sat on the close mode at 0.111 against 0.108 with the far mode gone. So:
+   register the number, and ask for a shape that would look different under a
+   rival.
+
    **MDE is per-METRIC, not per-battery — so never say a battery "found
    nothing".** One 24-seed `eval-pitch` run settled `board_margin` on
    possession at an MDE of **5% of baseline** (a real null, tight enough to
