@@ -387,11 +387,23 @@ after the writes are atomic — **do not delete it as redundant.** Before
 touching `brain/` or `world/`, check what is running —
 
 ```bash
-pgrep -fl python | grep -E '^[0-9]+ .*(kick_gym|eval_pitch|eval_striker|probe_)'
+pgrep -fl python | grep -E '^[0-9]+ .*(kick_gym|eval[-_](pitch|striker|brain|tidy)|train[-_](walk|brain|behavior)|probe_|duck-lab)'
 ```
 
-(Both halves are load-bearing, and two simpler forms do NOT work — verified
-against two live `kick_gym` arms. `pgrep -f 'kick_gym|...'` matches the shell
+**The hyphens are load-bearing too, and the first version of this line was
+wrong.** The console scripts are `eval-pitch`, `eval-striker`, `train-walk` —
+hyphens — so a pattern written `eval_pitch` never matches `.venv/bin/eval-pitch`
+and reports "nothing running" over a live battery. It was verified against two
+live `kick_gym` arms (which DO have an underscore) and passed, so the check was
+confirmed on the one case that could not fail it. Measured later with both kinds
+running: the underscore-only form found 2 of 5 processes. **A check verified
+only where it works is not verified** — the same defect as agreeing on a
+quantity that could not have differed. Include the long-running writers too
+(`train-*`, `duck-lab`): they import `brain/` and `world/` exactly as a battery
+does, and the user starts teach runs mid-session.
+
+(The rest is load-bearing as well, and two simpler forms do NOT work — verified
+against live `kick_gym` arms. `pgrep -f 'kick_gym|...'` matches the shell
 running the check, because `-f` matches whole command lines and the pattern is
 in your own argv; so does anchoring on `python`. The `[k]ick_gym` bracket trick
 does not save you either, because other shells in the session legitimately have
