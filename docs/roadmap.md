@@ -4540,6 +4540,68 @@ measured with the teleport. What it cannot show on this roster is any EFFECT:
 the shipped brain falls 3 times in 24 runs, so falls remain far too rare to
 move a ledger, exactly as B.1 first concluded.
 
+## Item 12f — the resting-ball memory: BUILT, MEASURED, SHIPS OFF (2026-09-08)
+
+The reasoning was good and the result is a null. The floor has had rolling
+resistance since 2026-09-06, so a ball that stops STAYS stopped, but the
+tracker forgot it on the same 2.5 s clock as a ball that might have rolled
+anywhere, while the kick plan is a median 3.6 s old when the swing fires. So
+at the moment that decides the kick the brain was reasoning about a track that
+had already expired — which is why `kick_ahead_max` could only fire on 5% of
+swings on its own.
+
+**Built** (`TrackerParams.rest_coast_s` / `rest_vel`, `Track.at_rest` and
+`Tracker.disturb`, `ChaseParams.rest_predict_s` / `rest_coast_s` /
+`rest_clear_m`). A ball MEASURED at rest — two hits agreeing it is slower than
+`rest_vel`, never merely "we have no velocity for it", because a ball seen once
+rolling also has no velocity — outlives the coast clock and stays actionable
+past `predict_s`. The memory is voided by our own kick, our own push, or any
+body we know the position of standing within `rest_clear_m` of it; a fresh
+sighting settles it either way.
+
+**Measured in `scripts/kick_gym.py`, which now runs arms itself** (`--arm
+'label=KNOBS'`, same seeds and episodes per arm, knobs read back off the
+CONSTRUCTED brain, a two-proportion z on the pooled swings). Contested gym,
+ball-out on:
+
+| | discovery (seeds 0–3, 160 ep an arm) | fresh (seeds 100–107, 320 ep an arm) |
+|---|---|---|
+| swing rate | 53% → 63% (p=0.070) | 59% → 58% (p=0.75) |
+| effective kicks an episode | 0.406 → 0.481 (p=0.18) | 0.441 → 0.450 (p=0.81) |
+| whiff | 24% → 24% (p=0.97) | 26% → 23% (p=0.47) |
+
+The discovery block's swing-rate gain **did not replicate and is withdrawn**.
+Whiff was flat in both. **Ships off**, kept with its numbers so nobody
+re-derives it; `tests/test_ball_memory.py` locks the mechanism and the ways it
+is voided. What would change the verdict is a configuration where the ball is
+genuinely lost for longer than the gym's short episodes allow.
+
+### …and two harness bugs it turned up, both fixed
+
+The 12a review reported that the bench and the arena were never the same
+experiment. Both halves are now closed, and the kick's verdict survives both:
+
+- **The bench ball rolled forever.** `contract.scene_walk_ball_xml()` symlinked
+  upstream's `ball.xml`, whose geom has `friction="0.5 0.005 0.0001"` and NO
+  `condim` — MuJoCo defaults to 3 and silently ignores the rolling
+  coefficient, the exact bug `world/compose.py` fixed for the play world on
+  2026-09-06. So the kick was trained and benched on the frictionless ball the
+  physics audit removed from play. Now patched to condim 6 at the play world's
+  `Ball.rolling`, into the generated scene and never the pinned checkout.
+  Verified identical to play: a 1.4 m/s roll travels **1.62 m in 5.6 s in both**.
+  (An apparent 0.79 m gap while checking this was the measurement's own fault —
+  the ball was started at the robot's feet.)
+- **The bench graded on noisier observations than the arena.** `BehaviorEnv`
+  defaults `obs_noise=True` independently of `domain_rand`, and the bench
+  passed only `domain_rand=False`, while `WorldDuck.obs` reads straight off
+  mjData with no noise at all. `bench_kick_headdown.py` now passes
+  `obs_noise=False, action_delay=False`.
+
+Re-benched on the honest ball and observations, the local right kick still
+whiffs **0% from every gaze pose**; travel is 0.85–1.00 m where the
+frictionless ball gave 1.0–1.3 m. The headline verdict of item 7 stands, on
+numbers that now mean what they say.
+
 ## Track 4, item 12 — the last 30 centimetres (2026-09-08): a ball at the feet is lost, then missed — ASKS
 
 **The complaint, from the /sim page.** A duck walks the ball to the boards, has it at its feet, loses track of it,
@@ -4701,3 +4763,97 @@ sighting (probe_kick_line `reacq_s`), and the share of kicks followed by a sight
 
 **Order.** 12a first — it is a day, and it decides between 12b (recipe) and 12c/12d/12e (sensing/timing). 12f and
 12g are independent of it and a morning each. 12h only after 12b has shown what a better swing is worth.
+
+
+### 12j. The search freeze, re-opened against the get-up — MEASURED OFF (2026-09-08)
+
+The dip stops a searching duck dead for `search_dip_s` 0.6 s every
+`search_dip_every` 1.5 s: 21 s a duck a run frozen, 58 % of its search time,
+returning 2 % of the search's sightings. It was kept in item 7 only because
+deleting it drove falls 121 → 195 over 48 seeds, back when a fallen duck was
+teleported away. The get-up landed today (B.1), so the fall half of that trade
+had changed and it was worth re-asking.
+
+`MICRODUCK_CHASE=search_dip_s=0`, 24 paired seeds × 300 s of 2v2, `--ball-out-s 5`,
+`--getup-policy alpha_stand.onnx` on BOTH arms:
+
+| | dip (shipped) | no dip | p |
+|---|---|---|---|
+| **in-place turning** | **0.612** | **0.713** | **0.000** (24/24 seeds worse) |
+| spread | 0.576 | 0.522 | 0.031 |
+| ballAdvance | 0.541 | 0.476 | 0.093 |
+| kicks a run | 5.96 | 5.13 | 0.109 |
+| goals (total) | 22 | 16 | 0.271 |
+| falls | 0.333 | 0.208 | 0.443 |
+
+**The freeze stays, for a new reason.** The get-up did change the fall half:
+falls no longer rise without the dip (0.33 → 0.21, the opposite direction, not
+significant). But removing it does not free the 21 s — it converts standing
+into SPINNING, on 24 of 24 seeds, and the ducks lose kicks, shape and goals
+with it. The pause is the only thing interrupting a search circle; without it
+the duck simply keeps turning. The 21 s was never the recoverable waste it
+looked like, and "a fallen duck can now get up" does not reopen it.
+
+This also retires the reading of item 12's ledger that motivated it: the run is
+not slow because the ducks stand still, it is slow because they cannot SEE
+(a duck has the ball in view 24 % of ticks; nobody on a team has it 61 %).
+
+
+### 12k. Why a duck cannot see the ball at its feet, and why looking further down does not fix it — MEASURED (2026-09-08)
+
+Jonathan, from the /sim page: *"when it looks down to see where the ball is it
+still doesn't scan the area next to its feet — why can't the head turn more to
+that region? don't we still have room?"* There is room, the walker will use it,
+and it still does not pay. All three parts measured today.
+
+**1. The room is real, and it is in the NECK.** Joint limits: `head_pitch`
+−90…+90° (home +20, the shipped gaze reaches 54°, so 36° spare), `neck_pitch`
+−90…+60° (home +20, and the brain has never commanded it at all —
+`Chase.step` emits `(0.0, gaze, 0.0, 0.0)`).
+
+**2. No retrain is needed to use it.** `C.HEAD_CMD_RANGES` is ±0.05 rad, so
+every gaze this brain sends is already extrapolation — worth checking, now
+closed. The shipped walker driven at each pose while walking (0.3 m/s, 4 seeds):
+
+| commanded pose | depression | forward speed | falls |
+|---|---|---|---|
+| level (what it trained on) | 6° | 0.136 m/s | 0/4 |
+| head +0.60 (the shipped cap) | 38° | 0.120 (−11.6 %) | 0/4 |
+| neck −0.30 / head +0.60 | 58° | 0.124 (−8.9 %) | 0/4 |
+| neck −0.60 / head +0.60 | 69° | 0.114 (−16.3 %) | 0/4 |
+| neck −1.00 / head +1.00 | 79° | 0.083 (−39.3 %) | 0/4 |
+
+Zero falls in 28 trials at up to 20× the trained command range, and depression
+rises monotonically: the walker extrapolates cleanly. The split is also
+strictly cheaper than the head slot alone — 58° for −8.9 % against 38° for
+−11.6 % — confirming the sweep in `gaze_neck`'s own comment.
+
+**3. And it loses in play, because the field of view SLIDES rather than widens.**
+`fov_v_deg` is 48° and fixed, so a deeper gaze trades the far half of the floor
+window for the near half. Measured from the camera site, walking:
+
+| pose | floor window, from the root |
+|---|---|
+| head +0.60 (shipped) | 0.19 m … 0.91 m |
+| neck −0.30 (`gaze_neck` 0.5) | 0.12 m … **0.36 m** |
+| neck −0.60 (`gaze_neck` 1.0) | 0.10 m … **0.27 m** |
+
+Half the neck buys 7 cm at the feet and gives up 55 cm at the far edge — and
+0.1–0.5 m is exactly where the ball is while a duck walks its line-up. In play
+(24 paired seeds × 300 s of 2v2, `--ball-out-s 5`, on top of the 12c/12i
+defaults):
+
+| arm | whiff | on the sweet spot |
+|---|---|---|
+| no neck (shipped) | **26 %** | **11 %** |
+| `gaze_neck` 0.5 | 35 % (+0.117 a seed, 15 of 24 worse) | 6 % |
+| `gaze_neck` 1.0 | 28 % (+0.028, 11 of 24 worse) | 7 % |
+
+**`gaze_neck` stays off, on a new and better reason.** It was off because the
+SHIPPED kick whiffed head-down; the local kicks do not, so that reason expired
+and this is the re-measurement. The ball at the feet is not a gaze problem and
+no head pose solves it: it is a 48° vertical field on a camera 0.21 m up. The
+two things that could — a wider or second down-pitched lens
+(`DetectorSpec.bottom_pitch_deg` exists as a sensitivity test, and a camera
+this robot does not have is not a fix), or **the ToF, which already points
+there (item 12e, `tof_ball_m`, ships at 0)**. 12e is now the live one.
