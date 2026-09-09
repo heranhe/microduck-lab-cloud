@@ -430,6 +430,18 @@ recomputed, re-derived, or rebuilt from reading the source is marked inline —
 to ask. It costs a word and it removes the whole class, because the reader no
 longer has to trust that the writer noticed.
 
+**Marking is not enough for `[assumed input]`, and saying so is part of the
+rule.** A reconstruction announces itself to anyone who looks; a probe can be
+contradicted by a sweep. Correct arithmetic on a guessed constant has no tell
+at all — every digit is right and the derivation is sound. The 40.8% above was
+caught only because someone else happened to open `_place_at_boards` for an
+unrelated reason. That is luck, not method.
+
+**What makes it method: cite the constant's source in the same breath.** Write
+`r_ball = 0.035 (gym_scenario().balls[0].radius)`, not `r_ball = 0.035`. A
+number carrying its provenance can be checked by a reader; a bare one cannot,
+and the writer is the last person able to notice the gap.
+
 If the reconstruction and the call disagree, **the call wins**, and the
 reconstruction is the thing to throw away. See also: when a probe and a direct
 sweep disagree, the sweep wins.
