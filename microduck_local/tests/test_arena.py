@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from microduck_local import contract as C
+from microduck_local.sensors.detector import DetectorSpec
 from microduck_local.walk_env import MicroduckWalkEnv
 from microduck_local.world import Ball, Duck, Scenario, Wall, World, make_room
 
@@ -204,8 +205,6 @@ def test_persons_walk_their_path_and_ducks_detect_them():
     # the day the default became the robot's real 116 deg lens — where a person
     # at 0.90 rad is correctly seen, not wrongly. A test that pins a detection
     # geometry to a number pins the camera too.
-    import math
-    from microduck_local.sensors.detector import DetectorSpec
     half_h = math.radians(DetectorSpec().fov_h_deg) / 2
     assert len(seen) > 5 and max(abs(x["bearing"]) for x in seen) < half_h
     assert all(0.5 < x["range"] < 1.6 for x in seen)
