@@ -743,6 +743,25 @@ and a framing that favours you is exactly the one you will not notice. When a
 result matters, get it read by something that is not you, and give it the
 evidence rather than your summary of the evidence.
 
+**And it is not reproducible by one session working carefully.** That is the
+part to say out loud before recommending any of this to someone working alone:
+registration, the MDE, the pair and the falsifier's second dimension all
+transfer to a solo worker unchanged — the second reader does not. A single
+session can be rigorous about every number it decides to look at and still never
+learn which framings it never questioned. If you are working alone, the nearest
+substitutes are weak but real: write the registration where someone else will
+read it, state the rival mechanism in the same breath as your own, and prefer
+the measurement that would look different under the rival even when it costs
+more than the one that would merely confirm you.
+
+**A test that skips is not a test.** From the same day: a first version of the
+`pred_ahead` assertion skipped, because with the gate ON 98% of swings are blind
+and no swing carried a live prediction — the skip *was* the finding, and a
+skipping test still protects nothing. It was rewritten to run with the gate
+deliberately off, where ~40% of swings keep a prediction and the assertion has a
+population to bite on. If a test's precondition is rare, construct the
+population; do not let the rarity silence the check.
+
 **And beware the easy version of this virtue.** Declining a claim right after
 deriving the arithmetic that undercuts it is not the same act as noticing a
 favourable framing with nothing in front of you contradicting it. The first is
