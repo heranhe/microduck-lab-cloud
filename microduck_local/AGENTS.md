@@ -474,6 +474,19 @@ treating a reproduction as confirmation, name the input it was sensitive to.**
 If nothing you measured would have differed under a different setup, the
 reproduction confirms the arithmetic and nothing about the setup.
 
+**A fifth shape, of a different kind: a correct observation generalised one
+step too far, in the direction that flatters it.** "Agreement about a quantity
+invariant to an input carries no information about that input" is true. It
+became "independent reproduction has caught none of our errors and sensitivity
+has caught all of them", which the record contradicts — all four were caught by
+two parties disagreeing. The first four above are errors of EXECUTION; this one
+is an error of INFERENCE, and it is the hardest to catch alone because it feels
+like insight rather than arithmetic. Both parties contributed: one over-reached,
+and the other had sold the observation as "the most important thing found
+tonight", which is the framing that invites the over-reach. **When an
+observation feels like the best thing you have found, that is when to check
+what it does NOT license.**
+
 **The same trap catches a prediction and its test.** When both are derived from
 one model, agreement between them confirms the arithmetic, not the model — a
 shared error produces a match without either being right. What is worth having
