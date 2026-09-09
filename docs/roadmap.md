@@ -6540,6 +6540,54 @@ merely "higher".**
 > **A falsifier that cannot tell a refutation from a better finding is a badly
 > built falsifier.**
 
+**RESULT: the registered prediction held to a percentage point, and the third
+case is refuted on its own evidence.**
+
+    REGISTERED   ~99% None on gate-ON; under 80% unsupported
+    OBSERVED      97.9%  (829 of 847)      gate-OFF was 60.3%
+
+The third case *happens* and accounts for nothing: of the gate-ON swings that
+did have a prediction, 94.4% were inside the gate (against gate-off's 0.7%) —
+but there are only **18 of them, 2% of the arm**. Right in kind, negligible in
+size, which its author noted is worse than being wrong. The other 829 are blind.
+
+**And the `\|ahead\|` distribution separates "deferred until close" from
+"deferred until merely lost", which the None fraction alone could not:**
+
+| | n | median | q25 | q75 |
+|---|---|---|---|---|
+| gate OFF, `predicted = None` | 625 | 0.108 | 0.086 | 0.150 |
+| gate OFF, had a prediction | 412 | 0.290 | 0.229 | 0.349 |
+| **gate ON, all swings** | 847 | **0.111** | 0.090 | 0.145 |
+
+Gate-ON *is* the close mode, quartiles on top of each other, and the far mode
+has disappeared. **So `kick_ahead_max` does not improve swings — it replaces
+them.** The gate suppresses the far, stale, *seen* swing (92% whiff, 26 mm of
+travel) and the duck swings later at a ball 0.11 m away it can no longer see.
+Whiff 59% → 34%. **The knob's entire value is converting a bad seen swing into a
+good blind one**, which is neither session's original model of it.
+
+**WHICH EXPLAINS THE CROP, AND MAKES THE CAMERA CASE STRONGER RATHER THAN
+WEAKER.** The obvious objection to 12w's ratio was that a camera going blind
+*earlier* should reach the valuable close-blind state *sooner* and lose less —
+yet the crop's benefit measured 0.396. The resolution is in this item's own
+arms: gate-ON swings are ~98% blind, and
+
+    gate ON, sim camera   whiff 34.5%
+    gate ON, crop camera  whiff 63.6%
+
+**the same swing type, nearly double the whiff.** A blind swing is not
+camera-independent: *blind* means flying on the last thing seen, so a camera
+that loses the ball earlier hands the swing a staler starting estimate. The
+camera therefore matters even for swings taken with the camera contributing
+nothing at the moment of the swing — which is the strongest form of the ceiling
+argument in 12n and 12u.
+
+**Stated as an inference, not a measurement:** it assumes the crop's gate-ON
+swings are also ~98% blind. That is very likely — the crop is blinder
+everywhere — but it is **unmeasured**, and `pred_ahead` on a crop gate-ON arm
+would settle it. Recorded as the next question if this line continues.
+
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
 what 12u now supports on possession and ball advance. If the replacement ships,
