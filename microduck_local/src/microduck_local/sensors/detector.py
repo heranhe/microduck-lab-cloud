@@ -32,9 +32,16 @@ import numpy as np
 
 DETECT_CLASSES = ("duck", "person", "ball", "marker", "toy", "basket", "post")
 
-# The frame the two size thresholds below were sized on: the shipped 320 px
-# YOLO11n input behind the 62° lens, 296 px/rad. A spec with another lens or
-# another sensor is read against this (see `DetectorSpec.px_per_rad`).
+# THE CALIBRATION REFERENCE, NOT THE ROBOT'S CAMERA — the distinction matters
+# and used to be blurred by the word "shipped".
+#
+# The two size thresholds below were sized on a 320 px YOLO11n input at 296
+# px/rad, which happened to be a 62° lens. That pairing is now known NOT to be
+# the robot's (docs/camera-hardware.md §1: the fitted module is 116° × 60°), but
+# the thresholds are still *calibrated* at 296 px/rad and every other spec is
+# read against it (`DetectorSpec.px_per_rad`). So these stay as they are: change
+# them and you silently restate what "never found" and "always found" mean.
+# They are a ruler, not a claim about the hardware.
 SHIPPED_PX_H = 320
 SHIPPED_FOV_H_DEG = 62.0
 _SHIPPED_PX_PER_RAD = SHIPPED_PX_H / np.deg2rad(SHIPPED_FOV_H_DEG)
@@ -75,8 +82,20 @@ CAMERA_CHOICES = {"projection": ("pinhole", "equidistant"), "site": ()}
 
 @dataclass(frozen=True)
 class DetectorSpec:
-    fov_h_deg: float = 62.0      # ASSUMPTION: a Pi-camera-class module; the lens is still not specified
-    fov_v_deg: float = 48.0      # ASSUMPTION, and 4:3-shaped: the sensor is 16:9 (see above)
+    # MEASURED, not assumed (2026-09-09): the module's own FOV table gives
+    # D 142.2 deg, H 116 deg, V 60 deg, max DFOV 165 deg. The long-standing
+    # "stock Pi Camera v2 or a wide M12 board?" question in
+    # docs/camera-hardware.md section 1 is ANSWERED and it is the wide board.
+    #
+    # These replaced 62 x 48, which was the stock lens's full-array figure and
+    # WRONG — every soccer and tidy number taken before this date is on a camera
+    # this robot does not have. The correction runs opposite to what was
+    # expected: the real camera is WIDER, and on the soccer ledger it beats the
+    # old default by +3.7 s/min of possession (p = 0.011) at the same 320 px
+    # detector input. It is also SOFTER per degree — 158 px/rad against 294 —
+    # so the width wins on this task and may not on others.
+    fov_h_deg: float = 116.0
+    fov_v_deg: float = 60.0
     max_range_m: float = 4.0
     # AN ABLATION, NOT A ROBOT FEATURE. The Microduck has ONE camera; this
     # models a second one pitched down by this many degrees, sharing the
@@ -106,10 +125,25 @@ class DetectorSpec:
     bottom_pitch_deg: float = 0.0
     rate_hz: float = 10.0
     site: str = "head_camera"
-    # Sensor width in pixels: the NPU runs YOLO11n on a 320×320 INT8 frame
-    # (upstream npu-bringup.md). The size gate is a PIXEL fact, so widening
-    # the lens without adding pixels has to cost detections — see `w_none`.
-    px_h: int = SHIPPED_PX_H
+    # Detector input width in pixels.
+    #
+    # **ASSUMED, 2026-09-09, and it is the biggest assumption in this file.**
+    # Upstream's npu-bringup.md has the NPU running YOLO11n on a 320×320 INT8
+    # frame; 640 is a DECISION to model the robot as though the NPU sustains a
+    # 640×640 input, taken because the alternative makes the fitted 116° lens
+    # unusable and because nobody has measured the NPU's real p50/p95 at either
+    # size (camera-hardware.md §5, open question 1 — still open).
+    #
+    # Why it matters this much: the size gate is a PIXEL fact, so a wide lens
+    # without pixels costs detections outright. At 320 px the fitted lens is 158
+    # px/rad and a duck at 3 m is 4.7 px wide — under the "sometimes found"
+    # floor. At 640 px it is 316 px/rad, a duck at 3 m is 9.4 px, and the wide
+    # lens costs nothing in reach while keeping nearly twice the view.
+    #
+    # If the NPU turns out NOT to sustain 640, set this back to 320 and every
+    # number measured against this default is optimistic by roughly the ratio
+    # above. That is the single number to check before quoting anything here.
+    px_h: int = 640
     # Apparent-width thresholds: below `w_none` a target is never found,
     # above `w_full` always (before noise); linear in between. These two
     # fields are the angles AT THE SHIPPED 62° / 320 px frame; read them
@@ -156,7 +190,13 @@ class DetectorSpec:
     # is NOT what a pinhole lens does (a pinhole frame resolves more finely
     # toward its edges). So this field changes the BEARING only; the width
     # thresholds were always modelling the wide-lens case.
-    projection: str = "pinhole"
+    # Equidistant, because the fitted lens is not rectilinear: solving a pinhole
+    # focal length from each axis of 116/60/142.2 deg gives 1.65 / 2.57 / 1.04 mm
+    # — they disagree, so no pinhole model describes it. Under r = f*theta they
+    # agree to ~10% (2.61 / 2.84 / 2.44 mm, near the quoted 2.9 mm EFL).
+    # Still missing: a distortion model, so the periphery's usable bearing
+    # accuracy is overstated. docs/camera-hardware.md section 2 has the gap.
+    projection: str = "equidistant"
 
     @staticmethod
     def from_env(spec: str | None = None) -> "DetectorSpec":
@@ -233,7 +273,13 @@ class DetectorSpec:
     @property
     def w_none(self) -> float:
         """`w_none_rad` at this frame's resolution: an apparent width under
-        this is never found."""
+        this is never found.
+
+        Note this scales an EXPLICIT `w_none_rad` too — the angle you pass is
+        read through the frame like any other, not taken as final. That was
+        invisible while the default spec was the calibration reference
+        (coarseness 1.0) and a test asserted the identity without meaning to.
+        """
         return float(self.w_none_rad * self._px_coarseness)
 
     @property

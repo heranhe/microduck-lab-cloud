@@ -198,7 +198,16 @@ def test_persons_walk_their_path_and_ducks_detect_them():
             seen += [x for x in s["det"]["items"] if x["cls"] == "person"]
     assert max(ys) > 0.5 and min(ys) < 0.4          # went up to the first waypoint and came back
     # Seen while it crossed the field of view, at a bearing that tracked it.
-    assert len(seen) > 5 and max(abs(x["bearing"]) for x in seen) < 0.6
+    #
+    # The bound comes from the SPEC's own half-FOV rather than a constant: it was
+    # 0.6 rad, which was silently the 62 deg camera's half-angle, and it failed
+    # the day the default became the robot's real 116 deg lens — where a person
+    # at 0.90 rad is correctly seen, not wrongly. A test that pins a detection
+    # geometry to a number pins the camera too.
+    import math
+    from microduck_local.sensors.detector import DetectorSpec
+    half_h = math.radians(DetectorSpec().fov_h_deg) / 2
+    assert len(seen) > 5 and max(abs(x["bearing"]) for x in seen) < half_h
     assert all(0.5 < x["range"] < 1.6 for x in seen)
     # Possess: the path stops and the twist drives it in its own heading frame.
     world.possess("p0")

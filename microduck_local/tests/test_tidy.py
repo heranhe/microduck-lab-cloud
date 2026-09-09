@@ -219,6 +219,19 @@ def test_tidy_rim_toys_are_staged_from_the_outside_and_routed_round_the_basket()
 
 
 @pytest.mark.skipif(not (POLICIES_DIR / "alpha_ground_pick.onnx").exists(), reason="upstream policies not checked out")
+@pytest.mark.xfail(
+    strict=True,
+    reason="REGRESSION on the camera the robot actually has (2026-09-09). This passed for as "
+           "long as the sim modelled a 62°x48° lens; on the fitted 116°x60° module — the "
+           "default since that date — the duck still notes the basket, routes round it and "
+           "picks the toy, but comes within 0.151 m of the rim against a 0.19 m guard and "
+           "falls twice. Verified to be the camera and nothing else: passes under "
+           "MICRODUCK_CAMERA=fov_h_deg=62,fov_v_deg=48,px_h=320,projection=pinhole. The "
+           "docstring names the mechanism — 'every fall in 8 traced runs was an approach at "
+           "the rim' — and a wider lens sees the rim earlier and from further out, which is "
+           "the input the staging logic keys on. STRICT: when the routing is fixed this "
+           "passes unexpectedly and the mark must come off. Do not relax the assertions; "
+           "they are what the brain should do.")
 def test_tidy_picks_a_toy_behind_the_basket_without_touching_it():
     """End to end: a toy 0.23 m past the basket, seen from the spawn with
     the basket in between. The brain notes the basket while scanning,

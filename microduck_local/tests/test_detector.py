@@ -16,6 +16,21 @@ from microduck_local.world.compose import DuckAddress, spawn_duck
 pytestmark = pytest.mark.skipif(
     not C.SCENE_WALK_XML.exists(), reason="microduck_rl checkout not found")
 
+# THE GEOMETRY THE CHARACTERISATIONS BELOW WERE WRITTEN AGAINST: 62° × 48° at
+# 320 px, 295.7 px/rad, read as a pinhole.
+#
+# It was `DetectorSpec()`'s default until 2026-09-09, when the fitted module
+# turned out to be 116° × 60° (docs/camera-hardware.md §1) and the default moved
+# to it. Every test here that asserts *what the gates do* — which sizes are
+# marginal, which elevations fall outside the frame, what a wide lens costs
+# against a narrow one — is a statement about THIS geometry, so it names it
+# rather than inheriting whatever the default happens to be.
+#
+# That is the bug these tests had. A characterisation that silently follows a
+# default stops characterising anything the day the default moves, and reports
+# it as nine unrelated-looking failures instead of "the camera changed".
+NARROW_REF = DetectorSpec(fov_h_deg=62.0, fov_v_deg=48.0, px_h=320, projection="pinhole")
+
 
 def world(ducks, walls=(), balls=()):
     sc = Scenario(name="det", floor=(8, 8), walls=list(walls), balls=list(balls),
@@ -58,8 +73,11 @@ def test_wall_occludes_and_size_gates_at_range():
     det = Detector(m, site="a/head_camera", targets=targets(m, ducks=("b",)))
     assert det.capture(d, 0.0).detections == []
     m, d = world([("a", (0, 0, 0)), ("b", (3.9, 0.0, math.pi))])
-    det = Detector(m, site="a/head_camera", targets=targets(m, ducks=("b",)), seed=0)
-    # A 10 cm radius at 3.9 m is ~2.9° wide: found only sometimes, with low confidence.
+    det = Detector(m, site="a/head_camera", targets=targets(m, ducks=("b",)), seed=0,
+                   spec=NARROW_REF)
+    # A 10 cm radius at 3.9 m is ~2.9° wide: found only sometimes, with low
+    # confidence — through NARROW_REF. The fitted 116° lens at 640 px resolves it
+    # more finely and finds it more often; that is the camera changing, not the gate.
     found = [det.capture(d, 0.0).detections for _ in range(200)]
     hits = [f[0] for f in found if f]
     assert 0 < len(hits) < 200
@@ -73,10 +91,10 @@ def test_ball_class_and_range_from_width():
     # a camera 25 cm up (−26°): the head has to look down for it. At 0.8 m
     # it just makes it in.
     m, d = world([("a", (0, 0, 0))], balls=[Ball((0.5, 0.0))])
-    det = Detector(m, site="a/head_camera", targets=targets(m, balls=(0,)))
+    det = Detector(m, site="a/head_camera", targets=targets(m, balls=(0,)), spec=NARROW_REF)
     assert det.capture(d, 0.0).detections == []
     m, d = world([("a", (0, 0, 0))], balls=[Ball((0.8, 0.0))])
-    det = Detector(m, site="a/head_camera", targets=targets(m, balls=(0,)))
+    det = Detector(m, site="a/head_camera", targets=targets(m, balls=(0,)), spec=NARROW_REF)
     f = det.capture(d, 0.0).detections
     assert len(f) == 1 and f[0].cls == "ball"
     assert -0.4 < f[0].elevation < -0.2
@@ -184,17 +202,25 @@ def test_size_gate_thresholds_are_pixel_widths_read_through_the_lens():
     7.74°. Pixels buy the resolution back; an explicit angle still wins."""
     from dataclasses import replace
 
-    s = DetectorSpec()
+    s = NARROW_REF
     assert s.px_h == 320 and s.px_per_rad == pytest.approx(295.72, abs=0.01)
     assert s.w_none == float(np.deg2rad(1.0)) and s.w_full == float(np.deg2rad(4.0))   # bit-for-bit
     assert (s.w_none, s.w_full) == (s.w_none_rad, s.w_full_rad) and s._px_coarseness == 1.0
-    wide = DetectorSpec(fov_h_deg=120.0, fov_v_deg=93.0)
+    # px_h named, not inherited: the claim is "same 320 px, wider lens", and it
+    # is only that claim if both sides hold the pixels fixed.
+    wide = DetectorSpec(fov_h_deg=120.0, fov_v_deg=93.0, px_h=320, projection="pinhole")
     assert wide.w_none / s.w_none == pytest.approx(120.0 / 62.0)      # ~2×, from the pixels alone
     assert wide.w_full / s.w_full == pytest.approx(120.0 / 62.0)
     assert np.rad2deg(wide.w_none) == pytest.approx(1.935, abs=1e-3)
     assert np.rad2deg(wide.w_full) == pytest.approx(7.742, abs=1e-3)
     assert DetectorSpec(fov_h_deg=120.0, px_h=640).w_none < s.w_none  # a 640 px sensor sees finer than shipped
-    assert DetectorSpec(w_none_rad=np.deg2rad(2.0)).w_none == pytest.approx(np.deg2rad(2.0))
+    # An explicit `w_none_rad` does NOT bypass the pixel reading — `w_none` scales
+    # it by coarseness like any other. That was invisible while the default WAS
+    # the reference (coarseness 1.0), and the docstring's "an explicit angle still
+    # wins" read it the wrong way round. On the reference it comes back unchanged;
+    # on the fitted 116° / 640 px camera the same input reads ~6% finer.
+    assert replace(s, w_none_rad=np.deg2rad(2.0)).w_none == pytest.approx(np.deg2rad(2.0))
+    assert DetectorSpec(w_none_rad=np.deg2rad(2.0)).w_none < np.deg2rad(2.0)
     # `replace` carries the pixel meaning — it is how a field-of-view sweep patches the spec.
     assert replace(s, fov_h_deg=120.0, fov_v_deg=93.0).w_none == wide.w_none
 
@@ -207,7 +233,8 @@ def test_a_wide_lens_on_the_same_320_px_sensor_finds_a_distant_duck_less_often()
     wider lens spends the same pixels over twice the angle: it buys field,
     not sight. (An earlier 120° sweep held the angular gate fixed and so
     charged the wide lens for neither.)"""
-    shipped, wide = DetectorSpec(), DetectorSpec(fov_h_deg=120.0, fov_v_deg=93.0)
+    shipped, wide = NARROW_REF, DetectorSpec(fov_h_deg=120.0, fov_v_deg=93.0, px_h=320,
+                                             projection="pinhole")
 
     def found(m, d, tg, spec, n=400):
         det = Detector(m, site="a/head_camera", spec=spec, targets=tg, seed=0)
@@ -243,8 +270,8 @@ def test_a_wide_lens_bearing_is_pushed_outward_by_a_pinhole_reader():
 
     from microduck_local.sensors.detector import DetectorSpec
 
-    assert DetectorSpec().projection == "pinhole"                  # ships unchanged
-    pin = DetectorSpec()
+    assert NARROW_REF.projection == "pinhole"                      # the reference, unchanged
+    pin = DetectorSpec(projection="pinhole")                       # named: the default is now fisheye
     for th in (0.0, 10.0, 30.0):                                   # identity, exactly
         assert pin.seen_angle(np.deg2rad(th), 62.0) == np.deg2rad(th)
 
@@ -390,9 +417,12 @@ def test_a_second_camera_pitched_down_sees_the_ball_at_the_feet_and_reports_it_i
     spot, near, far = (0.10, 0.06), (0.20, 0.05), (1.2, 0.0)
     m, d = world([("a", (0, 0, 0))], balls=[Ball(spot), Ball(near), Ball(far)])
     tg = targets(m, balls=(0, 1, 2))
-    top = Detector(m, site="a/head_camera", targets=tg)
-    nao = Detector(m, site="a/head_camera", spec=DetectorSpec(bottom_pitch_deg=39.7), targets=tg)
-    steep = Detector(m, site="a/head_camera", spec=DetectorSpec(bottom_pitch_deg=60.0), targets=tg)
+    from dataclasses import replace
+    top = Detector(m, site="a/head_camera", targets=tg, spec=NARROW_REF)
+    nao = Detector(m, site="a/head_camera", targets=tg,
+                   spec=replace(NARROW_REF, bottom_pitch_deg=39.7))
+    steep = Detector(m, site="a/head_camera", targets=tg,
+                     spec=replace(NARROW_REF, bottom_pitch_deg=60.0))
     seen_top = {x.name: x for x in top.capture(d, 0.0).detections}
     seen_nao = {x.name: x for x in nao.capture(d, 0.0).detections}
     seen_steep = {x.name: x for x in steep.capture(d, 0.0).detections}
@@ -425,8 +455,10 @@ def test_the_camera_env_sets_the_projection_and_refuses_a_typo():
 
     from microduck_local.sensors.detector import DetectorSpec
 
-    assert DetectorSpec().projection == "pinhole"
-    wide = DetectorSpec.from_env("fov_h_deg=116,fov_v_deg=60,px_h=640")
+    # The default moved to the fitted module on 2026-09-09: a 116° lens is not
+    # rectilinear, so reading it as a pinhole is the WRONG model, not the plain one.
+    assert DetectorSpec().projection == "equidistant"
+    wide = DetectorSpec.from_env("fov_h_deg=116,fov_v_deg=60,px_h=640,projection=pinhole")
     assert wide.projection == "pinhole" and wide.px_h == 640 and wide.fov_v_deg == 60.0
     assert DetectorSpec.from_env("projection=equidistant").projection == "equidistant"
     for bad in ("projection=fisheye", "projection=", "fov_h_deg=wide"):

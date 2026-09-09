@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from microduck_local import contract as C
 from microduck_local import viz_server as V
 from microduck_local import world_server as W
+from microduck_local.sensors.detector import DetectorSpec
 
 pytestmark = pytest.mark.skipif(
     not C.SCENE_WALK_XML.exists(), reason="microduck_rl checkout not found")
@@ -170,7 +171,11 @@ def test_follow_me_scenario_persons_brains_and_possess(app):
             # The frame carries the detector's output for the page's rays and
             # camera inset: the frustum and each detection's three numbers.
             det = d["sensors"]["det"]
-            assert det["fov"] == [62.0, 48.0] and det["age"] >= 0
+            # From the spec, not a constant: this asserts the payload REPORTS the
+            # camera. Hardcoding 62/48 asserted WHICH camera as a side effect, and
+            # broke the day the default moved to the fitted 116° × 60° module.
+            spec = DetectorSpec()
+            assert det["fov"] == [spec.fov_h_deg, spec.fov_v_deg] and det["age"] >= 0
             assert all({"cls", "bearing", "elevation", "width", "range"} <= set(it) for it in det["items"])
             persons = [o for o in frame["objects"] if o["kind"] == "person"]
             assert persons and persons[0]["id"] == "p0" and persons[0]["possessed"] is False
