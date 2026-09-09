@@ -180,6 +180,14 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    and a null at one value bounds nothing at another. A registered prediction
    of 1.80:1 came back 0.82:1 on exactly this.
 
+   **MDE is per-METRIC, not per-battery — so never say a battery "found
+   nothing".** One 24-seed `eval-pitch` run settled `board_margin` on
+   possession at an MDE of **5% of baseline** (a real null, tight enough to
+   mean it) while the *same seeds, same runs* gave an MDE of **18% on kicks** —
+   wide enough that a boards-confined effect of exactly the size the gym
+   measured would have been invisible in it. Same battery, decisive about one
+   question and blind to another. Quote the metric's MDE, never the battery's.
+
    What does extrapolate is the **precondition** population — the ceiling no
    value can raise. `contest_margin` fires on 0.07% of ticks at 0.15, but its
    precondition (an opponent inside `duck_touch` with the ball visible) is
