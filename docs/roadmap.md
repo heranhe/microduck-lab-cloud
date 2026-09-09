@@ -5951,17 +5951,48 @@ was testing a knob that structurally cannot reach the region the whole idea is
 about, and its null is expected rather than informative.** The arm that carried
 the hypothesis was m10, which acts across gap 0.04-0.16.
 
-**Third, this retires 12p's open mechanism question.** The re-binned curve
-collapses below 0.20 m (13% at 0.20-0.30, 9% at 0.15-0.20, 2% at 0.10-0.15) and
-the candidate explanation was "no legal spot exists down there". It does exist:
-at `board_margin=0.10` the knob supplies one across 0.04-0.16 m for 33-69% of
-aim directions — the heart of the collapse — and the match still measured
-nothing (possession −0.065, p 0.944; kicks 168 → 160). **The cliff is not
-nowhere-to-stand.** It is downstream of the spot: reaching it, seeing the ball
-at that range, or the swing. Stated as "not supported" rather than "refuted",
-because the m10 null carries an 18% kick MDE and the match firing rate is still
-uncounted — but it is enough that no battery should be spent on the legal-spot
-hypothesis.
+**Third — and CORRECTED, because the first version of this paragraph reached
+for the weaker of two instruments.** It originally said the legal-spot
+explanation for 12p's cliff was "not the cause", arguing from the m10 *match*
+null. The other session pointed out that the direct test was a gym arm already
+on disk: `--at-boards 0.15` draws gap in [0.045, 0.15], which IS the collapse
+region, and there m10 gave **3.66% → 6.16%, 1.68x, p = 0.0001**. In the heart
+of the cliff, supplying a legal spot moves the swing rate by an amount that is
+not in doubt. So the legal spot is not unsupported. It is **supported and
+small**:
+
+| | swing rate |
+|---|---|
+| collapse region (gap ≤ 0.15), shipped | 3.66% |
+| same, `board_margin = 0.10` | **6.16%** (p = 0.0001) |
+| far field (gap 0.65-1.01) | 79.0% |
+| **the cliff to explain** | **75.34 points** |
+| **the knob recovers** | **2.50 points = 3.3% of it** |
+
+**A legal spot accounts for about 3% of the collapse; the other ~97% (72.8
+points) is downstream** — reaching the spot, seeing the ball at that range, or
+the swing itself. The operational conclusion is unchanged (do not spend a
+battery on the legal-spot hypothesis) but the honest sentence is "a real but
+~3% effect", NOT "not the cause" — the latter invites someone to stop measuring
+spot availability altogether, and it is a live 3%.
+
+Why the first version went wrong is worth more than the correction: **the match
+arm was blind here (18% MDE on kicks, firing rate uncounted) while the gym arm
+was decisive (p = 0.0001) — same knob, same question, two instruments — and the
+weaker one was reached for because it was the more recent.** That is the
+per-metric MDE lesson one level up, applied to choosing an instrument rather
+than to reading one.
+
+**Fourth, the corners are the case that differs, and it changes what a census
+must count.** Sweeping each board type (probe section 3): the side board, their
+end and our end all behave identically — act 69/50/33% at gap 0.04/0.10/0.15
+with **zero** waste at m=0.10. The corners do not: there the branch **wastes as
+often as it acts** (47/47, 38/38, 29/29), and at m=0.25 every corner ball inside
+gap 0.20 is 100% waste. So a census that counts *plans within margin of a board*
+counts fall-throughs as reach and overstates the knob badly — at m=0.25 below
+gap 0.20 it would report the knob firing constantly when not one of those
+firings changes anything. **The census must count the ACT set, not the trigger
+set, and must report corners separately from the flat boards.**
 
 The lesson worth keeping is the cheapness. Three 20-minute match arms, a gym
 block, and a planned census were all pointed at a question that a pure-geometry

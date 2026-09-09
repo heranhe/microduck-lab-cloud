@@ -120,6 +120,49 @@ def main() -> None:
     print("\n   act    = the knob re-aims along the boards")
     print("   wasted = the branch runs, no legal spot, falls through to the default")
 
+    print("\n3. BY BOARD TYPE — the side board, each end, and the corners.")
+    print("   The corners are the case that differs: there the branch WASTES as often")
+    print("   as it acts, so a census that counts triggers overstates the knob's reach.\n")
+    hx, hy = bounds
+    groups = {
+        "side board":     [(x * hx, hy - 0.0) for x in [i * 0.1 - 1.0 for i in range(21)]],
+        "their end (+x)": [(hx - 0.0, y * hy) for y in [i * 0.1 - 1.0 for i in range(21)]],
+        "our end (-x)":   [(-(hx - 0.0), y * hy) for y in [i * 0.1 - 1.0 for i in range(21)]],
+        "corners":        None,
+    }
+    print("   " + f"{'gap':>6} | " + " | ".join(f"{k:>16}" for k in groups))
+    for gap in (0.04, 0.10, 0.15, 0.20, 0.30):
+        cells = []
+        for name in groups:
+            if name == "corners":
+                pts = [(sx * (hx - gap), sy * (hy - gap)) for sx in (1, -1) for sy in (1, -1)]
+            elif name == "side board":
+                pts = [(i * 0.1 - 1.0, hy - gap) for i in range(21)]
+            elif name == "their end (+x)":
+                pts = [(hx - gap, i * 0.1 - 1.0) for i in range(21)]
+            else:
+                pts = [(-(hx - gap), i * 0.1 - 1.0) for i in range(21)]
+            out = []
+            for m in (0.10, 0.25):
+                pp = ChaseParams(board_margin=m)
+                g.p = pp
+                act = waste = tot = 0
+                for bx, by in pts:
+                    for k in range(a.aim_steps):
+                        u = k * 2.0 * math.pi / a.aim_steps
+                        for foot in ("kick_left", "kick_right"):
+                            tot += 1
+                            sx, sy = _default_spot(pp, bx, by, u, foot)
+                            if not g._clear_of_boards(sx, sy):
+                                if g._along_the_boards(bx, by) is not None:
+                                    act += 1
+                                else:
+                                    waste += 1
+                out.append(f"{100*act/tot:3.0f}/{100*waste/tot:3.0f}")
+            cells.append(" ".join(out))
+        print(f"   {gap:>6.2f} | " + " | ".join(f"{c:>16}" for c in cells))
+    print("\n   cells are act/wasted %, for board_margin 0.10 then 0.25")
+
 
 if __name__ == "__main__":
     main()
