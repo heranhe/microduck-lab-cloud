@@ -6944,4 +6944,56 @@ a collision: **the guard belongs on the operation, not on the file you happen to
 be thinking about.** `git add -A` on prose is the same operation as `git add -A`
 on source.
 
-**RE-MEASURED BASELINES: pending — the arms are running as this is written.**
+**RE-MEASURED BASELINES ON THE FITTED CAMERA** (116 × 60, equidistant, 640 px —
+the default since `a9a4829`). These are the numbers to quote from now on.
+
+**The soccer ledger**, 24 seeds × 300 s of 2v2, `--ball-out-s 5`, get-up on
+(`base-real`, seeds 400-423):
+
+| | |
+|---|---|
+| **possession** | **40.175 s/min** (se 0.709) |
+| **ballAdvance** | **1.012 m/min** (se 0.061) |
+| kicks | 107 over 24 runs — **4.46 a run** |
+| goals | 21 · own goals 5 · **falls 2** |
+
+**The whiff, and the shipped gate**, 2240 episodes an arm, `--at-boards 1.00`
+(`gate-real`, seeds 900-907):
+
+| arm | swings | whiff | connected |
+|---|---|---|---|
+| `gate_on` (shipped `kick_ahead_max` 0.15) | 756 | **39.4%** | **458** |
+| `gate_off` | 1034 | **61.8%** | 395 |
+
+**The gate still pays on the real camera: +63 connected kicks (+16%) from 27%
+fewer swings, z = +9.59.** Its mechanism is unchanged and its sign is unchanged;
+only the size moved.
+
+**What moved, against the same arms on the camera we used to model** (62 × 48 at
+320 px — offered for orientation, not as a paired comparison: different seeds and
+two changes at once, lens *and* pixels):
+
+| | modelled camera | **fitted camera** |
+|---|---|---|
+| whiff, gate armed | 35% | **39.4%** |
+| the gate's benefit | +32% connected | **+16%** |
+| swings taken, gate armed | 846 | **756** |
+
+**Fewer swings, each worth slightly less, and the gate earning less — which is
+what the deferral mechanism predicts, not a contradiction of it.** A camera that
+holds the ball in view keeps `predicted` non-None more of the time, so `_too_far`
+is *armed* more often and declines more swings; and the swings it lets through
+were already the good ones, so there is less left for it to buy. The gate's value
+falls as the camera improves **because the camera is doing the gate's job**.
+
+**One number that should be read carefully.** Item 12a's headline — whiff
+47% → 36% — is not comparable to the 39.4% here: it was a different harness
+without `--at-boards 1.00`, which is deliberately the hard case. **The honest
+statement of where the whiff stands on the robot's camera is 39.4% at the
+boards**, and 12a's figure needs its own re-run before it is quoted again.
+
+**Still assumed, and it gates all of the above: the 640 px input.** At 320 px the
+fitted lens is 158 px/rad and a duck at 3 m is 4.7 px — under the "sometimes
+found" floor. Every number in this section would be worse, by an amount nobody
+has measured, if the NPU cannot sustain 640. That is `camera-hardware.md` §5
+open question 1 and it is still open.
