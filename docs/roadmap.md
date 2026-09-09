@@ -5147,3 +5147,184 @@ published tables, the anti-conservatism of the old normal, and the measured
 pairing gain on the real batteries — with the historical finding pinned to the
 files it was measured on, so a future pitch that makes it false fails the test
 rather than silently passing.
+
+
+### 12m. "It walks at the wall and gets stuck looking at it" — the ball is RIGHT THERE and it cannot see it (2026-09-09)
+
+From the /sim page: *"the robot is just walking putting its head down and
+walking towards the wall and the ball is obviously not there and now its stuck
+looking at the wall"*. Counted per tick — a duck within 0.35 m of a board,
+pointing at it within 35°, with no sighting of the ball fresher than 0.3 s
+(4 seeds × 180 s of 2v2):
+
+| | share of that stuck time |
+|---|---|
+| **the ball is within 0.5 m of the duck** | **79.7 %** |
+| the ball is also at the boards | 48.5 % |
+| state `blocked` | 34.5 % |
+| state `support` | 21.5 % |
+| state `retreat` | 20.4 % |
+| state `search` | 12.6 % |
+| …and the head is down while it happens | 12.5 % |
+
+**The premise is inverted: the ball is not absent, it is invisible.** Four
+times out of five the duck is standing within half a metre of the ball it is
+looking for. This is the near-field blind radius (§3b of
+`docs/camera-hardware.md`: 0.50 m head-level, 0.19 m at the gaze, on the
+frustum the sim assumes) meeting a ball that spends most of a run at the
+boards, where a duck cannot get an angle on it.
+
+Total cost: **9 s a duck in a 180 s run**, and `gaze_still` — shipped the same
+day (12c) — **doubled it from 4 s**, which is part of the flat ledger that
+knob already carries.
+
+**Two fixes built and reverted, because neither moved the total:**
+
+1. `wall_back` — reverse out of a board instead of turning on the spot.
+   `gait.back_up`'s own measurement favours it (1.6 s to clear 0.30 m against
+   2.7 s turn-90-and-walk, 3.2 s turn-180; and backwards is the fastest this
+   walker moves, 0.23 m/s against 0.185 forward). Measured: it halves the
+   `blocked` share (34.5 → 18.6 %) and the total is **unchanged at 9 s** — the
+   time moves into `support`. It escapes the wall and the duck goes back.
+2. `post_margin` — clamp every hold target inside the boards, on the theory
+   that posts laid out from a ball at the wall land inside one. **A no-op:**
+   the striker's post for a ball jammed at (1.5, 1.35) is (1.25, 0.49), well
+   inside 1.70 × 1.425. The posts were never the problem.
+
+**So it is not a planning bug and not a walker bug**, and neither better logic
+nor more training addresses it: the duck goes to the ball, gets within half a
+metre, and the ball drops inside its own blind radius. That is the same
+finding as 12k from the other side, and it is what the camera work below
+measures directly.
+
+
+### 12n. The soccer ledger on the cameras that actually exist — MEASURED (2026-09-09)
+
+`docs/camera-hardware.md` measured all three frustums on *tidy* and on the
+soccer *line-up*, but never the soccer ledger. Jonathan asked whether the
+device's field of view is not larger than the sim's, which it is — in both
+directions, because **62 × 48 is the IMX219's FULL-ARRAY figure and the robot
+pins the sensor to a 1080p CROP** (39 × 22.5). Ball coverage first, 120 000
+duck-ticks of 2v2 an arm, a sighting counted fresh within 0.3 s:
+
+| camera | a duck sees the ball | nobody on the team does |
+|---|---|---|
+| **the robot today** — IMX219 1080p crop, 39 × 22.5 | **8.2 %** | **85.2 %** |
+| what the sim assumes — 62 × 48, 320 px | 23.9 % | 61.3 % |
+| the replacement as it ships — 116 × 60, 320 px, uncalibrated | 27.9 % | 54.5 % |
+| **the replacement calibrated** — 116 × 60, 640 px | **35.5 %** | **42.7 %** |
+
+So the blindness that item 12 calls its ceiling is substantially a property of
+a camera **neither candidate is**: the real robot today is three times blinder
+than the sim, and the replacement cuts team blindness by a third.
+
+And the ledger, 24 paired seeds × 300 s of 2v2, `--ball-out-s 5`, get-up on.
+**Read through `scripts/compare_pitch.py` as corrected in 7fff78c** — the p
+values first published here came from `math.erfc`, the normal, inside a
+`except ImportError: scipy` branch that has always run, and the normal is
+anti-conservative. Nothing below flipped, but two rows that were quoted are
+NO RESULT and one sits exactly on the line:
+
+| against the sim's camera | the crop (today) | the replacement @640 |
+|---|---|---|
+| possession (both teams) | **−3.73 s/min (p 0.007)** | **+3.11 s/min (p 0.011)** |
+| ballAdvance | **−0.377 m/min (p 0.000)** | −0.070, MDE 18% — NO RESULT |
+| crowd | −0.013 (null) | +0.040 (p 0.039) |
+| goals (22 baseline) | 11 — **NO RESULT**, MDE 54% | 16 — NO RESULT, MDE 65% |
+| falls (8 events baseline) | 9 — NO RESULT, MDE 109% | 1 — **p 0.050, MDE 87%** |
+| kicks (events) | 143 → 123 | **143 → 84** |
+| ballProgress | unquotable | unquotable |
+
+`goals` needs 708 seeds and `falls` 2840 to resolve 10% of baseline here, so
+neither the crop's goal collapse nor its fall count is evidence of anything.
+**The falls row on the replacement is the one claim not to lean on**: 8 events
+against 1 is a large drop and it is on the significance line with an 87% MDE.
+It is suggestive, and the mechanism is plausible — a duck that can see its
+near field does not walk into things — but it is one battery.
+
+**The crop is a straight loss** and it is what the robot runs today: every
+soccer number in this repo is optimistic about the current hardware, the same
+caveat §3c already recorded for tidy.
+
+**The replacement is not a straight win, and that is the interesting part.**
+It buys possession, and falls drop 8 events to 1 (suggestive, on the line, see
+above) — a duck that can see the near field does not walk into things. But it
+takes **41% fewer kicks** (143 events → 84), which is `kick_ahead_max`
+(12c) doing its job: better sight means the gate can see that the ball is out
+of reach and refuse the swing. Goals do not move. So the wide lens converts
+blind swinging into possession and safety, not yet into goals, and what to do
+with the extra possession is a brain question this branch has not answered.
+
+Not chased here: 640 px is a bet on the NPU sustaining it (§5.1 is still the
+open question), and the uncalibrated 320 px arm — the module as it would ship
+without lens calibration — is the one to fear, since §2's 9.7° bearing error
+is past the chase brain's aim tolerance. `MICRODUCK_CAMERA` can now set
+`projection`, so that arm is finally runnable from a command line; it was
+numeric-only until today.
+
+### The fixed instrument, used: two unearned nulls become earned ones (2026-09-09)
+
+Re-run in `scripts/kick_gym.py` on fresh seeds 600-615, 25 episodes a seed,
+with the MDE now printed:
+
+| arm | swings | whiff | vs base | ±MDE | p | verdict |
+|---|---|---|---|---|---|---|
+| shipped (clean gym) | 333 | 24% | — | — | — | — |
+| ball memory `rest_predict_s=6,rest_coast_s=20` | 341 | 28% | +4 pts | 7 pts | 0.254 | **null** |
+| shipped (`use_color=1`, 1 opponent) | 233 | 22% | — | — | — | — |
+| `contest_margin=0.15` (+`use_color=1`) | 225 | 25% | +3 pts | 8 pts | 0.385 | **null** |
+| `contest_margin=0.15` alone | 233 | 22% | +0 pts | 8 pts | 1.000 | **BROKEN** |
+
+**Both are now earned nulls** — 7-8 percentage points of resolution, for 32 s
+and 176 s of wall clock, against the 28%-of-baseline the pitch battery that
+originally judged them could manage. Both point estimates are also slightly
+*worse*, so the conclusion does not change; what changes is that it is now
+supported.
+
+**The third row is the point of the exercise.** `contest_margin=0.15` on its
+own reproduced the baseline **episode for episode** — 233 swings against 233,
+whiff 22% against 22%, p = 1.000. That is not a null, it is playbook rule 0: a
+knob that changes nothing is BROKEN. The rule is gated on `use_color`, which
+defaults to `False`, so the arm ran the shipped path and returned a clean
+result about nothing — and the new MDE machinery called it `null`, which is
+precisely the failure this work is about. `is_identical` now catches it and
+names the gate. (Note what the same row proves in passing: `use_color=1` alone
+is also a no-op here, since the base sets it and the two runs match.)
+
+**Cost of the two batteries: under four minutes of wall clock**, for a
+resolution the pitch could not reach at any size this project would ever run.
+
+### Caveat on every null above: they were measured through a camera that does not exist (2026-09-09)
+
+microduck-62's item 12n changes what the nulls in this section mean. The sim's
+62x48 field of view is neither of the real candidates: 62x48 is the IMX219's
+**full-array** figure, and the robot pins 1080p, which on that sensor is a
+**crop of 39x22.5**. Ball coverage, over 120k duck-ticks — the share of time
+where **nobody on the team can see the ball**:
+
+| camera | nobody sees it |
+|---|---|
+| the robot **today** (1080p crop, 39x22.5) | **85.2%** |
+| what this sim assumes (62x48) | 61.3% |
+| the replacement, calibrated (116x60 @640) | 42.7% |
+
+So the duel's three nulls — `lineup_keepout`, `opp_keepout`, `contest_margin` —
+were all measured at 61.3% blindness, and the hardware in the room runs at
+85.2%. A rule about **which duck turns away from which** cannot plausibly
+matter when nobody can see the ball for six-sevenths of the run. The honest
+restatement is not "the duel is a null" but **"the duel was never the binding
+constraint, on either camera"** — and the constraint that binds is coverage.
+
+That also reframes this section's own conclusion. The instrument had two
+defects: it could not resolve a 10% effect (fixed above), and it was pointed at
+a machine that does not exist (not fixable here — it is a hardware fact). The
+first made nulls unearned; the second makes even an earned null a statement
+about the wrong robot. **Before spending more compute on chase knobs, the
+coverage question outranks all of them.**
+
+One thread worth pulling, from 12n's own ledger: the replacement camera buys
+possession (+1.55 s/min, p=0.006) but takes a third fewer kicks (5.96 -> 3.50,
+p=0.001), which 12n attributes to `kick_ahead_max` refusing swings it can now
+see are out of reach. That is a knob, not a law, and it is a kick question —
+so it belongs in `scripts/kick_gym.py` at ~0.8 CPU-seconds an event rather than
+on the pitch at ~15.

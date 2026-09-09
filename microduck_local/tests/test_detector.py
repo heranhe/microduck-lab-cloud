@@ -412,3 +412,23 @@ def test_a_second_camera_pitched_down_sees_the_ball_at_the_feet_and_reports_it_i
         DetectorSpec.from_env("bottom_pitch=39.7")
     with pytest.raises(ValueError):
         DetectorSpec.from_env("site=foo")
+
+
+def test_the_camera_env_sets_the_projection_and_refuses_a_typo():
+    """`projection` is the one knob that says whether a wide lens is READ
+    correctly (pinhole = calibrated; equidistant = the error a
+    pinhole-calibrated reader makes on a fisheye). It was numeric-only in
+    `from_env` until 2026-09-09, so the battery that needs it - the new
+    module as it ships, uncalibrated - could not be run from a command line
+    (docs/camera-hardware.md 2)."""
+    import pytest
+
+    from microduck_local.sensors.detector import DetectorSpec
+
+    assert DetectorSpec().projection == "pinhole"
+    wide = DetectorSpec.from_env("fov_h_deg=116,fov_v_deg=60,px_h=640")
+    assert wide.projection == "pinhole" and wide.px_h == 640 and wide.fov_v_deg == 60.0
+    assert DetectorSpec.from_env("projection=equidistant").projection == "equidistant"
+    for bad in ("projection=fisheye", "projection=", "fov_h_deg=wide"):
+        with pytest.raises(ValueError):
+            DetectorSpec.from_env(bad)

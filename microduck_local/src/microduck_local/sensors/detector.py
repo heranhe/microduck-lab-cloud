@@ -69,6 +69,10 @@ _SHIPPED_PX_PER_RAD = SHIPPED_PX_H / np.deg2rad(SHIPPED_FOV_H_DEG)
 # deg lens keeps its extra view. Recorded, not built.
 
 
+# The string camera fields and their legal values, for `from_env`.
+CAMERA_CHOICES = {"projection": ("pinhole", "equidistant"), "site": ()}
+
+
 @dataclass(frozen=True)
 class DetectorSpec:
     fov_h_deg: float = 62.0      # ASSUMPTION: a Pi-camera-class module; the lens is still not specified
@@ -181,8 +185,20 @@ class DetectorSpec:
             if not sep or k not in kinds:
                 raise ValueError(f"MICRODUCK_CAMERA: unknown camera field {k!r}")
             cur = kinds[k]
+            if isinstance(cur, str):
+                # The string fields are choices, and an unknown one RAISES for
+                # the same reason a bad number does. `projection` was
+                # unsettable here until 2026-09-09, so the one battery that
+                # needs it - the wide lens read by a pinhole-calibrated
+                # reader, i.e. the new module as it ships uncalibrated -
+                # could not be run from the command line at all.
+                allowed = CAMERA_CHOICES.get(k)
+                if allowed is not None and v not in allowed:
+                    raise ValueError(f"MICRODUCK_CAMERA: {k}={v!r} is not one of {allowed}")
+                over[k] = v
+                continue
             if isinstance(cur, bool) or not isinstance(cur, (int, float)):
-                raise ValueError(f"MICRODUCK_CAMERA: {k!r} is not a numeric field")
+                raise ValueError(f"MICRODUCK_CAMERA: {k!r} is not a settable field")
             try:
                 over[k] = type(cur)(float(v)) if isinstance(cur, int) else float(v)
             except ValueError as e:
