@@ -5914,3 +5914,58 @@ settle this, and the question belongs in the gym with the census beside it.
 That is the same instrument 12r needed and the same one `--at-corners` is
 building.
 
+**AND THEN THE CENSUS TURNED OUT TO BE UNNECESSARY, because the question is
+geometry and not statistics.** `scripts/probe_board_geometry.py` calls
+`Chase._along_the_boards` and `_clear_of_boards` directly — no simulation, a
+few thousand trig calls — and answers "could the knob ever act here?" which no
+battery can separate from "did it pay?".
+
+First, the feasibility law of 12q is exact and its constant was never
+empirical. A legal along-the-boards spot exists iff
+
+    gap >= board_margin - kick_side          (kick_side = 0.06; kick_ahead does not enter)
+
+a clean step at every margin swept (0.10/0.15/0.20/0.25/0.30). What 12q fitted
+as `margin <= gap + 0.05` is `kick_side` and should be written that way.
+
+Second, and this is what explains the arms — the branch in `_hold_target` runs
+only when the DEFAULT spot is inside the margin, and helps only if a legal
+alternative exists. **Both tests use the same `board_margin`, so raising it
+makes the knob fire more and fail more.** Sweeping aim direction uniformly
+(an assumption, and the only one here):
+
+| gap | m=0.10 act / wasted | m=0.25 act / wasted |
+|---|---|---|
+| 0.04 | **69.4%** / 0.0% | 0.0% / **100.0%** |
+| 0.08 | 55.6% / 0.0% | 0.0% / **100.0%** |
+| 0.15 | 33.3% / 0.0% | 0.0% / **100.0%** |
+| 0.20 | 0.0% / 0.0% | **66.7%** / 0.0% |
+| 0.30 | 0.0% / 0.0% | 33.3% / 0.0% |
+| 0.40 | 0.0% / 0.0% | 0.0% / 0.0% |
+
+**`board_margin = 0.25` cannot act anywhere below gap 0.20 — it triggers and
+falls through 100% of the time.** For a ball within 19 cm of a board it is a
+no-op that still runs the branch: the same self-disabling behaviour 12q found
+at 0.40, reached at a value we were treating as live. So **the m25 arm above
+was testing a knob that structurally cannot reach the region the whole idea is
+about, and its null is expected rather than informative.** The arm that carried
+the hypothesis was m10, which acts across gap 0.04-0.16.
+
+**Third, this retires 12p's open mechanism question.** The re-binned curve
+collapses below 0.20 m (13% at 0.20-0.30, 9% at 0.15-0.20, 2% at 0.10-0.15) and
+the candidate explanation was "no legal spot exists down there". It does exist:
+at `board_margin=0.10` the knob supplies one across 0.04-0.16 m for 33-69% of
+aim directions — the heart of the collapse — and the match still measured
+nothing (possession −0.065, p 0.944; kicks 168 → 160). **The cliff is not
+nowhere-to-stand.** It is downstream of the spot: reaching it, seeing the ball
+at that range, or the swing. Stated as "not supported" rather than "refuted",
+because the m10 null carries an 18% kick MDE and the match firing rate is still
+uncounted — but it is enough that no battery should be spent on the legal-spot
+hypothesis.
+
+The lesson worth keeping is the cheapness. Three 20-minute match arms, a gym
+block, and a planned census were all pointed at a question that a pure-geometry
+probe answers in under a second, because the knob's reachable set is a property
+of the code and not of the football. **Ask what a knob CAN do before paying to
+find out whether it does.**
+
