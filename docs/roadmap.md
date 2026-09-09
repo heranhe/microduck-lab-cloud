@@ -12,6 +12,29 @@ person finds out it was already tried.
 
 ---
 
+> ## ⚠ EVERY LEVEL MEASURED BEFORE 2026-09-09 IS ON THE WRONG CAMERA — read 12z.
+>
+> The fitted lens is **116° × 60°** (vendor FOV table, supplied 2026-09-09).
+> `DetectorSpec` defaulted to **62° × 48°** until that date — the *stock* Pi
+> Camera v2's full array, which is not fitted — and a "1080p crop" of
+> **39° × 22.5°** was derived from that same wrong lens, so it does not exist
+> either. The sim is re-baselined (`a9a4829`); the roadmap is not, and
+> re-running every item is not worth it.
+>
+> **How to read this file.** A result whose subject is a **comparison between two
+> configurations** stands: neither side depended on which lens is fitted, so the
+> mechanisms hold — field of view drives possession and whiff, `_too_far`
+> disables itself without a track, `kick_ahead_max` replaces far seen swings with
+> close blind ones, the corner geometry and the 6.8 cm floor. **A LEVEL does not
+> stand**: any absolute whiff rate, possession figure, kick count or visibility
+> fraction below was taken on a camera nobody has. Items 12n, 12u, 12w, 12x and
+> 12y carry their own banners; the rest of Track 4 inherits this one.
+>
+> The error's shape is worth more than the error: the wrong camera was a
+> **default**, so it was pinned in eight tests and stated in none.
+
+---
+
 ## Now: the 🔎 `find_ball` brain
 
 Context: `find_ball` is a scan-and-track behavior that aims the duck at a
