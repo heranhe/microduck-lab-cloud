@@ -6871,7 +6871,9 @@ exist either. Both were load-bearing.
 
 | claim | where | status |
 |---|---|---|
-| "every number in this repo is measured on a camera the robot does not have, **and is optimistic**" | 12w, 12x | **half right.** The premise is correct — the camera was wrong. The *direction* is backwards: on the soccer ledger the real camera **beats** the modelled one, possession 36.4 → **40.1 s/min** (p = 0.011), because it is nearly twice as wide. The sim was **pessimistic** about the robot's camera, not optimistic. |
+| "every number in this repo is measured on a camera the robot does not have, **and is optimistic**" | 12w, 12x | **half right.** The premise is correct — the camera was wrong. The *direction* is backwards: on the soccer ledger the real camera **beats** the modelled one, possession 36.4 → **40.1 s/min** (p = 0.011, 24 paired seeds), because it is nearly twice as wide. The sim was **pessimistic** about the robot's camera, not optimistic.
+
+> **Precision on that figure:** it is the real camera at the NPU's **320 px** input against the old 62 × 48 default, also at 320 px — i.e. a pure lens comparison, run before the default moved. The re-measured baseline below is at **640 px**, so it is not the same number and should not be quoted as one. |
 | whiff **63.6%** on "the robot's camera" | 12w | **withdrawn.** Measured on the 39 × 22.5 crop, which does not exist. |
 | the gate is worth **0.396** of its value on "the robot's camera" | 12w | **withdrawn**, same reason. The mechanism (`_too_far` self-disables when `predicted` is None) stands; the ratio does not. |
 | `board_margin` / sensor-mode work | 12y | **withdrawn.** It un-pins a 1080p crop that only costs field of view if the stock lens is fitted. The upstream branch is not to be merged. |

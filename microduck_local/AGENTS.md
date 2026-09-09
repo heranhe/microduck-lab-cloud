@@ -708,6 +708,42 @@ answerable by drawing placements and calling the planner directly, with no
 outcome in the loop and so no way for selection to bite. Two routes that cannot
 share a bias are worth more than two runs of the route that can.
 
+### A characterisation that silently inherits a default stops characterising anything the day the default moves
+
+The most expensive error of 2026-09-09, and it hid for months behind tests that
+all passed. The sim's camera was `62.3 x 48.8` — the **stock** Pi Camera v2's
+full array. The fitted module is a wide M12 board at **116 x 60** (D 142.2,
+H 116, V 60), which the owner supplied on request and which `camera-hardware.md`
+§1 had listed as an open question all along. So a day of camera work compared
+two geometries, **neither of which is on the robot**, and landed a headline —
+*"every number here is measured on a camera the robot does not have, and is
+optimistic"* — whose premise was right and whose **direction was backwards**:
+the real camera is nearly twice as wide, so the sim was PESSIMISTIC.
+
+**Why nothing caught it.** Eight tests asserted things *about* that geometry —
+"outside a 62 degree FOV", "below a 48 degree vertical field",
+`px_per_rad == 295.72`, a bearing bound of `0.6 rad` that was silently the old
+half-angle — and **every one of them inherited the default rather than naming
+it**. The geometry was pinned in eight places and stated in none. Moving it
+produced nine unrelated-looking failures instead of one clear "the camera
+changed", so the tests locked the value in without ever documenting it, and
+locked in the wrong one.
+
+**The rule.** A test that fixes a number it does not name is not a
+characterisation, it is a hostage. **Write the constant into the assertion, or
+read it from the spec** — `assert ... > spec.fov_h_deg / 2`, not `> 0.6`. Then
+one changed default gives you one honest failure that says what changed,
+instead of a scatter that looks like nine regressions.
+
+**What survived, and why it is the part worth having.** Every result whose
+subject was a *comparison between two geometries* is untouched: the gate
+disabling itself without a track, `kick_ahead_max` replacing far seen swings
+with close blind ones, the corner saturation, the 6.8 cm reachability floor,
+the whole placement-versus-acceptance argument. **Levels fall; shapes hold.**
+When a shared assumption turns out to be wrong, sort results by whether their
+subject was an absolute or a difference before withdrawing anything — the
+absolutes go, and the mechanisms usually do not.
+
 ### Every mechanical check here was wrong on first contact
 
 Worth knowing before you trust a new one — over a single day: a `pgrep`
