@@ -443,6 +443,27 @@ state a predicate, do not paraphrase one** — quote the condition or write it
 out whenever a number counts things satisfying something. A paraphrase is a
 reconstruction of your own code, performed in prose, and it fails the same way.
 
+**A fourth shape, and the nastiest: an unstated SCENARIO — a systematically
+wrong input that agrees with the truth wherever the quantity does not depend
+on it.** One session drew from `make_pitch(per_side=2)` out of habit while the
+gym runs `gym_scenario()` (the 1v1 floor). Three feasibility fractions came out
+right anyway, because feasibility is pitch-invariant — it depends on the ball's
+gap from the NEAR board, not on where the others are. Only the corner share,
+a ratio of areas, is pitch-dependent, and only it disagreed: 16.3% against
+19.2%. Three correct numbers from a wrong setup, and exactly one detectable.
+
+**The consequence is worse than the error.** Both sessions had independently
+reproduced those three fractions to under a point and read the agreement as
+strong mutual confirmation. It was not: **where a quantity is invariant to an
+input, agreement about it carries no information about that input.** Two
+parties agreeing is only independent confirmation if their setups are actually
+independent AND the measurement is sensitive to what differs. Reproducing an
+invariant is nearly free and proves almost nothing about provenance.
+
+So: **state the scenario a measurement was drawn from, not just the call.**
+"Real calls over the real draw" was true in every word and never said which
+pitch, which was the whole error.
+
 **Marking is not enough for `[assumed input]`, and saying so is part of the
 rule.** A reconstruction announces itself to anyone who looks; a probe can be
 contradicted by a sweep. Correct arithmetic on a guessed constant has no tell
