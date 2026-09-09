@@ -167,6 +167,28 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    otherwise it prints `NO RESULT` and the seeds that would settle it. Never
    write "measured off" against a `NO RESULT`.
 
+   **Turning a null into a positive claim, and the trap in it.** A rule that
+   only changes outcomes when it fires moves a whole-match metric by about
+   (firing rate) x (per-firing effect), so `required per-firing effect =
+   MDE / firing rate` — which reads as "this arm does not produce more than
+   X% on the ticks it fires". **That holds for the ARM measured, not for the
+   knob.** Measured on `board_margin` at 15 cm: feasible fractions 95.2% and
+   52.8%, total effects +2.50 and +3.04 points, so per-acting went +2.63 →
+   +5.76 — rising 2.19x as the fraction FELL, because a bigger clearance puts
+   the kick spot further off the wall and a further spot is a better one. Where
+   a knob's value changes both how often it acts and how well, both terms move
+   and a null at one value bounds nothing at another. A registered prediction
+   of 1.80:1 came back 0.82:1 on exactly this.
+
+   What does extrapolate is the **precondition** population — the ceiling no
+   value can raise. `contest_margin` fires on 0.07% of ticks at 0.15, but its
+   precondition (an opponent inside `duck_touch` with the ball visible) is
+   0.41% at *any* margin, and 19% ÷ 0.0041 needs a 4634% per-firing effect. So
+   ask: **does the knob's value set its own population?** `board_margin` does
+   (0.25 acts on 39% of a boards draw, 0.10 on 95%) and was rescuable by
+   re-valuing — that is what turned it from a null into 1.46-1.71x.
+   `contest_margin` cannot, at any value, and stays dead.
+
 4. **`ballProgress` is not quotable.** Its MDE has never once been under
    100% of baseline on a real battery; the median seed budget for a 10%
    change is ~21,000. It is printed for shape only. Differences in it have
