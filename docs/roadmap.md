@@ -6454,6 +6454,60 @@ stands. It needs repeated attempts on the same ball, which means
 the arm, or a gym that does not end the episode at the first swing. Recorded so
 nobody spends a battery discovering the harness cannot answer the question.
 
+**THREE RESULTS FROM THE OTHER SESSION'S VALUE-MODEL ARM (2240 episodes, gate
+off, `pred_ahead` added to every swing row — the quantity `_too_far` actually
+gates on, the brain's own belief rather than the true ball).**
+
+**(a) The `predicted is None` swings were a selection effect, and it was called
+before the analysis ran.** 1037 gate-off swings:
+
+| | n | median true \|ahead\| | whiff |
+|---|---|---|---|
+| `predicted = None` | 625 | **0.108 m** | **37%** |
+| has a prediction | 412 | **0.290 m** | **91%** |
+
+The blind swings are at balls **2.7x closer**. `predicted` goes None precisely
+when the ball is too close to see (12k, ~0.3 m) and a ball at the duck's feet is
+unmissable — so an 8-swing smoke test showing "blind swings do not whiff" was
+measuring *close balls are easy*. **The population was defined by the thing that
+makes the outcome easy**, which is the same shape as 12o's corner case and the
+throw-in expiry probe: the third time tonight.
+
+**(b) THE LINEAR-VALUE ASSUMPTION IS FALSE, and the session that made it tested
+it rather than defending it.** Whiff by how far past the gate the belief sat:
+
+| excess beyond 0.15 m | n | whiff | median travel |
+|---|---|---|---|
+| 0.15-0.25 | 170 | 88% | 0.019 m |
+| 0.25-0.35 | 177 | **97%** | 0.027 m |
+| 0.35-0.50 | 50 | 96% | 0.033 m |
+
+**It saturates.** Declining a swing 0.40 m out is worth no more than declining
+one 0.20 m out — both whiff. So the severity weighting that produced the 0.99
+ceiling is unearned, and **that bracket collapses to its floor, 0.71**; the
+upper end was withdrawn by its author on measurement. This item's 0.396 still
+does not beat 0.71 (P = 0.90) and is not claimed to — but the comparison is now
+one number against one number, and the one that moved was measured away rather
+than argued away.
+
+**(c) The gate declines almost pure losers, which is a better argument for
+`kick_ahead_max` than the A/B that shipped it.** Of the 412 swings where the
+brain had a prediction, **409 were beyond the gate**, whiffing **92%** with a
+median travel of 0.026 m. The 3 inside it whiff **0%** and travel 0.812 m. When
+the duck can see the ball at swing time, the swing is nearly always one the gate
+should refuse.
+
+**AN UNCONFIRMED MECHANISM, REGISTERED BEFORE ITS TEST.** Gate-off gives 1037
+swings of which the gate would refuse 409, so removal predicts 628 with the gate
+on — but the gate-on arm has **846**, leaving **+218 unexplained**. So declining
+does not *remove* a swing, it **defers** one, and the deferred swing may arrive
+later, closer and blind: the 37%-whiff population. If so the gate's value comes
+from making the duck wait until the ball is at its feet, which is a stranger
+mechanism than either session's model. **The registered prediction, before the
+confirming arm runs: `predicted is None` on ~99% of gate-ON swings, against
+60.3% measured on gate-off. Under ~80% and the mechanism is unsupported, not
+merely "higher".**
+
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
 what 12u now supports on possession and ball advance. If the replacement ships,
