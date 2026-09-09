@@ -316,6 +316,63 @@ and later reversed; several "measured off" verdicts turned out to be noise.
     `ChaseParams()`, which will happily agree with you while the live brain
     does something else.
 
+## Editing a file a running battery imports (write ATOMICALLY)
+
+Another session usually shares this checkout, and batteries run for tens of
+minutes. On 2026-09-09 an edit to `brain/controllers.py` killed both arms of
+somebody else's `kick_gym` run — 40 minutes of compute — with
+`TypeError: must be called with a dataclass type or instance` out of
+`ChaseParams.from_env`.
+
+**The mechanism was a torn read, not stale code.** `Path.write_text` truncates
+the file and then writes it. A worker that opened it inside that window got a
+prefix: `class ChaseParams` existed, `@dataclass` had not been applied yet. It
+reproduces once and then passes a minute later, which is the signature.
+
+**Two assumptions that made it feel safe, both false on this machine:**
+
+- macOS defaults to **spawn**, not fork, so every worker re-imports the module
+  from disk when it starts.
+- `ProcessPoolExecutor` starts workers **lazily** as tasks are submitted, not
+  all at pool creation. A battery running for minutes can start a fresh worker
+  — and re-read your file — at any moment.
+
+So there is no "the pool already imported it, therefore I am safe" window.
+
+**The fix is structural: write atomically.** Temp file in the same directory,
+then `os.replace`, which is atomic — a spawning worker opens either the whole
+old file or the whole new one, never a prefix:
+
+```python
+fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+    fh.write(text)
+os.replace(tmp, path)
+```
+
+This beats coordination because it does not depend on anyone remembering. Keep
+the protocol as the second line, since atomicity does not stop two workers
+loading *different* versions either side of an edit: before touching `brain/`
+or `world/`, check what is running —
+
+```bash
+pgrep -fl python | grep -E '^[0-9]+ .*(kick_gym|eval_pitch|eval_striker|probe_)'
+```
+
+(Both halves are load-bearing, and two simpler forms do NOT work — verified
+against two live `kick_gym` arms. `pgrep -f 'kick_gym|...'` matches the shell
+running the check, because `-f` matches whole command lines and the pattern is
+in your own argv; so does anchoring on `python`. The `[k]ick_gym` bracket trick
+does not save you either, because other shells in the session legitimately have
+`kick_gym` in their command lines. Restricting `pgrep` to python processes and
+then anchoring the grep on `^<pid> ` is what works: `-fl` prints multi-line
+command lines, and only the first line of each carries the PID, so the anchor
+drops the continuation lines that produce the phantom matches. The output is
+the drivers AND their spawned workers — read it, do not count it.)
+
+— and treat those modules as owned by whichever battery is live, not by a
+session. **The unit of ownership is the import graph, not the file.**
+
 ## Before you commit: `./scripts/precommit.sh` (1 second)
 
 It runs `ruff` and imports every battery entry point. It exists because

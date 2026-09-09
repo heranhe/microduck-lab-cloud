@@ -528,12 +528,24 @@ def test_the_chase_brain_tracks_a_ball_the_tof_sees_at_its_feet():
         w.step()
     tof = d.tof.last
     senses = Senses(t=w.t, tof=tof, tof_age=w.t - tof.t, det=None, det_age=None, speed=0.0, odom=w.odom(d))
-    on = Chase(ChaseParams(tof_ball_m=0.5), goal=(1.5, 0.0))
+    # UNGATED: the blob becomes a ball sighting for the tracker.
+    on = Chase(ChaseParams(tof_ball_m=0.5, tof_ball_lineup=False), goal=(1.5, 0.0))
     on.step(senses)
     assert on.tof_ball is not None and on.tracker.best("ball", w.t, min_hits=1) is not None
+    # OFF: no blob, no ball.
     off = Chase(ChaseParams(), goal=(1.5, 0.0))
     off.step(senses)
     assert off.tof_ball is None and off.tracker.best("ball", w.t, min_hits=1) is None
+    # SHIPPED (`tof_ball_lineup` defaults True, e6dd8d3): the blob is gated to
+    # the line-up, so the same senses from a duck that is NOT lining up must
+    # produce nothing. This is the half the gating commit left untested, and
+    # its absence is why this test sat red on `development` for five commits —
+    # it asserted the ungated behaviour against a default that had changed.
+    gated = Chase(ChaseParams(tof_ball_m=0.5), goal=(1.5, 0.0))
+    assert gated.p.tof_ball_lineup is True                      # the shipped default
+    gated.step(senses)
+    assert gated.state not in ("lineup", "settle")
+    assert gated.tof_ball is None and gated.tracker.best("ball", w.t, min_hits=1) is None
 
 
 def test_clearance_is_selected_by_bearing_so_a_turned_head_cannot_report_a_wall_beside_it():
