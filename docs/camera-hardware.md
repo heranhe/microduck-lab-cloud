@@ -38,12 +38,35 @@ person's middle leaving the frustum at 1.2 m).
 The crop cuts the other way on sharpness: 320 px over 39° is **471 px/rad**
 against the 296 assumed, because a narrow view concentrates pixels.
 
-**ASSUMED, and it is the open question:** that the module is a stock Pi
-Camera v2 (f = 3.04 mm). Third-party IMX219 boards ship M12 lenses from 88°
-to 160° and would change every number here. The repo names the driver
-overlay, not the lens. Nothing in the sim has been re-baselined on
-39 × 22.5 — the durable point is that **62 × 48 is the full-array figure and
-the robot does not run the full array**.
+> ## ANSWERED, 2026-09-09, AND IT WAS THE WIDE LENS — everything above is
+> superseded.
+>
+> Jonathan supplied the module's own FOV table: **D 142.2°, H 116°, V 60°**,
+> max DFOV 165°. The open question below asked whether this was a stock Pi
+> Camera v2 (f = 3.04 mm) or a third-party wide M12 board. **It is the wide
+> board**, and so **both figures this document has used are wrong**: the
+> 62.3 × 48.8 full array (which assumed the stock lens) and the 39.0 × 22.5
+> crop derived from it.
+>
+> The correction runs the opposite way from the one §1 was written to make.
+> The camera is **wider** than the sim assumed, not narrower — but at the
+> detector's 320 px input a 116° lens is **158 px/rad against the assumed
+> 294**, so the sim has been **overstating angular resolution by ~1.9×**.
+> §3's own lens sweep already found 116° / 320 px "sits with the bad arm" on
+> tidying. Wider view, softer degrees, and nobody had run the two together on
+> soccer until item 12z.
+>
+> What stands and what falls: the *shape* of every result — that field of
+> view drives possession and whiff — was measured between two IMX219
+> geometries and does not depend on which lens is fitted. The *levels* do.
+> Every soccer number in this repo was taken on a camera that does not exist.
+
+**ORIGINAL TEXT, SUPERSEDED — kept because the reasoning is what led to
+asking:** that the module is a stock Pi Camera v2 (f = 3.04 mm). Third-party
+IMX219 boards ship M12 lenses from 88° to 160° and would change every number
+here. The repo names the driver overlay, not the lens. Nothing in the sim has
+been re-baselined on 39 × 22.5 — the durable point is that **62 × 48 is the
+full-array figure and the robot does not run the full array**.
 
 ## 2. The replacement sensor and lens (vendor datasheet, 2026-09)
 
