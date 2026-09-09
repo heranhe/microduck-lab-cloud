@@ -4960,3 +4960,43 @@ is ever re-opened, that is the mechanism to instrument.
 
 `tof_ball_m` stays 0. The gate stays, because it makes the next attempt start
 from the right population instead of the one that produced 30 %.
+
+
+### 12l. The blind duck and its teammate's ball — THE OPPORTUNITY IS 1.3 %, NOT 15 % (2026-09-08)
+
+Proposed off a coverage measurement: over 120 000 duck-ticks of 2v2 a duck has
+a fresh ball on **23.9 %** of ticks and is blind while its partner is looking
+straight at it on another **14.7 %**, so pointing a blind duck at the board's
+ball looked worth 24 % → 39 % of coverage. `_board_ball` already collects it
+and only the interceptor reads it.
+
+**Built, then reverted, because splitting those ticks by what the duck was
+DOING says the opportunity is already taken:**
+
+| blind, but a teammate sees it | share of all duck-ticks |
+|---|---|
+| **support** | **7.7 %** |
+| retreat | 2.1 % |
+| **search** | **1.3 %** |
+| avoid | 0.9 % |
+| blocked | 0.8 % |
+| lineup | 0.8 % |
+| hunt / chase / turn / wait / settle / kick / look | 1.1 % total |
+
+A duck whose teammate is on the ball is a SUPPORTER, and `_support` already
+steers by `Team.led_ball` — the board's ball, i.e. exactly the teammate
+sighting this item wanted to use. That is 7.7 of the 14.7 points, already
+spent. Retreat, avoid, blocked and lineup are all deliberate. The genuinely
+wasted population — a duck turning on the spot in `search` while its partner
+watches the ball — is **1.3 % of ticks, about 3.9 s a duck a run**, which is
+below anything this benchmark resolves and not worth a knob's surface area.
+
+**The error worth remembering:** the coverage number was real and the
+conclusion drawn from it was not. "A duck cannot see the ball" is not the same
+as "a duck is not being told where the ball is", and this brain already routes
+the second through the roles. Measure what the ticks are DOING before valuing
+them.
+
+(For the 61.3 % where nobody on the team sees it — support 26.7 %, search
+9.9 %, retreat 8.7 % — no amount of sharing helps; that is the real ceiling
+and it is item 12's blindness, not a plumbing gap.)
