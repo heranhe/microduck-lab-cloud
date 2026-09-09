@@ -6307,8 +6307,36 @@ margin to the true body extent is a wash rather than a fix — it buys reach at
 gap 0.175-0.20 and loses gap 0.04-0.06, because the trigger and the acceptance
 move together.
 
-That is the strongest form of this item's conclusion: **near a board the duck
-does not need a better place to stand, it needs a different action** — a push,
+**AND THERE IS A ONE-LINE STATEMENT OF THE WHOLE GEOMETRY, which is the other
+session's and is better than the derivation above.** Sweeping every margin from
+0.01 to 0.60 for each ball gap and keeping the best clearance achieved:
+
+| ball gap | 0.056 | 0.060 | 0.080 | 0.100 | 0.150 | 0.200 | 0.300 |
+|---|---|---|---|---|---|---|---|
+| best spot clearance | 0.116 | 0.120 | 0.140 | 0.160 | 0.210 | 0.260 | 0.360 |
+
+**Clearance = `gap + kick_side`, exactly, at every gap — and the best margin is
+the smallest one tried, in every row.** Verified here independently against
+`_along_the_boards` (7/7 gaps, agreement to 1e-6).
+
+So **the along-the-boards spot always stands exactly `kick_side` further from
+the board than the ball does. The margin never moves the spot; it is purely an
+acceptance test on a placement it does not control.** That makes the floor
+immediate rather than derived — you need `gap + kick_side ≥ body`, and no
+acceptance threshold can change a placement — and it explains why raising the
+margin to the body radius had to be a wash: the spot is already where it is
+going to be, so the margin only shifts *which* gaps are accepted, gaining at one
+end and losing at the other.
+
+**Which sharpens the design conclusion one final time. `board_margin` is the
+wrong KIND of parameter for this problem: an acceptance threshold cannot fix a
+placement rule.** Whatever goes into `kickselect` has to be a constraint that
+**rejects the kick and selects a push**, not a margin that accepts or refuses a
+spot the geometry has already fixed. Every arm in 12p-12v was sweeping the
+acceptance test of a placement nobody was changing.
+
+Near a board, then, the duck **does not need a better place to stand, it needs a
+different action** — a push,
 or a nudge that puts the ball more than 5.6 cm out before any kick is planned.
 `kickselect` already ranks pushes; giving it the reachability constraint would
 let it choose one exactly when no kick spot exists, which is the design change
