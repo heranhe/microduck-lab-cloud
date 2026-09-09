@@ -720,6 +720,35 @@ against a probe, a live battery against a process check, a worked example
 against an analysis — never because they read well. Budget for the second,
 independent measurement; it is the one that does the work.
 
+### The one failure none of this catches: a favourable framing accepted in silence
+
+Every mechanism above works on a number or on a claim someone has already made.
+Registration constrains a metric before you read it; the MDE tells you what a
+battery could have seen; the pair reports two mechanisms instead of picking one;
+the falsifier's second dimension separates a refutation from a discovery. **Not
+one of them fires when someone simply does not raise an objection they could
+have raised.**
+
+Two sessions spent a day on this and the only thing that ever caught it was the
+*other session reading the same evidence and saying so*: multiplicity raised
+against a table already written; a `pgrep` recipe verified only where it worked;
+a bounded finding stated unbounded, twice, in both directions; a conditional
+offered as a bound; a falsifier that could not describe a composite world. Each
+was caught by a second reader, none by a rule.
+
+**So do not mistake the discipline for a substitute for one.** Registering a
+primary makes you honest about a number you have decided to look at. It does
+nothing about the framing you accepted without noticing there was a choice —
+and a framing that favours you is exactly the one you will not notice. When a
+result matters, get it read by something that is not you, and give it the
+evidence rather than your summary of the evidence.
+
+**And beware the easy version of this virtue.** Declining a claim right after
+deriving the arithmetic that undercuts it is not the same act as noticing a
+favourable framing with nothing in front of you contradicting it. The first is
+just reading your own output. Do not let a record of the first stand in for
+evidence of the second.
+
 ## Before you commit: `./scripts/precommit.sh` (1 second)
 
 It runs `ruff` and imports every battery entry point. It exists because
