@@ -6672,6 +6672,35 @@ registration that names only the outcome its author expects cannot report a
 world where both mechanisms operate.** Naming the middle in advance is what
 stops the result being read as a win for whichever session it lands nearer.
 
+**RESULT: f = 99.8%. The inference is now a measurement, and it is stronger than
+the inference was.**
+
+| gate-ON arm | swings | blind | whiff | median true \|ahead\| |
+|---|---|---|---|---|
+| sim (62 × 48) | 847 | 97.9% | **34.4%** | 0.111 m |
+| **crop (39 × 22.5)** | 624 | **99.8%** | **62.3%** | 0.131 m |
+
+Implied crop blind whiff `(0.623 − 0.002×0.92)/0.998 = 0.622` against the sim's
+0.370. **The same swing type, blind, at essentially the same distance — 62%
+whiff against 37%.** Not a different route to a swing; the same route to a worse
+one. **"The blind state the crop reaches is worse" is measured, not inferred**,
+and the mechanism is the one 12x states: blind means flying on the last thing
+seen, and the crop's last thing seen is older and poorer.
+
+**All three registrations resolved, and the record is not flattering to this
+session:** the other session's ~98% was **right** (99.8%); **this session's
+selection refuter named a real risk that did not materialise** — the crop's
+swings are not a sighted-survivor population; and the middle outcome registered
+above did not occur either. Registering the refuter was still correct — it was
+checkable, it was checked, and it failed — but it should be recorded as a
+prediction that did not fire, not as prudence rewarded.
+
+**AND THERE ARE TWO COSTS, NOT ONE RESTATED.** The crop takes **624 swings
+against 847 — 26% fewer** — which is a separate fact from each swing being
+worse. Anything quoting this must say the crop **gets to fewer swings** *and*
+**the ones it gets are worse**; collapsing them into one sentence understates
+the gap by half.
+
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
 what 12u now supports on possession and ball advance. If the replacement ships,
@@ -6697,7 +6726,11 @@ single cause.*
 **SUPPORTED AND NARROW — the mechanism, stated at exactly the width the evidence
 reaches.** *The camera never contributes at the instant of the swing — the duck
 is blind by then, by design. It determines how good the last sighting was, and
-every swing, seen or blind, flies on that.* Two neighbouring statements are
+every swing, seen or blind, flies on that.* **Measured, not inferred** (12w): at
+gate-ON the sim arm is 97.9% blind and whiffs 34.4%, the crop arm **99.8% blind
+and whiffs 62.3%**, at essentially the same distance — the same swing type, made
+worse only by what the camera last gave it. And **two costs, not one**: the crop
+also gets to **26% fewer swings** (624 against 847). Two neighbouring statements are
 wrong and both are tempting: "a wider camera lets the duck see the ball as it
 kicks" (contradicted — gate-ON swings are 97.9% blind in both arms) and "the
 camera only helps upstream, so the swing is camera-independent" (too strong —
