@@ -505,6 +505,14 @@ class Team:
             d = sp * dt
         return (b[0] + vx / sp * d, b[1] + vy / sp * d)
 
+    def throw_in(self) -> None:
+        """The referee moved the ball: drop the board's published VELOCITY and
+        the fix it was differenced from, so an invented line stops propagating
+        to teammates. Claims, roles, jobs and the kickoff state are untouched —
+        a throw-in is not a restart (see `throw_in_brains`)."""
+        self._vel, self._vel_hits = (0.0, 0.0), 0
+        self._fixes.clear()
+
     def payload(self, t: float) -> dict:
         def num(v):
             return None if math.isinf(v) else round(v, 2)
@@ -617,6 +625,51 @@ def brain_kwargs(duck_spec, world, teams: dict[str, "Team"]) -> dict:
     return out
 
 
+def throw_in_brains(brains: dict, teams: dict[str, "Team"]) -> None:
+    """The referee moved the ball (`World.ball_out_seq` moved): every brain's
+    ball belief is stale by construction, so drop it — but NOTHING else.
+
+    A throw-in is not a goal. `kickoff_brains` resets roles, plans, counters
+    and the kickoff state, which is right after a goal and wrong here: play
+    has not restarted, only the ball has been picked up and put down.
+
+    Measured cost of not doing this (roadmap 12s, 2026-09-09): in the second
+    after a throw-in the brain's predicted ball is more than 0.30 m from the
+    truth on 49.1% of duck-ticks against 4.6% in a matched control window; the
+    tracker reads the parked ball as MOVING at over 0.3 m/s on 33% against
+    20%; and the board publishes an invented ball velocity on 15% against 10%.
+    The World teleports up to `ball_out_in` 0.45 m and zeroes the ball's qvel,
+    but a duck that saw the ball on both sides of that simply differences the
+    two positions — and `Team.vel_max` 4.0 does not reject it, because 0.45 m
+    over a 0.15-1.0 s baseline is 0.45-3.0 m/s.
+
+    Two things have to go, and only one of them is `disturb`'s job:
+
+    * the AT-REST flag, via `Tracker.disturb(cls)` with no `xy` — every ball
+      track, since at a throw-in every belief is stale. (The selective form
+      needs BOTH `xy` and a non-zero `radius`; passing `xy` with `radius` 0
+      silently marks everything anyway.)
+    * the VELOCITY, zeroed here rather than inside `disturb`, because
+      `Track.predict` never consults `rest_block` and would coast the invented
+      line regardless. It is not folded into `disturb` because `disturb` has
+      three live callers on the shipped path — a duck near the ball, a push,
+      a kick — and those are NUDGES, where the remembered velocity is
+      plausibly still about right. A teleport is categorically different:
+      position and velocity are both invalid, and only the throw-in knows it.
+    """
+    for b in brains.values():
+        tr = getattr(b, "tracker", None)
+        if tr is None:
+            continue
+        cls = getattr(getattr(b, "p", None), "target_cls", "ball")
+        tr.disturb(cls)
+        for t in tr.tracks:
+            if t.cls == cls:
+                t.vel, t.vel_hits, t.vel_sig = (0.0, 0.0), 0, 0.0
+    for tm in teams.values():
+        tm.throw_in()
+
+
 def kickoff_brains(brains: dict, teams: dict[str, "Team"], world=None) -> None:
     """After a goal (World.goal_seq moved): every brain forgets its plan —
     the ball it was lining up on, the spot, the retreat it was in — through
@@ -637,4 +690,5 @@ def kickoff_brains(brains: dict, teams: dict[str, "Team"], world=None) -> None:
                        world.kickoff_ball, world.kickoff_moved_m)
 
 
-__all__ = ["Claim", "Team", "ROLE_ZONES", "zones_for", "brain_kwargs", "kickoff_brains"]
+__all__ = ["Claim", "Team", "ROLE_ZONES", "zones_for", "brain_kwargs", "kickoff_brains",
+           "throw_in_brains"]

@@ -5742,3 +5742,57 @@ by dividing by a feasibility fraction.
 The prediction was registered before the run with an explicit falsifier, and it
 lost. That is the falsifier working, not a setback — an unfalsifiable version
 of it would have let the 2.66× stand.
+
+
+### 12s. The referee moved the ball and told nobody — FIXED, partially (2026-09-09)
+
+Jonathan, watching /sim: *"does this teleporting also really mess up the
+positioning?"* It does. `World._check_ball_out` moves the ball up to
+`ball_out_in` 0.45 m and zeroes its qvel, but `ball_outs` was a counter **no
+harness watched** — `grep ball_outs` across `brain/` returned nothing. Every
+harness watches `goal_seq` and calls `kickoff_brains`; the throw-in was built
+as a second teleport path with no notification. A duck that saw the ball on
+both sides simply differences the two positions, and `Team.vel_max` 4.0 does
+not reject it: 0.45 m over a 0.15–1.0 s baseline is 0.45–3.0 m/s.
+
+Measured against a matched control window (random seconds with no throw-in),
+4 seeds × 300 s of 2v2:
+
+| in the second after a throw-in | before | control | **after the fix** |
+|---|---|---|---|
+| prediction > 0.30 m from the true ball | 49.1% | 4.6% | 47.3% |
+| **prediction > 0.60 m off** | 4.9% | 3.0% | **0.0%** |
+| tracker reads the parked ball as moving > 0.3 m/s | 33.3% | 19.9% | **27.4%** |
+| **board publishes an invented ball velocity** | 15.2% | 9.7% | **7.5%** |
+
+**Shipped:** `World.ball_out_seq` beside `goal_seq`, and
+`brain/team.throw_in_brains` — `Tracker.disturb(cls)` unconditionally (at a
+throw-in every belief is stale; note the selective form needs BOTH `xy` and a
+non-zero `radius`, or it silently marks everything), the ball tracks'
+`vel/vel_hits/vel_sig` zeroed, and `Team.throw_in` clearing the board's
+published velocity and its fix history. Wired into `eval_pitch`,
+`eval_striker` and `world_server` at the three sites that already watch
+`goal_seq`. Deliberately NOT `kickoff_brains`: a throw-in is not a restart and
+must not reset roles, plans or counters — locked by a test.
+
+The velocity zero lives in the handler, not in `disturb`, because `disturb`
+has three live callers on the shipped path (a duck near the ball, a push, a
+kick) and those are NUDGES where the remembered velocity is still about right.
+A teleport invalidates both position and velocity, and only the throw-in knows
+that. `Track.predict` never consults `rest_block`, so a test on the at-rest
+flag alone would pass while the coasting continued; the test asserts
+`predict()` no longer moves the ball.
+
+**What is NOT fixed, and why the headline barely moved.** Zeroing the velocity
+stops the invented motion, which is why the > 0.60 m errors vanish. It does
+nothing about the remembered POSITION, which after a 0.45 m teleport is simply
+wrong — so "> 0.30 m off" stays at 47%. The honest fix is to expire the
+position too, so a duck knows it does not know.
+
+**A first attempt at measuring that hit the selection trap (12r's sixth
+shape).** Expiring `xy` reported 63% — *worse* — but the metric skips ticks
+where the track has no position, so the change shrinks its own denominator
+(1005 duck-ticks → 451) and the survivors are a biased subset. Not evidence of
+anything. Measuring it needs a denominator fixed across arms (all duck-ticks in
+the window, with "no prediction" as its own outcome). Left open rather than
+guessed at.

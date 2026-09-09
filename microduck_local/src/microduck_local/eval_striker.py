@@ -151,7 +151,7 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
     "chase" and solo is False — the test in tests/test_striker.py pins that,
     which is what makes the scripted arm here the published baseline and not
     a re-implementation of it."""
-    from .brain.team import kickoff_brains
+    from .brain.team import kickoff_brains, throw_in_brains
     sc = apply_roster(pitch_scenario(per_side, solo), left, right)
     home, away = home_away(sc)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
@@ -166,6 +166,7 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
     metrics = PitchMetrics(w, {d.id: (d.team or d.id) for d in sc.ducks})
     spin = SpinMetrics(w)
     goal_seq = 0
+    out_seq = w.ball_out_seq
     while w.t < seconds:
         for d in w.ducks.values():
             tof, det = d.tof.last, d.detector.last
@@ -182,6 +183,9 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
         if w.goal_seq != goal_seq:              # a goal: play restarts from the spawns
             goal_seq = w.goal_seq
             kickoff_brains(brains, teams, w)
+        if w.ball_out_seq != out_seq:           # the referee moved the ball: drop stale ball beliefs only
+            out_seq = w.ball_out_seq
+            throw_in_brains(brains, teams)
     score = w.soccer_score()
     return {"seed": seed, "perSide": per_side, "solo": solo, "left": score["left"], "right": score["right"],
             "leftBrain": left, "rightBrain": right if not solo else None,

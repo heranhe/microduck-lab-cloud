@@ -229,6 +229,7 @@ class WorldState:
         self.brains: dict[str, object] = {}
         self.teams: dict[str, object] = {}
         self.goal_seq = 0                    # World.goal_seq last acted on (kickoff_brains)
+        self.out_seq = 0                     # …and World.ball_out_seq (throw_in_brains)
         self.intents: dict[str, Intent] = {}
         # Brains may ask for a head pose; the shipped walker never trained
         # with one (roadmap 3.7), so gaze intents are REPORTED but only
@@ -281,6 +282,7 @@ class WorldState:
         self.brains = {}
         self.teams = {}
         self.goal_seq = world.goal_seq
+        self.out_seq = world.ball_out_seq     # a new world starts its throw-in count over too
         for sd in scenario.ducks:
             kind = sd.brain or ("wander" if sd.tof is not None else "script")
             try:
@@ -381,9 +383,17 @@ class WorldState:
 
     def after_step(self) -> None:
         """A goal restarts play: the World moved everyone (World.kickoff);
-        the brains and the team boards forget their plans here."""
+        the brains and the team boards forget their plans here. A THROW-IN
+        (`ball_out_seq`) is the lighter case — the referee moved only the
+        ball, so the ball beliefs go and nothing else does."""
         w = self.world
-        if w is None or w.goal_seq == self.goal_seq:
+        if w is None:
+            return
+        if w.ball_out_seq != self.out_seq:
+            from .brain.team import throw_in_brains  # noqa: PLC0415
+            self.out_seq = w.ball_out_seq
+            throw_in_brains(self.brains, self.teams)
+        if w.goal_seq == self.goal_seq:
             return
         from .brain.team import kickoff_brains
         self.goal_seq = w.goal_seq

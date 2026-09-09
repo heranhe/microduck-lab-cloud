@@ -378,6 +378,10 @@ class World:
         self.ball_out_clear = 0.25
         self._ball_rest_t0: float | None = None
         self.ball_outs = 0
+        # …and a SEQUENCE beside it, so a harness can notice a throw-in the way
+        # it notices a goal. `ball_outs` is a count nobody watched: the World
+        # teleported the ball and told no brain (roadmap 12s).
+        self.ball_out_seq = 0
         self.model = compose(scenario)
         self.data = mujoco.MjData(self.model)
         self.t = 0.0
@@ -525,7 +529,7 @@ class World:
         self.last_kick_duck = None
         self.goal_credit_duck = None
         self.goals_kicked = self.goals_bumped = 0
-        self.ball_outs, self._ball_rest_t0 = 0, None
+        self.ball_outs, self.ball_out_seq, self._ball_rest_t0 = 0, 0, None
         self.getups = self.getup_timeouts = 0
         for p in self.persons.values():
             p.reset(self.data)
@@ -646,6 +650,7 @@ class World:
         self.data.qpos[q:q + 3] = [nx, ny, self.scenario.balls[0].radius + 0.005]
         self.data.qvel[v:v + 6] = 0.0
         self.ball_outs += 1
+        self.ball_out_seq += 1        # harnesses watch this like `goal_seq` (brain/team.py throw_in_brains)
         self._ball_rest_t0 = None
 
     def _clear_of_ducks(self, x: float, y: float, hx: float, hy: float) -> tuple[float, float]:

@@ -377,3 +377,53 @@ def test_the_placement_never_drops_the_ball_inside_a_duck():
         p = d.trunk_pos(w.data)
         assert math.dist(ball, (float(p[0]), float(p[1]))) >= w.ball_out_clear - 0.02, did
     assert hx - abs(ball[0]) >= 0 and hy - abs(ball[1]) >= 0         # …and still on the pitch
+
+
+def test_a_throw_in_drops_the_ball_belief_and_nothing_else():
+    """Roadmap 12s: the World teleports the ball up to `ball_out_in` and zeroes
+    its qvel, but until 2026-09-09 it told no brain — `ball_outs` was a counter
+    nobody watched. Measured cost: in the second after a throw-in the predicted
+    ball is >0.30 m from the truth on 49.1% of duck-ticks against 4.6% in a
+    matched control, and the board publishes an invented velocity on 15%
+    against 10% (0.45 m over a 0.15-1.0 s baseline is 0.45-3.0 m/s, under
+    `Team.vel_max` 4.0, so the sanity cap does not catch it)."""
+    from microduck_local.brain.team import Team, throw_in_brains
+    from microduck_local.brain.tracker import Track
+
+    b = Chase(ChaseParams(), goal=(1.5, 0.0), duck_id="d0")
+    tm = Team("cream")
+    tr = Track.__new__(Track)
+    tr.cls, tr.xy, tr.xy_t = "ball", (0.5, 0.0), 10.0
+    tr.vel, tr.vel_hits, tr.vel_sig, tr.rest_block = (1.2, 0.0), 3, 0.0, False
+    tr.bearing, tr.range, tr.hits = 0.0, 0.5, 3
+    b.tracker.tracks = [tr]
+    b.kicks, b.role = 4, "attack"
+    tm._vel, tm._vel_hits = (1.2, 0.0), 3
+    tm.jobs = {"d0": "defender"}
+
+    moved_before = tr.predict(11.0, 0.3)
+    assert moved_before is not None and math.dist(moved_before, tr.xy) > 0.2   # it was coasting
+
+    throw_in_brains({"d0": b}, {"cream": tm})
+
+    # The ball belief goes: not at rest, AND no longer coasting. The second is
+    # the one that matters — `predict` never consults `rest_block`, so a test
+    # on the flag alone passes while the wrong predictions continue.
+    assert tr.rest_block is True
+    assert tr.predict(11.0, 0.3) == tr.xy                      # no motion invented from a teleport
+    assert tr.vel == (0.0, 0.0) and tr.vel_hits == 0
+    assert tm.ball_vel() is None or tm.ball_vel() == (0.0, 0.0)
+    # …and NOTHING else: a throw-in is not a goal.
+    assert b.kicks == 4 and b.role == "attack" and tm.jobs == {"d0": "defender"}
+
+
+def test_the_world_counts_throw_ins_in_a_sequence_a_harness_can_watch():
+    sc = make_pitch()
+    w = World(sc, seed=1, ball_out_s=1.0)
+    assert w.ball_out_seq == 0
+    q, hx, hy = _park_ball_at_the_boards(w)
+    for _ in range(int(1.6 / 0.02)):
+        w.step()
+    assert w.ball_outs == 1 and w.ball_out_seq == 1            # the counter AND the sequence
+    w.reset()
+    assert w.ball_out_seq == 0
