@@ -1210,3 +1210,84 @@ def test_from_env_reads_an_int_as_an_int_and_refuses_a_choice_it_does_not_know()
             ChaseParams.from_env(bad)
     assert ChaseParams.from_env("aim_mode=los").aim_mode == "los"
     assert ChaseParams.from_env("search_dip_every=0").search_dip_every == 0.0    # 0 = never dip, not a ZeroDivisionError
+
+
+def _contest_brain(margin=0.10, use_color=True):
+    tm = Team("cream")
+    return Chase(ChaseParams(contest_margin=margin, use_color=use_color,
+                             duck_touch=0.22, duck_keepout=0.40),
+                 goal=(1.5, 0.0), bounds=(1.5, 1.25), goal_w=0.7, team=tm, duck_id="d0")
+
+
+def _inject(b, t, ball_ahead, opp_xy, colour="graphite"):
+    """Our duck at the origin facing +x, the ball `ball_ahead` in front of it,
+    another duck at `opp_xy` — as coasting tracks, so `step` sees exactly the
+    geometry under test with no detector in the loop.
+
+    The opponent goes to the SIDE, not straight through the ball, because that
+    is the contested arrival this exists for: collinear, a duck beyond the
+    ball is always nearer to it than we are and nothing could ever contest."""
+    from microduck_local.brain.tracker import Track
+    def mk(i, cls, xy):
+        r = math.hypot(*xy)
+        return Track(id=i, cls=cls, bearing=math.atan2(xy[1], xy[0]), elevation=0.0,
+                     width=0.1, range=r, conf=0.9, born_t=0.0, last_t=t, hits=8,
+                     xy=xy, xy_t=t)
+    ball, duck = mk(1, "ball", (ball_ahead, 0.0)), mk(2, "duck", opp_xy)
+    duck.color = colour
+    b.tracker.tracks = [ball, duck]
+    b.tracker._prev_yaw = 0.0
+    return Senses(t=t, odom=(0.0, 0.0, 0.0), speed=0.0)
+
+
+def test_the_contest_holds_the_line_only_for_the_duck_nearer_the_ball():
+    """The duel (bead mdl-23b). Two GEOMETRIC answers are already measured
+    null — `lineup_keepout` and `opp_keepout` — because a radius cannot break
+    a symmetry: both ducks turn away, both drop the spot, neither gets the
+    ball. `contest_margin` asks who SHOULD have it, so exactly one of the pair
+    holds its line and the deadlock breaks instead of becoming a shove.
+
+    The asymmetry IS the mechanism, so it is pinned here and not left to a
+    battery: if both sides of a contested ball contested it, this would be a
+    shoving match with a nicer name."""
+    # Ball 0.20 m ahead, opponent 0.35 m ahead: the opponent is inside
+    # `duck_keepout`, so without the contest this tick is an `avoid`.
+    # Ball 0.10 m at our feet; the opponent 0.35 m away on the flank, which
+    # is 0.26 m from the ball — inside `duck_keepout`, so without the contest
+    # this tick is an `avoid` and the spot is dropped.
+    b = _contest_brain()
+    b.step(_inject(b, 1.0, ball_ahead=0.10, opp_xy=(0.33, 0.12)))
+    assert b.contesting, "nearer the ball than the opponent: this one is ours"
+    assert b.state != "avoid", "the contest must not turn away"
+
+    # The mirror. The same pair seen from the duck that is FURTHER from the
+    # ball must still give way, or nothing is broken.
+    far = _contest_brain()
+    far.step(_inject(far, 1.0, ball_ahead=0.30, opp_xy=(0.30, 0.20)))
+    assert not far.contesting
+    assert far.state == "avoid"
+
+
+def test_the_contest_never_walks_into_anybody_and_never_shoves_a_teammate():
+    # TOUCHING still stands the duck up safely: the contest declines to turn
+    # away, it does not drive through a body.
+    b = _contest_brain()
+    b.step(_inject(b, 1.0, ball_ahead=0.10, opp_xy=(0.17, 0.06)))   # inside duck_touch
+    assert b.state == "avoid"
+
+    # A TEAMMATE is never contested — that is how two of ours shoulder.
+    mate = _contest_brain()
+    mate.step(_inject(mate, 1.0, ball_ahead=0.10, opp_xy=(0.33, 0.12), colour="cream"))
+    assert not mate.contesting and mate.state == "avoid"
+
+    # With the colour sense off it stays inert, since it would otherwise fire
+    # against teammates too.
+    blind = _contest_brain(use_color=False)
+    blind.step(_inject(blind, 1.0, ball_ahead=0.10, opp_xy=(0.33, 0.12)))
+    assert not blind.contesting and blind.state == "avoid"
+
+    # And it ships off.
+    assert ChaseParams().contest_margin == 0.0
+    off = _contest_brain(margin=0.0)
+    off.step(_inject(off, 1.0, ball_ahead=0.10, opp_xy=(0.33, 0.12)))
+    assert not off.contesting and off.state == "avoid"

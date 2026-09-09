@@ -1820,6 +1820,11 @@ class ChaseParams:
     # replicate — standing somewhere useful beats standing further away.
     use_color: bool = False
     opp_keepout: float = 0.0       # an opponent this near and ahead: treat it as a duck to avoid
+    # …and how much nearer the BALL this duck must be than that opponent
+    # before it declines to turn away at all (the contest; see the note where
+    # `contesting` is computed). Needs `use_color`, since turning this on
+    # against a TEAMMATE is how two of ours shoulder each other. 0 = off.
+    contest_margin: float = 0.0
     # The ToF sees the ball at the feet (tof_floor_ball): inside `tof_ball_m`
     # with the head dipped, a floor blob feeds the tracker as a ball sighting
     # when the camera has none - the level camera loses a floor ball inside
@@ -2626,6 +2631,37 @@ class Chase:
                 threats.append((other.range, other.bearing))
         duck_rb = min(threats) if threats else None
         near_duck = duck_rb is not None
+        # THE CONTEST (survey C.4's second half, bead mdl-23b). 263 of 508
+        # 3v3 line-ups die in `avoid` inside 0.4 s with an opponent 0.33 m
+        # ahead: both ducks turn away from each other, both drop their spot,
+        # and neither gets the ball. Two GEOMETRIC answers to that are already
+        # measured null - `lineup_keepout` (shrink the radius on a line-up)
+        # and `opp_keepout` (widen it for an opponent) - because a radius
+        # cannot break a symmetry. This one is not a radius: it asks WHO
+        # SHOULD HAVE THE BALL, and only the duck that is nearer holds its
+        # line. The other still avoids, so the deadlock breaks instead of
+        # becoming a shoving match.
+        #
+        # It needs to know the other duck is an OPPONENT, and that is ENFORCED
+        # on `use_color` and not merely documented: with the colour sense off,
+        # `_is_mate` answers False for everybody (unknown counts as a
+        # stranger, which is the safe reading everywhere else), so without the
+        # gate this would contest its own teammates. A test caught exactly
+        # that. It is why the rule was parked until the colour vote was
+        # measured at contact range (95%
+        # right inside 0.50 m, 100% coverage, the dangerous error on 1.4% of
+        # ticks - `scripts/probe_duck_color.py`). Touching still stands the
+        # duck up safely: this only declines to TURN AWAY, it never walks
+        # into anybody.
+        self.contesting = False
+        if (p.contest_margin > 0.0 and p.use_color and near_duck and other is not None
+                and other.xy is not None and other.age(t) <= p.lost_s
+                and not self._is_mate(other) and ball is not None and ball.xy is not None):
+            mine = math.dist((odom[0], odom[1]), ball.xy)
+            theirs = math.dist(other.xy, ball.xy)
+            self.contesting = mine + p.contest_margin < theirs
+        if self.contesting and duck_rb is not None and duck_rb[0] >= p.duck_touch:
+            near_duck = False                      # hold the line; `avoid` still owns a touch
         clearly_nearer = (other is not None and other.age(t) <= p.lost_s and other.range < p.yield_range
                           and ball is not None and other.range < p.yield_ratio * ball.range
                           and abs(_wrap(other.bearing - ball.bearing)) < 0.8)

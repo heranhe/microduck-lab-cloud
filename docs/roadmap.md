@@ -4655,6 +4655,50 @@ the ball — shield it, get a body between the opponent and it — and that is a
 behaviour to design, not a radius to widen. The sense it needs is now known to
 be there.
 
+## The contest — the duel's THIRD null, and what it rules out (2026-09-08)
+
+With the colour sense measured good at contact range, the duel became
+buildable, and `ChaseParams.contest_margin` is the version the earlier two
+nulls pointed at. It is not a radius: a radius cannot break a symmetry, which
+is why both `lineup_keepout` (shrink it on a line-up) and `opp_keepout` (widen
+it for an opponent) were null. This asks **who should have the ball** — only
+the duck that is nearer holds its line, the other still gives way — so exactly
+one of the pair commits. It fires only against a duck the colour vote calls an
+opponent, and a TOUCH still stands the duck up safely, so it declines to turn
+away and never walks into anybody. `use_color` is ENFORCED, not merely
+documented: with the sense off `_is_mate` answers False for everybody, so
+without the gate it would contest its own teammates. A test caught that.
+
+**Measured, 12 seeds × 300 s of 3v3 on the ball-out floor, against the shipped
+brain, then a fresh block:**
+
+| paired | discovery 0–11 | fresh 100–111 |
+|---|---|---|
+| kicks (events) | 63 → 68 | 56 → 60 |
+| ballAdvance | +0.025 (p=0.73) | −0.096 (p=0.46) |
+| ballProgress | +0.002 (p=0.99) | −0.136 (p=0.44) |
+| possession s/min | +1.46 (p=0.27) | +0.12 (p=0.93) |
+| **falls (events)** | **3 → 10 (p=0.043)** | **6 → 6 (p=1.00)** |
+| back-kicks | 25% of 63 → 24% of 68 | 25% of 56 → 32% of 60 |
+
+The discovery block's fall alarm — the one metric that resolved, and the one
+that would have made this "keeps the touches but pays in contact" — **did not
+replicate**. On the fresh block falls are identical. A separate probe of where
+the falls happen was underpowered to settle the mechanism either way (2 falls
+an arm over 6 seeds), and is reported as such rather than dressed up. So the
+honest verdict is the plain one: **a null**, on the ball and on the falls
+alike. Ships off, kept with its numbers.
+
+**What three nulls rule out.** `lineup_keepout`, `opp_keepout` and
+`contest_margin` are all answers to the same question — *whether to turn away
+from the other duck* — and all three are nothing. That decision is not where
+the duel lives. What is left is genuinely different in kind: a **positioning**
+behaviour that gets a body between the opponent and the ball (a shield, which
+changes where the duck stands rather than whether it flinches), or the WALKER,
+which the repo already records as unable to do anything against another body
+except stand still. The colour sense is no longer the blocker for either;
+`scripts/probe_duck_color.py` says it is right 19 times in 20 where it matters.
+
 ## Track 4, item 12 — the last 30 centimetres (2026-09-08): a ball at the feet is lost, then missed — ASKS
 
 **The complaint, from the /sim page.** A duck walks the ball to the boards, has it at its feet, loses track of it,
