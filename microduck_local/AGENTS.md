@@ -180,6 +180,32 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    and a null at one value bounds nothing at another. A registered prediction
    of 1.80:1 came back 0.82:1 on exactly this.
 
+   **`compare_pitch` prints NINE metrics — pick the primary before you look.**
+   If nothing is real, the chance at least one row comes back p < 0.05 is
+   **37%**; three arms is 27 reads. So name the primary metric, its threshold
+   and its direction in advance, Bonferroni over the contrasts, and quote
+   everything else as exploratory with the read count attached. Pick it from
+   what can actually resolve (possession 10%, spread 9%, depth 5% at 24 seeds —
+   not kicks at 28%), and check the metric is structurally capable of moving:
+   in `eval-pitch` BOTH teams get the knob, so a share-shaped metric cancels by
+   construction and its null was never going to be anything else.
+
+   **And the correction is a FORECAST, not a tax — this is the measured part.**
+   A camera study read nine metrics across three arms with nothing named in
+   advance. Applying the correction afterwards sorted its rows into two it said
+   to trust and two not to lean on. A confirmatory block on fresh seeds, with
+   the primary registered before launch, reproduced *exactly that split*:
+
+       ballAdvance   -0.377 -> -0.356      the correction said trust it
+       kicks         -41%   -> -42%        the correction said trust it
+       crowd     p 0.039 -> p 0.341        it said do not lean on this
+       falls     8->1     -> 4->3          it said do not lean on this
+
+   The two flagged rows evaporated and the two strong ones came back within a
+   few percent on independent seeds. The correction did not merely counsel
+   caution — **it predicted which findings would survive replication**, which is
+   the only evidence that it is doing work rather than making you timid.
+
    **MDE is per-METRIC, not per-battery — so never say a battery "found
    nothing".** One 24-seed `eval-pitch` run settled `board_margin` on
    possession at an MDE of **5% of baseline** (a real null, tight enough to
