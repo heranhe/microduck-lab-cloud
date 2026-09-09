@@ -150,3 +150,82 @@ def test_a_tiny_margin_still_produces_a_legal_placement(world):
     for _ in range(40):
         q, _v = _place_at_boards(world, rng, 0.0)
         assert to_board(world, *ball_xy(world, q)) >= r
+
+
+# --- the re-bin fields ----------------------------------------------------
+# `--at-boards` gives a swing-rate curve against the arm's CAP, which is a
+# cumulative bound and not a distance: an arm at 0.60 contains balls at 0.06.
+# To get a real distance response the row has to carry where the ball actually
+# was, and — for the mechanism — where the PLAN put the kick spot.
+
+@pytest.fixture(scope="module")
+def rebin_rows():
+    """One real gym run. Slow (~20 s) and shared by everything below."""
+    from kick_gym import run
+    return run(seed=900, episodes=10, spread=0.8, at_boards=1.0)
+
+
+def swings(rows):
+    return [r for r in rows if r.get("swing")]
+
+
+def test_the_run_produced_swings_to_assert_on(rebin_rows):
+    """At `--at-boards 1.00` the swing rate is ~35%, so ten episodes miss
+    entirely about 1% of the time. A run with none is a broken harness, not a
+    flaky test — the other assertions here would vacuously pass."""
+    assert swings(rebin_rows), "no swings: the fields below would be untested"
+
+
+def test_the_ball_distance_is_to_the_BOARD_not_the_floor(rebin_rows):
+    """The floor is 0.25 m outside the boards. Measuring to the wrong one is a
+    quarter-metre error in the axis the whole curve is binned on."""
+    for r in swings(rebin_rows):
+        assert 0.0 < r["ball_board"] <= 1.30, r["ball_board"]
+
+
+def test_the_planned_spot_is_latched_and_not_None(rebin_rows):
+    """The regression this exists for: `brain.spot` is CONSUMED by the time the
+    kick skill takes the body, so reading it at the swing instant returns None
+    and the whole mechanism column would be empty. It is latched during the
+    approach instead. If someone 'simplifies' that back to a direct read, every
+    swing row loses its spot and this fails."""
+    got = [r for r in swings(rebin_rows) if r.get("spot") is not None]
+    assert got, "every spot was None -- the latch is gone and the read is too late"
+    for r in got:
+        x, y, foot = r["spot"]
+        assert isinstance(x, float) and isinstance(y, float)
+        assert isinstance(foot, str) and foot
+
+
+def test_the_spot_carries_its_age(rebin_rows):
+    """A latched value with an unknown age is the stale-plan problem itself:
+    the point of reading the brain rather than recomputing is to know WHEN the
+    plan was made."""
+    for r in swings(rebin_rows):
+        if r.get("spot") is not None:
+            assert r["spot_age"] is not None and r["spot_age"] >= 0.0
+
+
+def test_spot_board_is_consistent_with_the_spot_it_came_from(rebin_rows):
+    """`spot_board` must be that spot's distance to the nearest board, not a
+    recomputation from the ball. Checked against the spot in the same row."""
+    for r in swings(rebin_rows):
+        if r.get("spot") is None:
+            continue
+        x, y, _ = r["spot"]
+        assert r["spot_board"] == pytest.approx(min(1.5 - abs(x), 1.25 - abs(y)), abs=1e-3)
+
+
+def test_since_out_is_None_when_no_throw_in_has_happened(rebin_rows):
+    """The gym ships `ball_out_s = 0` (no referee), so nothing should ever have
+    been teleported. A non-None value here means a throw-in fired and the
+    belief-corruption window is live — which the analysis must then split out."""
+    for r in swings(rebin_rows):
+        assert r["since_out"] is None or r["since_out"] >= 0.0
+
+
+def test_the_row_still_carries_what_item_12a_needs(rebin_rows):
+    """The re-bin added columns; it must not have dropped any."""
+    for r in swings(rebin_rows):
+        for k in ("ahead", "side", "ball_speed", "pose_max_dev", "travel", "whiff", "plan_age"):
+            assert k in r, k

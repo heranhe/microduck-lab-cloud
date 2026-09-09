@@ -212,6 +212,14 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
     live = {k: getattr(brain.p, k) for k in sorted(ChaseParams.env_names())} if knobs else {}
     live["_tracker_rest_coast_s"] = brain.tracker.p.rest_coast_s
     rng = np.random.default_rng(seed)
+    # The board rectangle, for the re-bin: every distance below is to the
+    # nearest BOARD, not the floor edge (they differ by 0.25 m).
+    bx_h, by_h = _board_rect(w)
+
+    def to_board(x: float, y: float) -> float:
+        return min(bx_h - abs(x), by_h - abs(y))
+
+    last_out_t = None                  # when the referee last teleported the ball
     rows = []
     for ep in range(episodes):
         q, v = (_place_at_boards(w, rng, at_boards) if at_boards > 0.0
@@ -222,9 +230,23 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
         outs0 = w.ball_outs
         swing = None
         prev_skill = None
+        last_spot, last_spot_t = None, None
         while w.t - t0 < EPISODE_S:
             _drive(w, brains)
+            # LATCH the plan. `brain.spot` is consumed by the time the kick
+            # skill takes the body -- reading it AT the swing returns None -- so
+            # the last non-None value is the plan the swing was decided on.
+            # Still read off the brain, never recomputed from the ball.
+            if brain.spot is not None:
+                last_spot, last_spot_t = brain.spot, w.t
+            outs_before = w.ball_outs
             w.step()
+            if w.ball_outs != outs_before:
+                # A throw-in teleports the ball and tells no brain (roadmap
+                # 12n): beliefs are corrupted for about a second afterwards, so
+                # the row records how long ago it was and the analysis can split
+                # those episodes out instead of averaging the corruption in.
+                last_out_t = w.t
             if d.skill is not None and prev_skill is None and str(d.skill).startswith("kick"):
                 # THE SWING. Everything the three candidates of item 12a need,
                 # captured at the instant the skill takes the body.
@@ -250,6 +272,27 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                     "ball0": (bx, by),
                     "outs_during_approach": w.ball_outs - outs0,
                     "plan_age": round(w.t - getattr(brain, "t_state", w.t), 2),
+                    # --- the re-bin ---
+                    # The ball's own distance to the nearest board, so the curve
+                    # can be binned by where the ball ACTUALLY was rather than by
+                    # the arm's `--at-boards` cap (which is a cumulative bound,
+                    # not a distance).
+                    "ball_board": round(to_board(bx, by), 4),
+                    # The planned spot READ OFF THE BRAIN at the instant the
+                    # swing was decided -- never recomputed from `ball0` at
+                    # analysis time. Those differ by the plan's staleness, so a
+                    # reconstruction would answer "where would the spot be for a
+                    # ball there" instead of "where was the spot when the swing
+                    # was decided" (roadmap 12a: median plan age 3.6 s).
+                    "spot": None if last_spot is None
+                    else [round(float(last_spot[0]), 4), round(float(last_spot[1]), 4),
+                          last_spot[2] or last_spot[4]],
+                    "spot_board": None if last_spot is None
+                    else round(to_board(float(last_spot[0]), float(last_spot[1])), 4),
+                    "spot_age": None if last_spot_t is None else round(w.t - last_spot_t, 2),
+                    # Seconds since the last throw-in, or None if there has not
+                    # been one this run.
+                    "since_out": None if last_out_t is None else round(w.t - last_out_t, 2),
                 }
                 prev_skill = d.skill
                 break
