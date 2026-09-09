@@ -306,6 +306,7 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                 # captured at the instant the skill takes the body.
                 p = d.trunk_pos(w.data)
                 yaw = d.yaw(w.data)
+                odom_now = w.odom(d) or (0.0, 0.0, 0.0)
                 bx, by = float(w.data.qpos[q]), float(w.data.qpos[q + 1])
                 dx, dy = bx - float(p[0]), by - float(p[1])
                 joints = np.asarray(w.data.qpos[d.adr.joint_qpos], float)
@@ -326,6 +327,16 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                     "ball0": (bx, by),
                     "outs_during_approach": w.ball_outs - outs0,
                     "plan_age": round(w.t - getattr(brain, "t_state", w.t), 2),
+                    # The quantity `_too_far` gates on, recorded at the swing:
+                    # how far AHEAD the brain's own predicted ball is, in its
+                    # own odom frame. Not the same as `ahead` above, which is
+                    # the TRUE ball in the trunk frame -- the gate sees the
+                    # belief, not the truth. With the gate off this says which
+                    # swings it WOULD have declined, so the value of declining
+                    # them can be measured instead of assumed.
+                    "pred_ahead": None if brain.predicted is None else round(
+                        (brain.predicted[0] - odom_now[0]) * math.cos(odom_now[2])
+                        + (brain.predicted[1] - odom_now[1]) * math.sin(odom_now[2]), 4),
                     # --- the re-bin ---
                     # The ball's own distance to the nearest board, so the curve
                     # can be binned by where the ball ACTUALLY was rather than by

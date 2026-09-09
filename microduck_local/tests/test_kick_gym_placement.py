@@ -229,3 +229,44 @@ def test_the_row_still_carries_what_item_12a_needs(rebin_rows):
     for r in swings(rebin_rows):
         for k in ("ahead", "side", "ball_speed", "pose_max_dev", "travel", "whiff", "plan_age"):
             assert k in r, k
+
+
+# --- pred_ahead: the quantity the gate actually reads ----------------------
+# `_too_far` gates on the BRAIN'S PREDICTED ball in its own odom frame, and
+# returns False when `predicted is None` — so the gate disables itself whenever
+# the track is lost. Recording that quantity at the swing is what turned "does
+# declining a swing pay?" from an assumption into a measurement: with the gate
+# off, `pred_ahead > kick_ahead_max` marks exactly the swings it would have
+# refused. They whiff 92%.
+
+def test_pred_ahead_is_on_every_swing_row(rebin_rows):
+    for r in swings(rebin_rows):
+        assert "pred_ahead" in r, "the gate's own quantity is missing from the row"
+
+
+def test_pred_ahead_is_None_exactly_when_the_brain_had_no_prediction(rebin_rows):
+    """None is not missing data — it is the gate being inoperative, which is
+    the single most common state (98% of gate-on swings). A test that treated
+    it as absent would drop the population the mechanism lives in."""
+    for r in swings(rebin_rows):
+        v = r["pred_ahead"]
+        assert v is None or isinstance(v, float)
+
+
+def test_pred_ahead_is_not_the_same_quantity_as_ahead():
+    """`ahead` is the TRUE ball in the trunk frame; `pred_ahead` is the
+    BELIEVED ball in the odom frame. The gate sees the belief. Conflating them
+    would measure the world instead of the plan, and they differ by exactly the
+    staleness the gate exists to catch.
+
+    Run with the gate OFF deliberately. With it on, 98% of swings are blind
+    (`pred_ahead is None`) and this test would skip — which is the measured
+    finding, and a skipping test protects nothing. Gate-off keeps ~40% of
+    swings with a live prediction, so the assertion has a population."""
+    from kick_gym import run
+    rows = run(seed=901, episodes=12, spread=0.8, at_boards=1.0,
+               knobs="kick_ahead_max=0")
+    both = [r for r in swings(rows) if r.get("pred_ahead") is not None]
+    assert both, "gate-off produced no swing with a live prediction — check the arm"
+    assert any(abs(r["pred_ahead"] - r["ahead"]) > 1e-6 for r in both), \
+        "pred_ahead tracks `ahead` exactly — it is reading the truth, not the belief"
