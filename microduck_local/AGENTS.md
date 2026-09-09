@@ -468,6 +468,23 @@ disagreements between two setups are not noise — they are the same signal,
 attenuated. Ask what could have differed before deciding a gap is too small to
 chase.
 
+**Recency is not provenance.** Twice in one night each session corrected the
+other toward its own number and was wrong to. Having just run something makes
+it feel verified, so whoever ran it most recently argues hardest — the
+corrector has a fresh terminal, the correctee has a memory, and freshness reads
+as evidence. **The operational form: when correcting someone toward your own
+number, state your setup in the same message.** Both cases die instantly under
+it — `[on make_pitch(per_side=2)]` beside a fraction, or the predicate beside a
+count, and the other party spots it at once. Neither failure needed more care;
+both needed the setup in the same breath as the number.
+
+**And a peer conceding is not a measurement.** Deference from a competent peer
+is nearly indistinguishable from confirmation and far cheaper for them to give
+than to check. One session deferred on three sub-point gaps; the other read the
+deference as agreement rather than asking what the setup was. Scrutinising
+small disagreements is only half of it — the other half is not banking an
+agreement that was a courtesy.
+
 **The consequence is worse than the error.** Both sessions had independently
 reproduced those three fractions to under a point and read the agreement as
 strong mutual confirmation. It was not: **where a quantity is invariant to an
