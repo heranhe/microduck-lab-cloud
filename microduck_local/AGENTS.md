@@ -464,6 +464,23 @@ So: **state the scenario a measurement was drawn from, not just the call.**
 "Real calls over the real draw" was true in every word and never said which
 pitch, which was the whole error.
 
+**But do not read that as "reproduction is useless" — the opposite.** Checked
+against the record: all four shapes above were caught by two parties computing
+the same quantity and DISAGREEING. Reproduction is how you buy the chance to
+disagree, and it is the only thing that has ever caught anything here.
+Agreement is the half that carries no weight when the quantity could not have
+differed. So keep reproducing, and apply this test in the moment: **before
+treating a reproduction as confirmation, name the input it was sensitive to.**
+If nothing you measured would have differed under a different setup, the
+reproduction confirms the arithmetic and nothing about the setup.
+
+**The same trap catches a prediction and its test.** When both are derived from
+one model, agreement between them confirms the arithmetic, not the model — a
+shared error produces a match without either being right. What is worth having
+is a prediction the model could fail: here, the feasibility model says a margin
+of 0.25 can NEVER fire in a corner, so any effect at all in a corner arm
+falsifies it outright.
+
 **Marking is not enough for `[assumed input]`, and saying so is part of the
 rule.** A reconstruction announces itself to anyone who looks; a probe can be
 contradicted by a sweep. Correct arithmetic on a guessed constant has no tell
