@@ -789,6 +789,30 @@ favourable framing with nothing in front of you contradicting it. The first is
 just reading your own output. Do not let a record of the first stand in for
 evidence of the second.
 
+## CI has never run on `development` — precommit is the only gate
+
+Checked 2026-09-09: **`development` has 163 commits that are not on
+`origin/main`, and the branch has never been pushed.** `git ls-remote --heads
+origin` returns only `refs/heads/main`, and the branch has no upstream. The
+workflow triggers on `push: branches: ["**"]`, so CI *would* run — it has
+simply never been given the chance.
+
+**So every guarantee in this repo comes from `precommit.sh` and the tests you
+remember to run.** That is why a test could sit red on `development` for five
+commits (`test_the_chase_brain_tracks_a_ball_the_tof_sees_at_its_feet`, broken
+by e6dd8d3, found by finally running the full suite): the subsets were green,
+nobody ran `pytest tests/`, and nothing else was watching.
+
+**Pushing is the fix, but re-record the Linux goldens first (bead `mdl-uk6`).**
+They predate the 2026-09-06 physics change, so a push today gives a red CI for a
+known reason — and a permanently-red CI is worse than none, because it is the
+cry-wolf failure at the level of the whole project. Re-record (CI can, with
+`MICRODUCK_RECORD_GOLDENS=1`), then push, then the gate is real.
+
+Until then: run `pytest tests/` — the whole suite, ~6 minutes — before anything
+you would be embarrassed to have broken. Subsets are not a substitute; they
+were green throughout the five commits above.
+
 ## Before you commit: `./scripts/precommit.sh` (1 second)
 
 It runs `ruff` and imports every battery entry point. It exists because
