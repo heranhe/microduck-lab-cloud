@@ -6387,3 +6387,67 @@ or a nudge that puts the ball more than ~6.8 cm out before any kick is planned.
 `kickselect` already ranks pushes; giving it the reachability constraint would
 let it choose one exactly when no kick spot exists, which is the design change
 above and is now bounded by a number rather than an intuition.
+
+### 12w. Does the whiff gate work on the camera the ROBOT has? — MEASURED (2026-09-09)
+
+`_too_far` returns `False` when `predicted is None`: **the gate that took whiffs
+47% → 36% disables itself whenever the duck has no live track.** The robot today
+runs a 1080p crop at 85.2% team blindness (12n). So the question that decides
+whether any of tonight's whiff work reaches hardware: does the gate still pay on
+that camera?
+
+**Registered at 14:05:46Z before launch** (`scratchpad/prereg-gate-on-crop.txt`,
+sha 9e073124...): primary is the gate's benefit in **connected kicks**
+(swings × (1 − whiff)), compared between cameras; prediction **smaller under the
+crop**; and a stop rule — with the gate held fixed the crop must differ from the
+sim on some outcome, else **NO RESULT**, because `kick_gym` is one duck and one
+ball at close range while 85.2% is a *match* statistic. The stop rule was written
+into the reader itself rather than kept in mind, so it executes before the
+primary is visible.
+
+**Positive control: PASSES, decisively.** With the gate armed, whiff is 34.5%
+(sim) against 63.6% (crop), z = 11.84. The harness reproduces close-range
+blindness. The other session measured the mechanism variable directly and
+independently: `predicted is None` on **33.6%** of sim line-up ticks against
+**56.2%** of crop ones.
+
+**PRIMARY, 2240 episodes an arm, `--at-boards 1.00`:**
+
+| camera | gate | swings | whiff | connected | **gate's benefit** |
+|---|---|---|---|---|---|
+| sim | ON | 892 | 34.5% | 584 | **+96** |
+| sim | OFF | 1109 | 56.0% | 488 | |
+| **crop** | ON | 662 | **63.6%** | 241 | **+38** |
+| **crop** | OFF | 738 | 72.5% | 203 | |
+
+**crop/sim benefit ratio = 0.396**, bootstrap 95% CI **[0.04, 0.95]**,
+P(ratio < 1) = **0.98**. **The registered prediction holds: the gate is worth
+substantially less on the camera the robot actually has.**
+
+**What this does NOT establish.** The other session's prior bracketed the ratio
+at 0.71 (availability × fire-rate) to 0.99 (also weighted by how far past the
+threshold the caught swing was). The point estimate is well below that floor,
+but P(ratio < 0.71) is only **0.90** — suggestive, not decisive, and **their
+availability model is not refuted by this**. A ratio of two differences of counts
+is a noisy statistic and the CI says so honestly.
+
+**The robust number, which needs none of that precision, is the one that
+matters: with everything we shipped tonight armed, whiff on the robot's camera
+is 63.6% against the sim's 34.5%.** Nearly double, at z = 11.84. Whatever the
+gate is worth there, the duck it protects is missing most of its swings anyway.
+
+**So the whiff work does not transfer, and this is the third time the same thing
+has been found** (12n for the soccer ledger, §3c for tidy): **every number in
+this repo is measured on a camera the robot does not have, and is optimistic.**
+The 47% → 36% in item 12a is a sim result. On the crop, the same brain is at
+roughly 64% in the gym's hard case, and the gate recovers ~40% of what it
+recovers in the sim. Two candidate reasons the gate is worth less, neither
+tested here: it is armed less often (measured, 43.8% vs 66.4% of line-up ticks),
+and — not in anyone's model so far — **when it does decline a swing under the
+crop the replacement swing is nearly as bad**, since even gate-armed crop swings
+miss 63.6% of the time. Declining is only worth what the next attempt is worth.
+
+**The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
+gate that is off because the camera cannot see; the fix is the camera, which is
+what 12u now supports on possession and ball advance. If the replacement ships,
+the whiff work starts paying what the sim says it should.
