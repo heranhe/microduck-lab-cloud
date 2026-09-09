@@ -6494,8 +6494,13 @@ it rather than defending it.** Whiff by how far past the gate the belief sat:
 
 **It saturates.** Declining a swing 0.40 m out is worth no more than declining
 one 0.20 m out — both whiff. So the severity weighting that produced the 0.99
-ceiling is unearned, and **that bracket collapses to its floor, 0.71**; the
-upper end was withdrawn by its author on measurement. This item's 0.396 still
+ceiling is unearned, and **that bracket collapses to its floor, 0.71.** Recorded as
+its author asked it be recorded: not "tested their own assumption well" but **a
+number that should not have been offered as a number** — 0.99 was stated as a
+bound when it was a conditional (*this is what it would be IF value scales with
+excess*), and on the strength of that invented ceiling this session reasoned
+against its own registered prediction. Stating an assumption as a bound is the
+error; withdrawing it is only the repair. This item's 0.396 still
 does not beat 0.71 (P = 0.90) and is not claimed to — but the comparison is now
 one number against one number, and the one that moved was measured away rather
 than argued away.
@@ -6517,6 +6522,23 @@ mechanism than either session's model. **The registered prediction, before the
 confirming arm runs: `predicted is None` on ~99% of gate-ON swings, against
 60.3% measured on gate-off. Under ~80% and the mechanism is unsupported, not
 merely "higher".**
+
+> **THAT FALSIFIER WAS UNDERSPECIFIED, and this refinement is registered before
+> the arm lands.** A single None fraction collapses two *opposite* worlds into
+> one number — the other session spotted it and this one did not. The
+> discriminator is where the surviving *predicted* swings sit; gate-off had only
+> **3 of 412 inside the gate (0.7%)**:
+>
+> | outcome | reading |
+> |---|---|
+> | ~99% None | deferral to close-and-blind: the registered mechanism, supported |
+> | ~60% None, predicted swings mostly **beyond** 0.15 | the gate is failing to refuse swings it should — unsupported, and alarming |
+> | ~60% None, predicted swings mostly **inside** 0.15 | the duck waited until its belief agreed with where it stands: **deferral as registered is WRONG, and the knob is better than either session has described it** — the value is alignment, not blindness |
+>
+> The third case refutes the registered mechanism *while improving the knob*,
+> and the original rule would have filed it as "unsupported" and stopped there.
+> **A falsifier that cannot tell a refutation from a better finding is a badly
+> built falsifier.**
 
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
