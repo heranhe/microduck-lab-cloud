@@ -452,6 +452,22 @@ gap from the NEAR board, not on where the others are. Only the corner share,
 a ratio of areas, is pitch-dependent, and only it disagreed: 16.3% against
 19.2%. Three correct numbers from a wrong setup, and exactly one detectable.
 
+**And near-invariance is worse than invariance.** The same wrong pitch shifted
+three other fractions too — 36.5 against 35.8, 96.0 against 95.2, 53.5 against
+52.8 — all under a point. The large error in the corner share was challenged
+and traced within one exchange; the identical error in the fractions sat inside
+what both parties read as agreement, and the wrong numbers were adopted. A
+quantity that is *nearly* invariant to a bad input produces agreement with a
+small residue, and a residue reads as noise.
+
+**The behavioural failure that let it through: scrutiny proportional to the
+SIZE of a disagreement rather than to whether the quantity could have
+differed.** One session challenged a five-sigma gap and deferred on three
+sub-point ones in the same message, from the same unexamined setup. Small
+disagreements between two setups are not noise — they are the same signal,
+attenuated. Ask what could have differed before deciding a gap is too small to
+chase.
+
 **The consequence is worse than the error.** Both sessions had independently
 reproduced those three fractions to under a point and read the agreement as
 strong mutual confirmation. It was not: **where a quantity is invariant to an
@@ -481,7 +497,11 @@ became "independent reproduction has caught none of our errors and sensitivity
 has caught all of them", which the record contradicts — all four were caught by
 two parties disagreeing. The first four above are errors of EXECUTION; this one
 is an error of INFERENCE, and it is the hardest to catch alone because it feels
-like insight rather than arithmetic. Both parties contributed: one over-reached,
+like insight rather than arithmetic. **It runs in both directions**: a
+pre-registration that condemned five measurements which never depended on the
+law that might fail is the same error pointed inward, and the self-critical
+form is harder to challenge because objecting to it looks like defensiveness.
+Both parties contributed: one over-reached,
 and the other had sold the observation as "the most important thing found
 tonight", which is the framing that invites the over-reach. **When an
 observation feels like the best thing you have found, that is when to check
