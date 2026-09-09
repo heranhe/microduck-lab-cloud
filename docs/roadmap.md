@@ -6115,6 +6115,48 @@ replacement still takes ~42% fewer kicks — replicated now, and still
 unexplained, with `kick_ahead_max` the leading suspect. A wider camera is not a
 free win, and 12n's original framing of that trade survives intact.
 
+**THE ~42% KICK DROP IS PROBABLY THE GATE WORKING, NOT A COST — a mechanism
+read out of the code FIRST, then a prediction, then the numbers.** Flagged
+exploratory throughout: these are derived ratios, not the registered primary.
+
+`_too_far` (controllers.py:3154) aborts a swing when the predicted ball is more
+than `kick_ahead_max` = 0.15 m ahead. Its docstring carries the key clause:
+*"False when the knob is off **or nothing fresh has been seen**."* **The gate is
+disabled whenever the duck has no live track.** So a blinder camera loses the
+ball, `predicted` goes None, the gate silently switches itself off, and the duck
+swings anyway — at a ball its plan has lost. A camera that keeps the ball in
+view keeps the gate armed, and the gate declines those swings.
+
+That predicts, before looking: the better camera should take **fewer** kicks and
+each kick should be **worth more**. Metres of ball advance per kick taken:
+
+| camera | team blindness | m of advance per kick |
+|---|---|---|
+| crop (39 × 22.5) | 85.2% | **0.747** |
+| sim (62 × 48) | 61.3% | 1.055 |
+| replacement (116 × 60 @640) | 42.7% | **1.785** |
+
+**Monotone in camera quality, and the replacement is +0.730 m/kick against the
+sim (z +2.41).** It takes 42% fewer kicks worth 69% more each, which is why its
+total `ballAdvance` came back flat (+0.002, p 0.980) while possession rose. The
+same construction in possession terms: the replacement spends 66.0 s of
+possession per kick against the sim's 36.0 (z +2.59) — it holds the ball and
+declines to swing — while the crop is unchanged at 33.3 (z −0.36).
+
+Why this is worth more than its p values (z 2.41 and 2.59 would not survive a
+strict family-wise threshold, and these are two of several ratios I could have
+formed): the direction was **derived from the code before it was computed**, and
+it is a three-arm dose-response in the predicted order, which no single p value
+captures. It is still hypothesis-generating, not established.
+
+**The falsifier, and it is cheap.** If this is right, running the replacement
+camera with `kick_ahead_max = 0` (gate off) should push kicks back up toward the
+sim's count AND push advance-per-kick back down. Two `kick_gym` arms at 0.8
+CPU-s a swing settles it. If kicks do *not* recover with the gate off, the
+explanation is wrong and the kick drop is something else — detection latency or
+approach length are the next suspects. **Registering that prediction here, in
+advance, because that is the only thing that makes the check worth running.**
+
 
 ### 12v. The gate is the SPOT, not the ball — and `board_margin` was never a tuning knob (2026-09-09)
 
