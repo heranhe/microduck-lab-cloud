@@ -6992,6 +6992,40 @@ without `--at-boards 1.00`, which is deliberately the hard case. **The honest
 statement of where the whiff stands on the robot's camera is 39.4% at the
 boards**, and 12a's figure needs its own re-run before it is quoted again.
 
+**AND 12a's WHIFF WORK, RE-RUN — my registered prediction FAILED, and the
+failure is the interesting part.** 2240 episodes an arm, `--at-boards 1.00`,
+fresh seeds 1100-1107, the three shipped knobs against all three reverted
+(`gaze_still=0,kick_ahead_max=0,look_sweep=0`). Registered beforehand: *"the
+work still pays, but by LESS than 12a's 11 points, because the camera is doing
+part of the knobs' job."*
+
+| arm | swings | whiff | connected |
+|---|---|---|---|
+| `pre` (all three off) | 1025 | **54.1%** | 470 |
+| `shipped` | 764 | **41.9%** | 444 |
+
+**Whiff falls 54.1% → 41.9% — 12.3 points, z = +5.18. That is MORE than 12a's
+11, not less, so the prediction is wrong.** The reasoning behind it was that a
+better camera keeps `predicted` non-None, arms `_too_far` more often, and leaves
+it less to buy — which held for the gate *alone* (12z: +32% → +16% connected)
+and does not hold for the three together.
+
+**But the outcome is flat, and that is the number to quote.** Connected kicks per
+episode 21.0% → **19.8%**, **z = −0.96, p = 0.335 — not significant.** The
+shipped brain takes **25% fewer swings** (764 against 1025), misses far less
+often on the ones it takes, and **ends up in the same place**. On the fitted
+camera the whiff work buys *selectivity*, not throughput.
+
+**Two things follow, and neither was visible on the old camera.** The rate and
+the outcome disagree, so "whiff 47% → 36%" was always the wrong headline for
+this work — a whiff rate is a ratio whose denominator the knobs themselves move,
+and 12a quoted it without the connected count beside it. And the gate alone
+(+63 connected, 12z above) does better on the outcome than the gate plus
+`gaze_still` plus `look_sweep` (−26, n.s.), which is a live question this
+re-baseline opens and does not answer: **the two extra knobs may be costing
+connections they were never charged for.** That wants its own arm, on the
+fitted camera, with connected kicks as the registered primary rather than whiff.
+
 **Still assumed, and it gates all of the above: the 640 px input.** At 320 px the
 fitted lens is 158 px/rad and a duck at 3 m is 4.7 px — under the "sometimes
 found" floor. Every number in this section would be worse, by an amount nobody
