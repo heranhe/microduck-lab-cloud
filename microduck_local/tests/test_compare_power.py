@@ -301,3 +301,110 @@ def test_the_audit_runs_end_to_end(capsys):
         sys.argv = old
     out = capsys.readouterr().out
     assert "variance reduction" in out and "med MDE%" in out
+
+
+# --- the gym carries the same rule on its proportion test -----------------
+
+from kick_gym import (  # noqa: E402
+    TARGET_PP,
+    TIGHT_PP,
+    swings_for,
+    verdict_prop,
+)
+from kick_gym import two_proportions as gym_two_proportions  # noqa: E402
+
+
+def test_the_gym_mde_is_the_boundary_of_its_own_significance():
+    """Same identity as the pitch: the whiff shift is significant exactly when
+    it exceeds the MDE.  Walk a second arm's count until p crosses 0.05 and
+    check the shift crosses the MDE at the same event."""
+    n = 400
+    x1 = 100
+    crossed_p = crossed_mde = None
+    for x2 in range(100, 200):
+        d, p, mde = gym_two_proportions(x1, n, x2, n)
+        if crossed_p is None and p < 0.05:
+            crossed_p = x2
+        if crossed_mde is None and abs(d) > mde:
+            crossed_mde = x2
+    assert crossed_p is not None and crossed_p == crossed_mde
+
+
+def test_a_small_real_whiff_shift_on_few_swings_is_no_result():
+    """The gym's version of the failure: 40 swings an arm cannot see 10 points,
+    so it must not report a null."""
+    d, p, mde = gym_two_proportions(10, 40, 14, 40)
+    assert p > 0.05 and mde > TIGHT_PP
+    assert verdict_prop(p, mde) == "NO RESULT"
+
+
+def test_the_same_shift_on_enough_swings_resolves():
+    d, p, mde = gym_two_proportions(100, 400, 140, 400)
+    assert verdict_prop(p, mde) == "effect"
+
+
+def test_a_tight_zero_shift_is_a_real_null():
+    d, p, mde = gym_two_proportions(250, 1000, 252, 1000)
+    assert p > 0.05 and mde <= TIGHT_PP
+    assert verdict_prop(p, mde) == "null"
+
+
+def test_swings_for_scales_quadratically():
+    _, _, mde = gym_two_proportions(100, 400, 100, 400)
+    assert swings_for(mde, 400, 400, mde) == pytest.approx(400, abs=2)
+    assert swings_for(mde, 400, 400, mde / 2) == pytest.approx(1600, abs=8)
+
+
+def test_gym_degenerate_counts_do_not_claim_a_null():
+    for args in ((0, 0, 0, 0), (5, 5, 5, 5), (0, 10, 0, 10)):
+        d, p, mde = gym_two_proportions(*args)
+        assert verdict_prop(p, mde) != "null" or mde <= TIGHT_PP
+    assert swings_for(float("inf"), 10, 10) == 0
+
+
+def test_the_gym_thresholds_are_stricter_than_the_pitch_because_events_are_cheap():
+    """The gym buys ~19x the events per CPU-second, so it has no excuse for a
+    loose null: 8 points, against the pitch's 15% of baseline."""
+    assert 0 < TIGHT_PP < 0.15 and 0 < TARGET_PP <= TIGHT_PP * 2
+
+
+# --- a knob that changes nothing is BROKEN, not null (playbook rule 0) -----
+# Found by this session's own contest arm: `contest_margin=0.15` reproduced
+# the baseline episode for episode, because the rule is gated on `use_color`,
+# which is off by default.  The MDE machinery happily called that a null.
+
+from kick_gym import is_identical, outcome_key  # noqa: E402
+
+
+def _rows(travels):
+    return [{"swing": t is not None, "travel": t, "whiff": (t or 0.0) < 0.10}
+            for t in travels]
+
+
+def test_an_arm_that_reproduces_the_baseline_is_flagged_broken():
+    base = _rows([0.2, None, 0.05, 0.31])
+    assert is_identical(base, _rows([0.2, None, 0.05, 0.31]))
+
+
+def test_a_single_changed_episode_is_enough_to_be_a_real_arm():
+    base = _rows([0.2, None, 0.05, 0.31])
+    assert not is_identical(base, _rows([0.2, None, 0.05, 0.32]))
+
+
+def test_a_changed_swing_pattern_is_a_real_arm():
+    base = _rows([0.2, None, 0.05])
+    assert not is_identical(base, _rows([0.2, 0.4, 0.05]))
+
+
+def test_differing_episode_counts_are_never_called_identical():
+    assert not is_identical(_rows([0.2, 0.3]), _rows([0.2, 0.3, 0.4]))
+
+
+def test_outcome_key_ignores_fields_that_are_not_the_physics():
+    a = [{"swing": True, "travel": 0.25, "arm": "x", "seed": 1}]
+    b = [{"swing": True, "travel": 0.25, "arm": "y", "seed": 2}]
+    assert outcome_key(a) == outcome_key(b)
+
+
+def test_a_no_swing_episode_carries_no_travel_into_the_key():
+    assert outcome_key([{"swing": False, "travel": 9.9}]) == ((False, None),)

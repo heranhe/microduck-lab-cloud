@@ -246,6 +246,60 @@ def report(rows: list[dict]) -> None:
           "only the match has.")
 
 
+# A whiff-rate null is only a null if this many swings could have SEEN the
+# shift it denies.  Same rule the pitch battery now carries (playbook item 3):
+# the MDE is the interval half-width, and a difference is significant exactly
+# when it exceeds it.
+TIGHT_PP = 0.08         # 8 percentage points -- tight enough to call a null
+TARGET_PP = 0.10        # the shift the footer sizes an arm for
+
+
+def two_proportions(x1: int, n1: int, x2: int, n2: int) -> tuple[float, float, float]:
+    """(shift in the whiff rate, p, MDE) for two independent event counts.
+    The MDE is 1.96 SE, so `p < 0.05` holds exactly when |shift| > MDE."""
+    if not (n1 and n2):
+        return 0.0, 1.0, float("inf")
+    p1, p2 = x1 / n1, x2 / n2
+    pool = (x1 + x2) / (n1 + n2)
+    se = math.sqrt(pool * (1 - pool) * (1 / n1 + 1 / n2)) if 0 < pool < 1 else 0.0
+    if se == 0:
+        return p2 - p1, 1.0, float("inf")
+    return p2 - p1, math.erfc(abs((p2 - p1) / se) / math.sqrt(2)), 1.96 * se
+
+
+def outcome_key(rows: "list[dict]") -> tuple:
+    """An arm's outcome, episode by episode, to the precision that matters.
+    Two arms that produce this identically did not differ in the physics."""
+    return tuple((bool(r.get("swing")), None if not r.get("swing")
+                  else round(float(r.get("travel", 0.0)), 9)) for r in rows)
+
+
+def is_identical(base_rows: "list[dict]", arm_rows: "list[dict]") -> bool:
+    """Playbook rule 0, made mechanical: a knob that changes NOTHING is broken,
+    not null.  The gym is deterministic per seed and episode, so an arm whose
+    every episode matches the baseline's did not reach the code it was meant to
+    change -- usually a precondition it does not satisfy (`contest_margin` is
+    gated on `use_color`, which is OFF by default, so an arm that sets only the
+    margin runs the shipped path and reports a beautiful, meaningless null)."""
+    return len(base_rows) == len(arm_rows) and outcome_key(base_rows) == outcome_key(arm_rows)
+
+
+def verdict_prop(p: float, mde: float, tight: float = TIGHT_PP) -> str:
+    """`effect`, `null`, or `NO RESULT` -- never `null` for an arm too small
+    to have resolved the shift it is denying."""
+    if p < 0.05:
+        return "effect"
+    return "null" if mde <= tight else "NO RESULT"
+
+
+def swings_for(mde: float, n1: int, n2: int, target: float = TARGET_PP) -> int:
+    """Swings PER ARM that would resolve `target`.  MDE falls as 1/sqrt(n)."""
+    if not math.isfinite(mde) or mde <= 0 or target <= 0:
+        return 0
+    per = 0.5 * (n1 + n2)
+    return max(2, math.ceil(per * (mde / target) ** 2))
+
+
 def compare(arms: "dict[str, list[dict]]") -> None:
     """Two or more arms on the same seeds, read the way this repo reads a
     soccer result: the funnel per arm, then the whiff as a PROPORTION of the
@@ -271,21 +325,37 @@ def compare(arms: "dict[str, list[dict]]") -> None:
     base = labels[0]
     b_sw = [r for r in arms[base] if r.get("swing")]
     print("\n" + "-" * 78)
-    print(f"{'arm':<28}{'swings':>8}{'whiff':>9}{'vs base':>10}{'p':>9}")
+    print(f"{'arm':<24}{'swings':>8}{'whiff':>8}{'vs base':>9}{'±MDE':>7}{'p':>8}  verdict")
     n1, x1 = len(b_sw), sum(r["whiff"] for r in b_sw)
-    print(f"{base + ' (base)':<28}{n1:>8}{100 * x1 / max(n1, 1):>8.0f}%{'—':>10}{'—':>9}")
+    print(f"{base + ' (base)':<24}{n1:>8}{100 * x1 / max(n1, 1):>7.0f}%{'—':>9}{'—':>7}{'—':>8}")
+    thin, broken = [], []
     for lab in labels[1:]:
         sw = [r for r in arms[lab] if r.get("swing")]
         n2, x2 = len(sw), sum(r["whiff"] for r in sw)
         if not (n1 and n2):
             continue
-        pooled = (x1 + x2) / (n1 + n2)
-        se = math.sqrt(pooled * (1 - pooled) * (1 / n1 + 1 / n2)) if 0 < pooled < 1 else 0.0
-        z = (x1 / n1 - x2 / n2) / se if se else 0.0
-        pv = math.erfc(abs(z) / math.sqrt(2))
-        print(f"{lab:<28}{n2:>8}{100 * x2 / n2:>8.0f}%"
-              f"{100 * (x2 / n2 - x1 / n1):>+9.0f}%{pv:>9.3f}")
+        d, pv, mde = two_proportions(x1, n1, x2, n2)
+        if is_identical(arms[base], arms[lab]):
+            broken.append(lab)
+            v = "BROKEN"
+        else:
+            v = verdict_prop(pv, mde)
+            if v == "NO RESULT":
+                thin.append((lab, swings_for(mde, n1, n2)))
+        print(f"{lab:<24}{n2:>8}{100 * x2 / n2:>7.0f}%{100 * d:>+8.0f}%"
+              f"{100 * mde:>6.0f}%{pv:>8.3f}  {v}")
+    for lab in broken:
+        print(f"\n!! {lab} reproduced the baseline EPISODE FOR EPISODE. A knob that changes"
+              "\n   nothing is BROKEN, not null (playbook rule 0): it never reached the code"
+              "\n   it meant to change. Check its preconditions -- `contest_margin`,"
+              "\n   `opp_keepout` and `_is_mate` are all gated on `use_color`, which is OFF"
+              "\n   by default, so an arm must set `use_color=1` alongside them.")
     print("\nA drop in whiff on FEWER swings is not a win: read both columns.")
+    print("±MDE is the smallest whiff shift this many swings could have resolved:"
+          "\na verdict is `null` only under " f"{100 * TIGHT_PP:.0f}" " points, else NO RESULT.")
+    for lab, need in thin:
+        print(f"  {lab}: {need} swings an arm would resolve "
+              f"{100 * TARGET_PP:.0f} points (had {len(arms[lab])} episodes).")
 
 
 if __name__ == "__main__":
