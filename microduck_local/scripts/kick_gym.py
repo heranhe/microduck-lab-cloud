@@ -43,6 +43,7 @@ from microduck_local import contract as C
 from microduck_local.brain import REGISTRY, Senses
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
 from microduck_local.brain.controllers import ChaseParams
+from microduck_local.brain.knob_gates import warning_for
 from microduck_local.world.arena import World
 from microduck_local.world.metrics import CARRY_S
 from microduck_local.world.scenario import Ball, Duck, Scenario, Wall
@@ -378,6 +379,14 @@ if __name__ == "__main__":
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     specs = [(s.split("=", 1)[0], s.split("=", 1)[1] if "=" in s else "") for s in (a.arm or ["ambient="])]
+    # Preflight, before a minute of compute is spent: a knob gated behind a
+    # knob that ships off measures the shipped path and reports a null about
+    # nothing.  `is_identical` catches that afterwards; this catches the
+    # commonest form of it now, in about a second, from the source.
+    for label, knobs in specs:
+        warn = warning_for(knobs)
+        if warn:
+            print(f"\n[{label}] {warn}\n")
     arms: dict[str, list[dict]] = {}
     for label, knobs in specs:
         args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s, knobs)
