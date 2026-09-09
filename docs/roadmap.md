@@ -6647,6 +6647,31 @@ and below even the gate-OFF 60.3%. So the measurement can still surprise on the
 selection question (how the crop gets to a swing at all), but the claim the
 brief rests on does not hinge on its exact value.
 
+**BOTH REGISTRATIONS NAME ONLY THEIR OWN OUTCOME, AND THE MIDDLE IS THE LIKELY
+ONE — registered before the arm lands.** The two expectations are not competing
+predictions about one quantity: ~98% says *the crop is blinder everywhere*,
+while the selection route says *the crop's surviving swings are the ones where
+sight was kept*. **Both can be true at once**, and an `f` between them would
+leave each session able to claim the number landed nearer its own. So the
+reading is registered as a **pair**, not a verdict — report both, pick neither:
+
+    degradation:  implied crop blind whiff  w = (0.636 - (1-f)*0.92) / f
+                  against the sim's 0.370
+    selection:    (0.979 - f), how far the crop's blind fraction falls below
+                  the sim arm's
+
+| f | w (degradation) | 0.979 − f (selection) | reading |
+|---|---|---|---|
+| ≥ 0.95 | ~0.63 | ~0 | the registered ~98%: degradation only |
+| 0.85 | 0.586 | 0.13 | **both real, degradation dominant** |
+| 0.70 | 0.514 | 0.28 | **both real, selection substantial** |
+| < 0.52 | < 0.370 | > 0.46 | selection only — the inference fails |
+
+This is the same failure as the falsifier above, one level along: **a
+registration that names only the outcome its author expects cannot report a
+world where both mechanisms operate.** Naming the middle in advance is what
+stops the result being read as a win for whichever session it lands nearer.
+
 **The action this implies is not a knob.** No tuning of `kick_ahead_max` fixes a
 gate that is off because the camera cannot see; the fix is the camera, which is
 what 12u now supports on possession and ball advance. If the replacement ships,
