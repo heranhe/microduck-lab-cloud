@@ -5242,6 +5242,24 @@ against 1 is a large drop and it is on the significance line with an 87% MDE.
 It is suggestive, and the mechanism is plausible — a duck that can see its
 near field does not walk into things — but it is one battery.
 
+**Every row above is one of nine read at once, and not one of them was named
+before the run.** Three arms x nine metrics is 27 reads; if the nine were
+independent, the chance that *some* row clears p < 0.05 on noise alone is 37 %.
+They are not independent — possession/possessionWide, ballProgress/ballAdvance
+and spread/depth/crowd are three correlated families, so the effective count is
+nearer five and the honest threshold nearer 0.01 than Bonferroni's 0.0056.
+Against that threshold **possession on the crop (0.007) sits on the line and
+possession on the replacement (0.011) is past it**; crowd (0.039) and falls
+(0.050) are well past it. What keeps the possession pair alive is not either p
+value on its own but that the two arms move possession in OPPOSITE directions,
+in the order the visibility column predicts — a dose-response, not a coin flip.
+So: suggestive, not settled. "The camera moves possession" wants one
+confirmatory battery with possession named in advance, which is the discipline
+12t registers for `board_margin`. Two things are untouched by any of this: the
+crop's ballAdvance row (p 0.000) survives every threshold above, and the
+visibility fractions — 85.2 / 61.3 / 42.7 — are descriptive counts over 120 000
+duck-ticks rather than tests, so no correction applies to them at all.
+
 **The crop is a straight loss** and it is what the robot runs today: every
 soccer number in this repo is optimistic about the current hardware, the same
 caveat §3c already recorded for tidy.
@@ -5796,3 +5814,103 @@ where the track has no position, so the change shrinks its own denominator
 anything. Measuring it needs a denominator fixed across arms (all duck-ticks in
 the window, with "no prediction" as its own outcome). Left open rather than
 guessed at.
+
+### 12t. `board_margin` at match level — the metric registered BEFORE the read (2026-09-09)
+
+The gym says the along-the-boards line raises swings/episode by 1.46-1.71x on
+three separate blocks (12q, 12r). The remaining ship criterion is whether that
+survives a whole match, where a swing has to compete with everything else a
+duck does. Three arms, `eval-pitch --seeds 24 --seconds 300 --per-side 2
+--ball-out-s 5` with the get-up on: `board_margin` 0.0 (control), 0.25, 0.10.
+Both teams carry the knob.
+
+**Registered at 13:16:38Z, while the arms stood at 8 of 24 rows and were still
+running** (`scratchpad/prereg-board-margin.txt`, sha256 550f5d29...). Written
+out here because a prediction that lives only in a scratchpad is a prediction
+nobody can check:
+
+> PRIMARY METRIC: possession (s/min, SUMMED over the pair by compare_pitch).
+> Chosen because (a) the power audit says only possession (~10% MDE), spread
+> (9%) and depth (5%) can resolve at 24 seeds, and (b) possession is the only
+> one of those three that board_margin has a mechanism for: the knob is meant
+> to turn dead ball at the boards into contested ball.
+>
+> DECISION RULE: two contrasts (m25 vs off, m10 vs off), paired by seed.
+> Bonferroni over the two: an arm SHIPS on possession only at p < 0.025.
+> A non-significant possession row is a null only if its MDE is tight; else
+> NO RESULT. Direction predicted: possession UP.
+>
+> EVERYTHING ELSE IS EXPLORATORY. compare_pitch prints 9 metrics x 3 arms =
+> 27 reads; P(some p<0.05 by chance) = 37%. Non-primary rows are quoted with
+> that count attached and never called an effect.
+>
+> PRIOR: I expect the match effect to be much SMALLER than the gym's
+> 1.46-1.71x, and NO RESULT on kicks, falls, goals and ballAdvance because 24
+> seeds cannot resolve them. If possession does not move at p < 0.025,
+> `board_margin` does NOT ship, and the gym result stands as a gym result only.
+
+One check had to come before naming the metric, because `eval-pitch` gives
+**both** sides the same knob: a metric that is a SHARE between the teams cannot
+move under a symmetric change, however well the change works. `compare_pitch`
+takes possession as `("possession", "sum", "s/min")` — total time the ball is
+in someone's control, not who has it — so it is free to rise for both teams at
+once. Had it been a share, spread would have had to be the primary instead.
+
+**RESULT: the primary is a NULL, and a tight one. `board_margin` does not ship.**
+
+Read through the registered lens first and alone (`scratchpad/read_primary.sh`
+prints the possession row and withholds the other eight, so the primary was
+seen before anything that could have tempted a different story):
+
+| possession, s/min | off | arm | delta | ±MDE | MDE% | p | verdict |
+|---|---|---|---|---|---|---|---|
+| 0.25 (m25) | 36.268 | 37.118 | **+0.850** | 1.677 | **5%** | 0.305 | null |
+| 0.10 (m10) | 36.268 | 36.203 | **−0.065** | 1.911 | **5%** | 0.944 | null |
+
+Neither contrast comes near the registered p < 0.025, and neither is a NO
+RESULT dodge: the MDE is **5% of baseline**, twice as tight as the ~10% the
+power audit predicted at 24 seeds, so the instrument was good enough to have
+seen an effect half the size of the smallest one worth having. This is a real
+null, not an underpowered one. By the rule registered before the read, the knob
+does NOT ship, and 12q/12r's 1.46-1.71x stands **as a gym result only**.
+
+**A first draft of this item said the match proves "a lever that moves,
+attached to nothing". That was written before the kick counts were read and it
+is wrong** — the arithmetic below says the match cannot support that claim, and
+it is retracted here rather than left standing.
+
+The exploratory table is 18 rows with no p under 0.16, but the events block
+carries the one number that bears on the mechanism: **kicks are flat**, 168 →
+161 (m25) and 168 → 160 (m10), where the gym says 1.46-1.71x. Per seed that is
+7.00 kicks baseline and −0.29 / −0.33 observed, against a kick MDE of ±1.24
+(18%) and ±1.00 (14%). Two hypotheses, and this battery separates them:
+
+| what the gym effect would have to be | predicted | vs MDE |
+|---|---|---|
+| 1.46x on **all** kick chances | +3.22 kicks/seed | far above ±1.24 — **EXCLUDED** |
+| 1.46x confined to the boards | depends on how often the knob fires | see below |
+
+So the **broad** reading is refuted: `board_margin` does not raise kicking
+across the board, and if 12q/12r had implied it did, this rules that out. The
+**scoped** reading is not refuted, because it is arithmetically invisible here.
+Solving for the firing rate this battery could have seen:
+
+- at the gym's 1.46x, the knob must fire on **more than 39%** (m25) or **31%**
+  (m10) of kick chances to clear the MDE;
+- at the most favourable 1.71x, **more than 25%** (m25) or **20%** (m10).
+
+The corner census puts the boards-adjacent share well under those thresholds,
+so a real, gym-sized, boards-confined effect would look exactly like this
+table. **The match is not a test of the scoped claim and never could have
+been** — which is a limitation of the harness, not a rescue of the knob.
+
+What that leaves: the knob ships OFF, by the rule registered before the read
+(possession null at 5% MDE, p 0.305 / 0.944, nowhere near p < 0.025) and
+because no match-level benefit has been demonstrated. But the open question is
+now sharp and cheap, and it is a **firing-rate census**, not another battery:
+count what fraction of match kick plans occur within `margin` of a board. If
+that fraction is under ~25%, no `eval-pitch` battery of any affordable size can
+settle this, and the question belongs in the gym with the census beside it.
+That is the same instrument 12r needed and the same one `--at-corners` is
+building.
+
