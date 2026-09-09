@@ -233,6 +233,19 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    register the number, and ask for a shape that would look different under a
    rival.
 
+   **And a registration that names only the outcome its author expects cannot
+   report a world where more than one mechanism is live.** Two registrations
+   were made on the same number — "the crop is blinder everywhere" (expect a
+   high blind fraction) and "the crop's surviving swings are the ones that kept
+   sight" (expect a low one). They are not rivals: **both can be true at once**,
+   and any middling value would have let each author claim the number landed
+   nearer theirs. The fix is to register a **pair** rather than a verdict —
+   here, degradation `(0.636 − (1−f)·0.92)/f` and selection `(0.979 − f)`,
+   reported together and neither picked. Same family as the falsifier point
+   above, one level along: there the rule could not tell a refutation from a
+   discovery; here it could not describe a composite. Both registrations looked
+   complete on their own, which is what makes this the subtler of the two.
+
    **MDE is per-METRIC, not per-battery — so never say a battery "found
    nothing".** One 24-seed `eval-pitch` run settled `board_margin` on
    possession at an MDE of **5% of baseline** (a real null, tight enough to
