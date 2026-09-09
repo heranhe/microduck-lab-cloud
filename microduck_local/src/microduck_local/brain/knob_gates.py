@@ -21,6 +21,15 @@ mention two knobs: if acting on X requires Y, and Y's default is falsy, then
 setting X alone is a no-op. That is a real gate, not a guess — `use_color`
 falls out of it without being named here, and so does anything added later.
 
+**What this deliberately does NOT do: report "dead" knobs.** A knob that is
+never read looks like the same bug and is not one here. Scanning all 164 for a
+`p.<name>` read flags `fuse_ball`, `fuse_window` and `team_bump_stand_s` — and
+all three are live: `brain/team.py` reads them off other receivers
+(`pf.fuse_ball`, and `base.team_bump_stand_s` through a `replace()`), so the
+narrow regex is the bug, not the code. A deadness report would have been wrong
+on its first three hits, and a check that is wrong early is a check that gets
+deleted. Only gating is reported, because gating can be established.
+
 It is deliberately a WARNING and not an error. A conjunction is evidence, not
 proof (a knob may act on several paths, only one of which is gated), and this
 must never block a legitimate arm. `is_identical` remains the ground truth.

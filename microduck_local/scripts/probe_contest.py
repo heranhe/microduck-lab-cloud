@@ -96,6 +96,16 @@ def report(rows: list[dict]) -> None:
         c = sum(r[key] for r in rows)
         print(f"{label:<44}{c:>9}{100 * c / n:>8.2f}%")
     fires = sum(r["contesting"] for r in rows)
+    if not fires:
+        print("\n!! THE RULE NEVER FIRED. That is a BROKEN MEASUREMENT, not a result of"
+              "\n   0%. Before believing it, check the thing being measured could have"
+              "\n   moved at all: is the arm's gate set (`use_color=1` — see"
+              "\n   brain/knob_gates.py), is MICRODUCK_CHASE set BEFORE the brain imports"
+              "\n   (brain_kwargs reads ChaseParams.from_env() at construction), and are"
+              "\n   the ducks it needs actually on the pitch (--per-side >= 2)?"
+              "\n   A zero from a probe that could not have seen a non-zero reads exactly"
+              "\n   like a profound finding, which is how it gets published.")
+        return
     print(f"\nThe contest rule acts on {100 * fires / n:.2f}% of duck-ticks."
           "\nA whole-match average cannot move on a population this size whatever the"
           "\nrule does when it fires — which is what a null on ballAdvance was always"

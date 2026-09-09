@@ -216,3 +216,37 @@ def test_probe_contest_sets_the_arm_before_importing_the_brain():
     assert (src_text.index("MICRODUCK_CHASE")
             < src_text.index("from microduck_local.brain import")), \
         "the arm is set after the brain import -- it will not reach the brain"
+
+
+def test_a_probe_that_never_saw_the_rule_fire_refuses_to_report_a_zero(capsys):
+    """microduck-62's generalisation of rule 0, made mechanical: a zero from a
+    measurement that could not have produced a non-zero reads exactly like a
+    profound finding. `probe_contest.report` must say BROKEN, not 0.00%."""
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
+    from probe_contest import report
+
+    rows = [{"sees_ball": 1, "sees_opp": 1, "both": 1, "opp_close": 0,
+             "contesting": 0} for _ in range(100)]
+    report(rows)
+    out = capsys.readouterr().out
+    assert "BROKEN MEASUREMENT" in out
+    assert "use_color=1" in out
+    assert "acts on 0.00% of duck-ticks" not in out
+
+
+def test_a_probe_that_did_see_it_fire_reports_the_share(capsys):
+    """And the guard must not swallow a real, small population -- 0.07% is the
+    finding, not an error."""
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
+    from probe_contest import report
+
+    rows = [{"sees_ball": 1, "sees_opp": 1, "both": 1, "opp_close": 1,
+             "contesting": i < 7} for i in range(10_000)]
+    report(rows)
+    out = capsys.readouterr().out
+    assert "BROKEN MEASUREMENT" not in out
+    assert "0.07% of duck-ticks" in out

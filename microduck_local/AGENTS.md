@@ -182,6 +182,29 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    of the run cannot move a whole-match average, whatever it does when it
    fires (that measurement is what closed item 12h's ball-memory arm).
 
+6. **Before believing a null, check the thing you measured COULD have moved.**
+   Three failures in this repo share one shape — a measurement that was never
+   able to produce the answer it then reported, in the language of a result:
+   - **A gated knob.** `contest_margin=0.15` ran a 16-seed contested gym and
+     reproduced the baseline episode for episode; the rule is gated on
+     `use_color`, which ships `False`. `brain/knob_gates.py` warns before the
+     battery, `kick_gym.is_identical` catches it after.
+   - **A shadowed knob.** `gaze_bearing_max` was a live knob with a hard-coded
+     `0.6` in the gate it names. No static analysis sees that; only
+     `is_identical` does.
+   - **The wrong subject.** A post-clamp measured as a no-op — against the
+     STRIKER, whose post was already clear. The DEFENDER's post lands four
+     centimetres inside the board. The knob was right and the subject was not.
+   - **A probe that forgets its own gate** reports 0% and reads as a profound
+     finding. `scripts/probe_contest.py` refuses to present zero firings as a
+     result for exactly this reason, and two tests hold its gate above its
+     brain imports.
+
+   The cheap general defence is a **positive control**: show the measurement
+   producing a NON-zero on something you already believe, before you quote a
+   zero. Rule 0's "a knob that changes nothing is broken, not null" is this
+   rule for knobs; this is it for probes, subjects and populations too.
+
 3. **Confirm on seeds the effect was NOT found on.** A "confirmation" that
    re-uses the discovery seeds is not one. A poacher supporter scored 10
    goals against 3 over four seeds and 21 against 12 over twelve - the
