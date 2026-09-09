@@ -406,6 +406,34 @@ first; a direct knob sweep catches the third and fourth. A parse-and-import
 gate proves the file is a program. It does not prove the program is the one
 you wrote.
 
+### Mark a number that a reconstruction produced, not a call
+
+A reconstruction and a measurement look identical once written down — that is
+the failure, not the reconstructing. Three instances in one evening, and in
+each the reader could not have told without being told:
+
+- A probe re-derived a clamped target by calling the method again, and reported
+  a 7.56% firing rate that a direct sweep showed was **zero**.
+- A truth table extended by rebuilding a spot calculation from the source got
+  one cell wrong (the foot selection ignored `rel` and the hysteresis). Real
+  calls to the same function were correct in the same message.
+- A dilution figure computed with correct arithmetic on a **guessed** constant
+  (a draw's lower bound taken as 0.055; the ball radius makes it 0.045) came
+  out 40.8% against a measured 39.2%.
+
+The third is the one to watch: real maths on an assumed input reads exactly
+like a measurement, and is the easiest to produce by accident.
+
+**The convention:** a bare number is one the real code path produced. Anything
+recomputed, re-derived, or rebuilt from reading the source is marked inline —
+`[reconstructed]`, `[assumed input]` — so a reader can weight it without having
+to ask. It costs a word and it removes the whole class, because the reader no
+longer has to trust that the writer noticed.
+
+If the reconstruction and the call disagree, **the call wins**, and the
+reconstruction is the thing to throw away. See also: when a probe and a direct
+sweep disagree, the sweep wins.
+
 ### Every mechanical check here was wrong on first contact
 
 Worth knowing before you trust a new one — over a single day: a `pgrep`
