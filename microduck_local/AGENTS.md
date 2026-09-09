@@ -339,9 +339,14 @@ reproduces once and then passes a minute later, which is the signature.
 
 So there is no "the pool already imported it, therefore I am safe" window.
 
-**The fix is structural: write atomically.** Temp file in the same directory,
-then `os.replace`, which is atomic — a spawning worker opens either the whole
-old file or the whole new one, never a prefix:
+**The fix is structural, and this repo already does it one module over.**
+`contract.py:161-163` writes the generated ball scene through a temp file and
+`os.replace`, with the comment *"atomic: a worker never reads a half-written
+scene"* — it got that in a code review the same morning, for this exact
+failure with vec-env workers. So this is not a new commandment, it is a rule
+the codebase applies in one place and needs everywhere. Temp file in the same
+directory, then `os.replace`, which is atomic — a spawning worker opens either
+the whole old file or the whole new one, never a prefix:
 
 ```python
 fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
@@ -350,10 +355,14 @@ with os.fdopen(fd, "w") as fh:
 os.replace(tmp, path)
 ```
 
-This beats coordination because it does not depend on anyone remembering. Keep
-the protocol as the second line, since atomicity does not stop two workers
-loading *different* versions either side of an edit: before touching `brain/`
-or `world/`, check what is running —
+This beats coordination because it does not depend on anyone remembering.
+
+**But atomicity fixes the TORN read, not the SPLIT one.** Workers that start
+either side of an `os.replace` load two different *whole* versions, and the
+battery is then measuring two programs and averaging them. Nothing in the
+output says so. That is what the process check is for, and it is why it stays
+after the writes are atomic — **do not delete it as redundant.** Before
+touching `brain/` or `world/`, check what is running —
 
 ```bash
 pgrep -fl python | grep -E '^[0-9]+ .*(kick_gym|eval_pitch|eval_striker|probe_)'
@@ -372,6 +381,42 @@ the drivers AND their spawned workers — read it, do not count it.)
 
 — and treat those modules as owned by whichever battery is live, not by a
 session. **The unit of ownership is the import graph, not the file.**
+
+### Before believing an EDIT, check the thing you changed is the thing you meant
+
+The companion to "before believing a null, check the thing you measured could
+have moved". Same defect, one on the measuring side and one on the writing
+side. Four instances in one day, all of which parsed, imported and passed
+`precommit.sh`:
+
+- An anchored edit landed on **`Follow.step` instead of `Chase.step`** —
+  identical signatures. That brain then raised `AttributeError` every tick.
+- Inserting a class above `class ChaseParams:` put it **between
+  `@dataclass(frozen=True)` and the class it decorates**. The new class became
+  the dataclass; `ChaseParams` silently lost all 164 fields.
+- A probe **re-entered** the method it measured and reported a 7.56% firing
+  rate that a direct sweep showed was zero.
+- A knob was measured against **the wrong subject** (the striker, whose post
+  was already clear) and reported as a no-op.
+
+The check that catches all four is embarrassingly cheap and needs no tooling:
+**construct the object and call the method.** `is_dataclass(X)` and
+`len(fields(X))` catch the second in one line; `Follow().step(...)` catches the
+first; a direct knob sweep catches the third and fourth. A parse-and-import
+gate proves the file is a program. It does not prove the program is the one
+you wrote.
+
+### Every mechanical check here was wrong on first contact
+
+Worth knowing before you trust a new one — over a single day: a `pgrep`
+recipe that matched its own shell, two drafts of the atomic-write check in
+this very section, a knob-gate analysis that read gating symmetrically and
+reported backwards, a re-entry probe that corrupted its subject, a post-clamp
+measured on the wrong duck. **Every one looked right.** The ones that survived
+did so because something *independent* contradicted them — a direct sweep
+against a probe, a live battery against a process check, a worked example
+against an analysis — never because they read well. Budget for the second,
+independent measurement; it is the one that does the work.
 
 ## Before you commit: `./scripts/precommit.sh` (1 second)
 
