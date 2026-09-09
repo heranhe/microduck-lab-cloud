@@ -6651,3 +6651,54 @@ brief rests on does not hinge on its exact value.
 gate that is off because the camera cannot see; the fix is the camera, which is
 what 12u now supports on possession and ball advance. If the replacement ships,
 the whiff work starts paying what the sim says it should.
+
+### 12x. The camera question, consolidated — what is supported, what is not, and what decides it (2026-09-09)
+
+Items 12n, 12u and 12w each registered a metric, ran a block and wrote a
+verdict. A reader arriving at the camera question should not have to assemble
+one conclusion out of three registrations. This is that assembly and nothing
+new; every number below is cited to the item that measured it.
+
+**SUPPORTED AND MEASURED — three independent routes.** *The sim overstates the
+robot, consistently and in the same direction, and the camera is the largest
+single cause.*
+
+| route | finding | where |
+|---|---|---|
+| the soccer ledger | possession −4.84 s/min on the crop, +3.08 on the replacement, both replicated on fresh pre-registered seeds | **12u** |
+| tidy | the same caveat, recorded earlier and independently | §3c |
+| the whiff work | whiff **63.6%** on the crop against **34.5%** on the sim camera, z = 11.84 | **12w** |
+
+**SUPPORTED AND NARROW — the mechanism, stated at exactly the width the evidence
+reaches.** *The camera never contributes at the instant of the swing — the duck
+is blind by then, by design. It determines how good the last sighting was, and
+every swing, seen or blind, flies on that.* Two neighbouring statements are
+wrong and both are tempting: "a wider camera lets the duck see the ball as it
+kicks" (contradicted — gate-ON swings are 97.9% blind in both arms) and "the
+camera only helps upstream, so the swing is camera-independent" (too strong —
+blind is not information-free). **12w.**
+
+**EXPLAINED BUT NOT MEASURED.** Why the replacement's ~42% fewer swings does not
+hurt: the gate declines the bad ones (+32% connected kicks from 19% fewer
+swings). That is a **gym** result at `--at-boards 1.00` and has not been shown in
+a match. Anyone quoting the possession gain should know the swing count moves
+too, and that we have explained rather than measured why it is acceptable.
+**12u.**
+
+**OPEN.** Why the crop's gate benefit lands at 0.396 — below even the collapsed
+0.71 prior — rather than at it. The blind-swing inference narrows this but does
+not close it. **12w.**
+
+**GATING EVERYTHING, AND NOT OURS TO SETTLE.** The replacement's case rests
+entirely on a **640 px** input; the uncalibrated 320 px arm was the weaker one
+throughout. `docs/camera-hardware.md` §5.1 — what the NPU actually sustains — is
+unanswered. **If 640 px is not sustainable the calibrated 116 × 60 arm is not an
+option, and the comparison is between the crop and something that does not
+exist.** That hardware question decides whether there is a recommendation to
+make, and it matters more than any effect size in this document.
+
+**What this does NOT say**, because the temptation is obvious: no specific
+improvement figure transfers. Item 12a's whiff 47% → 36% is a sim result; the
+same brain sits at 63.6% on the crop and the gate recovers ~40% of what it
+recovers in the sim. The supported claim is directional and mechanistic — the
+sim is optimistic, the camera is why — not a promise of a number on hardware.
