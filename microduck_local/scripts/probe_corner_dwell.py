@@ -45,7 +45,7 @@ import numpy as np
 
 from microduck_local.brain import REGISTRY, Senses
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
-from microduck_local.brain.team import brain_kwargs, kickoff_brains
+from microduck_local.brain.team import brain_kwargs, kickoff_brains, throw_in_brains
 from microduck_local.sensors import DetectorSpec
 from microduck_local.world import World, make_pitch
 
@@ -53,6 +53,7 @@ CORNER = 0.30       # within this of BOTH boards: a corner (probe_board_census's
 WALL = 0.30         # within this of ONE board and not a corner: a flat board
 GAP_S = 0.5         # leave for longer than this and the next entry is a NEW visit
 STUCK_M, STUCK_DEG, STUCK_AGE = 0.35, 35.0, 0.3      # 12m's stuck-at-a-board definition
+BALL_OUT_S, GETUP_S = 5.0, 5.0   # world_server.PITCH_BALL_OUT_S / PITCH_GETUP_S: the LAB's pitch
 
 
 def facing_board(x: float, y: float, yaw: float, hx: float, hy: float) -> float:
@@ -90,15 +91,22 @@ class Visits:
 
 
 def run(seed: int, seconds: float, per_side: int, rows: list) -> dict:
+    """One run under THE LAB'S physics, not the benchmark's: the /sim page is
+    what the observation came from, so `ball_out_s`, the get-up and the
+    throw-in belief reset are all the world_server's (PITCH_BALL_OUT_S,
+    PITCH_GETUP_S, throw_in_brains). eval-pitch's defaults differ and would
+    measure a different pitch."""
     sc = make_pitch(per_side=per_side, formation=True)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
-    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, ball_out_s=5.0)
+    getup = onnx_infer(POLICIES_DIR / "alpha_stand.onnx")
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed,
+              ball_out_s=BALL_OUT_S, getup_s=GETUP_S, getup_infer=getup)
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
     hx, hy = w.scenario.floor[0] / 2 - 0.25, w.scenario.floor[1] / 2 - 0.25
     tally: dict = defaultdict(float)
     visits = {did: {"corner": Visits(), "flat": Visits()} for did in brains}
-    goal_seq = 0
+    goal_seq, out_seq = 0, w.ball_out_seq
     dt = w.scenario.dt if hasattr(w.scenario, "dt") else None
     while w.t < seconds:
         for did, b in brains.items():
@@ -121,33 +129,73 @@ def run(seed: int, seconds: float, per_side: int, rows: list) -> dict:
             visits[did]["corner"].tick(w.t, corner)
             visits[did]["flat"].tick(w.t, flat)
 
+            # THE BALL's sighting age, from the brain's own tracker. Using the
+            # freshness of the last detection FRAME instead reads 0% blind
+            # forever: a frame with no ball in it is still a fresh frame, and
+            # the detector produces one every tick. That bug returned exactly
+            # 0.0 s for 12m's stuck definition -- a zero from a question not
+            # asked, which is the failure 12o is a monument to.
+            trk = b.tracker.best(b.p.target_cls, t=w.t, min_hits=1)
+            ball_age = None if trk is None else trk.age(w.t)
+            blind = ball_age is None or ball_age > STUCK_AGE
             tally["ticks"] += 1
+            # THE MECHANISM ITSELF, which fires thousands of times where a
+            # 100 s corner visit fires five: a supporter with NO ball belief
+            # (`_support`'s early return -- `post` is None exactly then)
+            # standing within 0.30 m of a board. That is the state the trap is
+            # made of, and unlike the visit lengths it is not a rare event, so
+            # it is the arm with the power. `stranded_corner` is the same thing
+            # with two boards instead of one.
+            # NOT `b.post is None`: `support_home` sets a post in exactly this
+            # branch, so that test reads 0% under the fix and measures the
+            # fix's own bookkeeping rather than the duck (12o's failure 3,
+            # "measured through the fix"). Recompute the belief the way
+            # `_support` does instead -- own track within `lost_s`, else the
+            # team board's led ball -- which is true of both arms.
+            believes = (trk is not None and ball_age is not None and ball_age < b.p.lost_s) or (
+                b.team is not None and b.team.led_ball(w.t) is not None)
+            if b.state in ("support", "wait") and not believes:
+                tally["noball_support"] += 1
+                if corner or flat:
+                    tally["stranded"] += 1
+                if corner:
+                    tally["stranded_corner"] += 1
             if corner:
                 tally["corner_ticks"] += 1
                 tally[f"state/{b.state}"] += 1
                 bxy = w.ball_xy()
                 if bxy is not None and math.hypot(bxy[0] - x, bxy[1] - y) < 0.5:
                     tally["corner_ball_near"] += 1
-                age = None if det is None else w.t - det.t
-                if age is None or age > STUCK_AGE:
+                if blind:
                     tally["corner_blind"] += 1
+                # Is a POST what put it here? `post` is where a supporter is
+                # holding; if the post is in the corner too, the duck was SENT.
+                if b.post is not None:
+                    px, py = float(b.post[0]), float(b.post[1])
+                    tally["corner_posted"] += 1
+                    if (hx - abs(px)) < CORNER and (hy - abs(py)) < CORNER:
+                        tally["corner_post_in_corner"] += 1
+                    if min(hx - abs(px), hy - abs(py)) < 0.0:
+                        tally["corner_post_outside"] += 1
             if flat:
                 tally["flat_ticks"] += 1
             # 12m's own definition, re-measured verbatim so the two are comparable
-            if min(near_x, near_y) < STUCK_M and facing_board(x, y, yaw, hx, hy) < math.radians(STUCK_DEG):
-                age = None if det is None else w.t - det.t
-                if age is None or age > STUCK_AGE:
-                    tally["stuck12m_ticks"] += 1
+            if min(near_x, near_y) < STUCK_M and facing_board(x, y, yaw, hx, hy) < math.radians(STUCK_DEG) and blind:
+                tally["stuck12m_ticks"] += 1
         w.step()
         if w.goal_seq != goal_seq:
             goal_seq = w.goal_seq
             kickoff_brains(brains, teams, w)
+        if w.ball_out_seq != out_seq:          # the referee moved it: drop stale ball beliefs (12s)
+            out_seq = w.ball_out_seq
+            throw_in_brains(brains, teams)
     for did, v in visits.items():
         for where, vv in v.items():
             vv.close()
             for dur in vv.done:
                 rows.append({"seed": seed, "duck": did, "where": where, "seconds": round(dur, 3)})
     tally["duck_seconds"] = len(brains) * w.t
+    tally["_hx"], tally["_hy"] = hx, hy
     tally["_dt"] = w.t / max(1.0, tally["ticks"] / len(brains))
     return tally
 
@@ -159,17 +207,41 @@ def report(t: dict, rows: list, seconds: float, seeds: int) -> None:
         print("!! no duck-seconds: broken run")
         return
     print(f"\n{ds:.0f} duck-seconds ({seeds} seeds x {seconds:.0f} s), tick {dt * 1000:.0f} ms")
-    print(f"\n  TIME, as seconds per duck per 180 s run (12m's unit)")
-    for k, label in (("corner_ticks", "in a CORNER (< 0.30 m of both boards)"),
-                     ("flat_ticks", "at a FLAT board (< 0.30 m, not a corner)"),
-                     ("stuck12m_ticks", "12m 'stuck': < 0.35 m, facing it, blind > 0.3 s")):
+    # THE CONTROL THAT DECIDES HOW TO READ THESE. A 0.30 m band round a
+    # 3.4 x 2.85 pitch is a THIRD of its area, so a duck wandering at random
+    # is "at a board" a third of the time. Without this line 17% reads as a
+    # pathology when it is under chance. (Corner = four 0.30 m squares.)
+    hx, hy = t.get("_hx", 0.0) / max(1, seeds), t.get("_hy", 0.0) / max(1, seeds)
+    area = (2 * hx) * (2 * hy)
+    corner_share = 4 * CORNER * CORNER / area if area else 0.0
+    band_share = (area - (2 * hx - 2 * WALL) * (2 * hy - 2 * WALL)) / area if area else 0.0
+    print(f"\n  TIME, as seconds per duck per 180 s run (12m's unit)"
+          f"   [chance = uniform wandering on a {2 * hx:.2f} x {2 * hy:.2f} m pitch]")
+    for k, label, chance in (
+            ("corner_ticks", "in a CORNER (< 0.30 m of both boards)", corner_share),
+            ("flat_ticks", "at a FLAT board (< 0.30 m, not a corner)", band_share - corner_share),
+            ("stuck12m_ticks", "12m 'stuck': < 0.35 m, facing it, ball unseen > 0.3 s", None)):
         secs = t.get(k, 0.0) * dt
-        print(f"    {label:<52} {secs / ds * 180:>6.1f} s   ({100 * secs / ds:.1f}% of the time)")
+        pct = 100 * secs / ds
+        tail = "" if chance is None else f"   chance {100 * chance:>4.1f}%  ->  {pct / (100 * chance):.2f}x"
+        print(f"    {label:<54} {secs / ds * 180:>6.1f} s ({pct:>4.1f}%){tail}")
+    nb, strand = t.get("noball_support", 0.0), t.get("stranded", 0.0)
+    print(f"\n  THE MECHANISM — a supporter that does not know where the ball is")
+    print(f"    no-ball support ticks                       {nb * dt / ds * 180:>6.1f} s a duck a 180 s run")
+    print(f"    ...of them, spent within 0.30 m of a board  {strand * dt / ds * 180:>6.1f} s "
+          f"({100 * strand / nb if nb else 0:.0f}% of them)   <-- the trap")
+    print(f"    ...in a CORNER (two boards)                 "
+          f"{t.get('stranded_corner', 0.0) * dt / ds * 180:>6.1f} s")
     cn = t.get("corner_ticks", 0.0)
     if cn:
         print(f"\n  WHILE IN A CORNER")
-        print(f"    ball truly within 0.5 m          {100 * t.get('corner_ball_near', 0) / cn:>5.1f}%")
-        print(f"    no detection fresher than 0.3 s  {100 * t.get('corner_blind', 0) / cn:>5.1f}%")
+        print(f"    ball truly within 0.5 m           {100 * t.get('corner_ball_near', 0) / cn:>5.1f}%")
+        print(f"    ball NOT seen for over 0.3 s      {100 * t.get('corner_blind', 0) / cn:>5.1f}%")
+        pt = t.get("corner_posted", 0)
+        print(f"    holding a post at all             {100 * pt / cn:>5.1f}%"
+              f"   of which the post is itself in the corner: "
+              f"{(100 * t.get('corner_post_in_corner', 0) / pt) if pt else 0:.0f}%"
+              f", outside the boards: {(100 * t.get('corner_post_outside', 0) / pt) if pt else 0:.0f}%")
         st = sorted(((k[6:], v) for k, v in t.items() if k.startswith("state/")),
                     key=lambda kv: -kv[1])
         print("    state: " + ", ".join(f"{k} {100 * v / cn:.0f}%" for k, v in st[:6]))
@@ -195,6 +267,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seeds", type=int, default=4)
+    ap.add_argument("--seed0", type=int, default=0, help="first seed, so runs can be sharded across cores")
     ap.add_argument("--seconds", type=float, default=180.0)
     ap.add_argument("--per-side", type=int, default=2)
     ap.add_argument("--csv", help="write one row a visit here")
@@ -205,7 +278,7 @@ def main() -> None:
           f"{spec.projection}" + (f"   [MICRODUCK_CAMERA={cam}]" if cam.strip() else "   [shipped]"))
     total: dict = defaultdict(float)
     rows: list = []
-    for s in range(a.seeds):
+    for s in range(a.seed0, a.seed0 + a.seeds):
         for k, v in run(s, a.seconds, a.per_side, rows).items():
             total[k] += v
         print(f"  seed {s} done ({len(rows)} visits)")

@@ -7031,3 +7031,189 @@ fitted lens is 158 px/rad and a duck at 3 m is 4.7 px — under the "sometimes
 found" floor. Every number in this section would be worse, by an amount nobody
 has measured, if the NPU cannot sustain 640. That is `camera-hardware.md` §5
 open question 1 and it is still open.
+
+
+### 12aa. The corner IS a trap, and 12m's "3.79 s a visit" was a mean over a tail — FIXED (2026-09-09)
+
+From /sim, a screenshot: a duck standing in the corner of the pitch while play
+goes on without it. 12o looked at the same complaint this morning, found the
+post geometry innocent, and left 12m's measurement standing: *"Corners are also
+not traps (3.79 s a visit against 5.17 s at a flat wall)."* **That number
+replicates and the conclusion drawn from it does not.** At 4 seeds the mean
+corner visit here is 4.06 s — 12m's figure, near enough. At **48 seeds ×
+180 s of 2v2 (34 560 duck-seconds)** the same instrument says:
+
+| corner visits, shipped | |
+|---|---|
+| visits | 35 |
+| median | **2.52 s** |
+| mean | 11.60 s |
+| p90 / p99 | 34.9 s / 100.2 s |
+| **worst single visit** | **123.8 s** |
+| visits over 30 s | 5, holding **72%** of all corner time |
+
+Two thirds of corner visits are brushes under 3 s. The other third is a duck
+that has stopped playing. **A mean over a distribution this heavy is not a
+summary of it**, and 12m's four-seed sample could not have contained the tail:
+one visit over 30 s occurs about every 7 000 duck-seconds and 12m had 2 880.
+The lesson generalises past this item — *report the tail whenever the complaint
+is about a rare event, because the statistic that answers "does this happen"
+is never the mean.*
+
+**AND THE OCCUPANCY IS UNDER CHANCE, WHICH IS WHY THE TOTAL LOOKED FINE.** A
+0.30 m band round a 3.4 × 2.85 m pitch is 35% of its area — 31% flat board,
+3.7% corners — and the ducks are in those two 11.2% and 1.2% of the time. Every
+aggregate says the ducks avoid the boards. The pathology is entirely in the
+tail, so the aggregate was never going to find it.
+
+**THE MECHANISM, AND IT IS FOUR LINES OF `_support`.** Traced tick by tick on
+the seed that produced the 123.8 s visit (seed 30, d3): the duck sits at
+(1.60, 1.33) — **0.10 m off both boards** — from t = 56.6 s to the end of the
+run, in `support` on 92% of those ticks, with the ball **0.53 m away and
+unseen**. `_support`'s no-ball branch is the whole story:
+
+    if bxy is None:
+        self.state = "wait" if self._kickoff_wait else "support"
+        vx, _, wz = turn(1.0, cold)        # nobody has it: look for it
+        return vx, wz
+
+A supporter that does not know where the ball is **turns on the spot, wherever
+it happens to be standing, for as long as the ball stays lost.** That is a
+search in open field and cannot be one against the boards, where the whole view
+IS board — so the duck is blind *because* it is in the corner and stays in the
+corner *because* it is blind. Nothing in the branch ever moves it.
+
+**And the escape that exists cannot fire.** The anti-stuck rule
+(`controllers.py`, `stuck_s`) runs only in `avoid` / `blocked` / `yield` and
+additionally requires under 0.05 m of travel **and under 0.3 rad of yaw change**
+over 1.5 s. The trapped duck is in `support` and is *turning*. **The one rule
+written to get a duck out of a corner is structurally blind to the one
+behaviour that puts it there** — it tests for a duck that has stopped, and this
+duck has not stopped, it is pirouetting.
+
+**TWO HYPOTHESES KILLED FIRST, both with their own controls, because both were
+more plausible than the answer.**
+
+1. **The re-plan loop.** `lineup` times out after `lineup_s` = 4 s into
+   `search`, and the next tick re-plans and re-enters `lineup` with nothing
+   remembering the failure — a 4 s cycle that should run forever. Measured over
+   48 seeds: **292 line-up timeouts in the whole battery** (8 with the ball in a
+   corner), of which **11% re-plan within 5 cm of the spot that just failed**.
+   Real, and far too rare to be a 124 s visit.
+2. **The duck besieging the ball and blocking the referee.** `_check_ball_out`
+   returns a ball to play after 5 s at rest by the boards, and *any* tick over
+   0.05 m/s resets that timer — so a duck nudging the ball should be able to
+   suppress the throw-in indefinitely. Measured: **89% of the 165 sieges end in
+   a throw-in**, all 9 of those over 10 s do, the longest siege is 16 s, and the
+   control kills it outright — the ball is moving on **16%** of ticks with a
+   duck within 0.25 m and **19%** of ticks with no duck near it. The duck is
+   not the cause; if anything it settles the ball.
+
+The second is why the duck's 124 s and the ball's 16 s are different quantities:
+**the duck is not stuck ON the ball. It is stuck where the ball used to be.**
+
+**THE FIX IS A TRIGGER, NOT A BEHAVIOUR** (`support_unstick_s`, **shipped at
+0.0 — off — pending the falls question below**; `support_unstick_m` 0.30 m).
+`support_unstick_s` seconds of supporting closer
+than `support_unstick_m` to a board fires **the retreat the brain already has**
+— `retreat_turn_s` then walk, already tuned, already third in the priority
+chain. Only its trigger was missing. `support_unstick_m` sits under
+`support_margin` (0.35), so a duck on a legitimately clamped post is never
+inside the zone; only one deeper than any post can reach fires it.
+
+| 48 seeds × 180 s, 2v2 | shipped | `support_unstick_s` 2.0 |
+|---|---|---|
+| **worst corner visit** | **123.8 s** | **14.0 s** |
+| corner p99 | 100.2 s | 13.6 s |
+| corner visits over 30 s | **5** | **0** |
+| corner time a duck a run | 2.1 s | 0.9 s |
+| **worst flat-board visit** | 68.4 s | 41.8 s |
+| flat-board visits over 30 s | 20 | 6 |
+| flat-board time a duck a run | 20.1 s | **16.7 s** (paired t = −2.33, 47 df) |
+
+**No duck in 48 runs spends more than 14 s in a corner**, against five visits
+over 30 s and one over two minutes. The flat-board reduction is the one figure
+here with a conventional p (≈ 0.02 paired); the corner figures are the tail
+being removed, and the corner *mean* moves at t = −1.80 because 22 of 48 seeds
+have no corner time at all. Quote the maximum and the over-30 s count, which is
+what the complaint was about — not the mean, which is the statistic that hid
+this for a day.
+
+**TWO EARLIER VERSIONS OF THE FIX, both kept in the code comment because each
+failed usefully.**
+
+1. **Walk to the post instead of retreating.** Got out in 28 s rather than 0–9,
+   because a supporter facing a board has `tof_stop` zero its forward command
+   and — in `support` specifically — its turn as well, so it servos into a wall
+   it cannot walk through. **The retreat turns first**, which is exactly why the
+   existing escape is the right one to reach for and a new one beside it was
+   wrong.
+2. **Do it whenever the ball is unknown, with no place or time gate.** Cut the
+   trap just as well and moved every supporter on the pitch: **+4.8 s a run of
+   time with no ball belief (t = 4.2) for no measurable change in board time**.
+   A policy change wearing a bug fix's clothes.
+
+**And a third version that was bit-identical to shipped**, which is the
+instructive one: the gate clocked *how long the duck had gone without a ball
+belief*. The belief **flickers** — the trapped duck had one on 29% of ticks,
+interleaved — so a clock any sighting resets never reaches any threshold at all.
+The clock is on **where the duck is standing**, which does not flicker.
+
+**AN INSTRUMENT THAT MEASURED THROUGH ITS OWN FIX, caught by a control.** The
+census counted the trapped state as `state == "support" and post is None`,
+because `_support` sets no post in the no-ball branch. The first fix sets one
+there — so the counter read **exactly 0.00** under the fix and would have been
+published as a 100% reduction. That is 12o's failure 3 reproduced within a day
+of it being written down. The fix is to recompute the condition from the brain's
+own inputs (its tracker and the team board), which is true of both arms.
+
+**ONE MORE, FROM THE SAME BATTERY AND UNTOUCHED BY THIS FIX.** The reachability
+failure 12v measured in `kick_gym` is confirmed at match scale, in a match:
+
+| the ball is | kick plans | spot the body cannot occupy | spot inside a board |
+|---|---|---|---|
+| in open play | 148 727 | 3.6% | 1.1% |
+| at a flat board | 38 526 | **40.9%** | **9.6%** |
+| in a corner | 1 869 | **66.8%** | 3.4% |
+
+**Two in five kick plans laid against a board put the spot where the duck's
+body (0.129 m) cannot stand, and one in ten puts it inside the board.** That is
+12v's "should the planner be allowed to plan somewhere the robot cannot stand"
+with a match-sized denominator behind it, and it is still open: the fix here
+gets the duck out of the corner, it does not make the ball in the corner
+playable. 12v's design note — reachability as a constraint in `kickselect`
+rather than a rescue in `_hold_target` — remains the next item, and this table
+is the size of the prize.
+
+**THE LEDGER IS FLAT ON PLAY AND FLAGS FALLS, WHICH IS WHY IT SHIPS OFF.**
+`eval-pitch --per-side 2`, 24 seeds x 180 s, paired (`scripts/compare_pitch.py`):
+
+| | shipped | unstick 2.0 | |
+|---|---|---|---|
+| possession | 32.80 | 32.11 s/min | null, MDE 12% |
+| spread / crowd / depth | | | null |
+| ballAdvance | 0.435 | 0.432 m/min | NO RESULT (MDE 20%) |
+| goals (events) | 4 | 3 | unreachable — 3 322 seeds for 10% |
+| **falls (events)** | **0** | **4** | see below |
+
+Nothing in the positional ledger moves. **The falls do**: 0 against 4, on four
+different seeds and three different ducks, none repeated. Read it carefully —
+the per-seed t gives p = 0.043, but the right test for four events split 0/4 is
+the exact binomial, **p = 0.125 two-sided**, and that is not a result. What
+makes it worth respecting anyway is that the MECHANISM is plausible and already
+written down in this file: the retreat turns and then walks near a board, and
+11b's note says every remaining fall it chased was *"a line-up walking into a
+wall or a kicked turn creeping into one"*. A rule that deliberately drives
+ducks off the boards is the rule most likely to find that failure.
+
+So the knob is built, measured, documented and **left off** until a battery
+with the events to settle it says otherwise — 96 seeds an arm is running as
+this is written. Turning it on is one number, and the corner table above is
+what it buys.
+
+**Instruments:** `scripts/probe_corner_dwell.py` (visit distribution, the
+chance-level control, `--csv` per visit) and `scripts/probe_board_livelock.py`
+(spot reachability, the re-plan loop, the siege and its no-duck control). Both
+run the LAB's pitch — `PITCH_BALL_OUT_S`, the get-up and `throw_in_brains` —
+because that is where the observation came from; `eval-pitch`'s defaults are a
+different pitch and would have measured a different thing.

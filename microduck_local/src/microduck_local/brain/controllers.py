@@ -1761,6 +1761,45 @@ class ChaseParams:
     # bearing turns with the body, so a duck seen a second ago still says
     # where it is) stands instead of turning in place.
     support_margin: float = 0.35
+    # THE CORNER TRAP (roadmap 12aa). `_support`'s no-ball branch is
+    # `turn(1.0, cold)` and nothing else — a search that works in open field
+    # and cannot work against the boards, where the whole view IS board. A
+    # supporter that loses the ball near a corner therefore turns there for as
+    # long as the ball stays lost: measured at 123.4 s in one corner (seed 30,
+    # d3, 0.10 m off both boards, `support` 92% of those ticks, the ball 0.53 m
+    # away and unseen throughout). It is self-reinforcing — it cannot see
+    # because it is in the corner and it stays in the corner because it cannot
+    # see — and the anti-stuck rule cannot save it: `stuck_s` runs only in
+    # `avoid`/`blocked`/`yield` and additionally wants under 0.3 rad of yaw
+    # change, so a duck SPINNING in `support` fails both of its conditions.
+    #
+    # `support_unstick_s` seconds of supporting closer than
+    # `support_unstick_m` to a board TRIGGERS THE RETREAT — the escape the
+    # brain already has and already tunes (`retreat_turn_s`, `retreat_walk_s`),
+    # reached by a trigger it was missing rather than by a second escape
+    # beside it. Measured on the seed that produced the 123.4 s visit: 0.0 s
+    # at 1 s, 4.6 s at 2 s, 8.8 s at 4 s.
+    #
+    # TWO EARLIER VERSIONS, both kept here because each failed in a way worth
+    # not repeating. Walking to the post in `_support` instead of retreating
+    # only got out in 28 s, because a supporter facing a board has `tof_stop`
+    # zero its forward command and — in `support` specifically — no turn
+    # either, so it servos into a wall it cannot walk through; the retreat
+    # turns FIRST, which is why it is the right escape. And doing it whenever
+    # the ball is unknown, with no place or time gate, cut the trap just as
+    # well but moved every supporter on the pitch: 4.8 s a run more time with
+    # no ball belief (t = 4.2) for no measurable reduction in board time — a
+    # policy change wearing a bug fix's clothes.
+    #
+    # The clock is on the DUCK'S POSITION, not on its belief: the belief
+    # flickers (the trapped duck had one on 29% of ticks, interleaved), so a
+    # clock any sighting resets never reaches a threshold at all — the first
+    # version of this rule was bit-identical to shipped for exactly that
+    # reason. `support_unstick_m` is below `support_margin`, so a duck parked
+    # on a legitimately clamped post is never inside the zone; only one deeper
+    # than any post can reach fires it. 0 disables the rule.
+    support_unstick_s: float = 0.0
+    support_unstick_m: float = 0.30
     # Where a duck with a static ROLE stands when it is not the one on the
     # ball (roadmap Track 4.3). All three are a spot to hold, not a new state
     # machine: the same `_support` servo walks to them and faces the ball.
@@ -2248,6 +2287,8 @@ class Chase:
         self._field_prev: tuple[float, float] | None = None  # the field's last spot (support_field hysteresis)
         self._kickoff_wait = False                           # standing off the other side's kickoff (kickoff_wait)
         self.post: tuple[float, float] | None = None         # where a supporter is holding, for probes and tests
+        self._noball_t0: float | None = None                 # since when this supporter has been against the boards (support_unstick_s)
+        self._noball_last: float | None = None               # …and when that clock last ran, so a gap restarts it
         self._bump_t = -1e9                                  # last contact
         self._bump_t0 = -1e9                                 # onset of the current contact episode
         self.last = (0.0, 0.0, 0.0)
@@ -3063,6 +3104,40 @@ class Chase:
                 self._poses = []
                 self._retreat_t0 = t
                 self._retreat_sign = 1.0 if left_near >= right_near else -1.0
+        # THE SAME REMEDY, ON THE TRIGGER THE RULE ABOVE CANNOT HAVE (roadmap
+        # 12aa). That one wants a still body AND a still head, in `avoid` /
+        # `blocked` / `yield`. The corner trap is neither: a supporter that
+        # cannot see the ball TURNS ON THE SPOT (`_support`'s no-ball branch is
+        # `turn(1.0, cold)` and nothing else), in `support`, forever — 123.4 s
+        # in one corner on seed 30, 0.10 m off both boards, the ball 0.53 m
+        # away and unseen. Turning is a search in open field and cannot be one
+        # against the boards, where the whole view IS board, so the duck is
+        # blind BECAUSE it is in the corner and stays there because it is
+        # blind. Escaping it is the retreat's own job; only the trigger was
+        # missing.
+        #
+        # The clock is on WHERE THE DUCK IS STANDING, not on whether it can see
+        # the ball: the belief flickers (the trapped duck had one on 29% of
+        # ticks, interleaved), so a clock reset by every momentary sighting
+        # never reaches any threshold — the first version of this rule was
+        # bit-identical to shipped for exactly that reason. `support_unstick_m`
+        # is under `support_margin`, so a duck on a legitimately clamped post
+        # never enters the zone; only one deeper than any post can reach.
+        if p.support_unstick_s > 0 and self.bounds is not None and not self._kickoff_wait \
+                and self.state in ("support", "wait"):
+            near = min(self.bounds[0] - abs(odom[0]), self.bounds[1] - abs(odom[1]))
+            if near >= p.support_unstick_m or self._noball_last is None \
+                    or t - self._noball_last > 0.5:
+                self._noball_t0 = None if near >= p.support_unstick_m else t
+            elif self._noball_t0 is None:
+                self._noball_t0 = t
+            self._noball_last = t
+            if self._noball_t0 is not None and t - self._noball_t0 >= p.support_unstick_s:
+                self._noball_t0 = None
+                self._retreat_t0 = t
+                self._retreat_sign = 1.0 if left_near >= right_near else -1.0
+        elif p.support_unstick_s > 0:
+            self._noball_t0 = None
         # A turn in place keeps the head level whatever the state asked for:
         # the walker cannot turn in place with its head down (0.2 rad in 5 s
         # against 3.1 level, measured in tidy.py). A COLD turn carries
