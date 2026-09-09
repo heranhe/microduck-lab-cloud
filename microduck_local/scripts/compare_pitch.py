@@ -8,8 +8,22 @@ Everything here is the playbook's reading rules made mechanical, because all
 four have been got wrong in this repo at least once:
 
 * **Paired, on the shared seeds only.** Both arms run the same layouts, so the
-  per-seed DIFFERENCE is the measurement and comparing two means throws away
-  most of the power. Seeds present in only one file are dropped and counted.
+  per-seed difference is the measurement. It is kept because it cannot hurt and
+  because a rarely-firing knob does keep its pairing (`t9 hunt`, r = 0.6) — but
+  do NOT expect it to buy power. Measured over all thirteen A/B batteries on
+  disk, the median between-arm correlation is r = 0.05 and the variance
+  reduction is 1.03x. The sim diverges within seconds of any knob that fires,
+  so by 300 s the two arms are effectively independent runs. The observed gain
+  is printed per metric; when it is ~1.0 the seeds bought nothing.
+  Seeds present in only one file are dropped and counted.
+
+* **A null needs its MDE or it is not a null.** Every "measured off" verdict in
+  this repo was reported as a p-value alone, and a p-value alone cannot tell
+  "no effect" from "no instrument". At the 24 seeds these batteries run, the
+  minimum detectable effect on kicks is 28% of baseline and on falls 33% — a
+  real 10% improvement is invisible BY CONSTRUCTION and reads as a null. So
+  every row prints its MDE, and a non-significant row is called `null` only
+  when the MDE is tight enough to mean it; otherwise it prints `NO RESULT`.
 * **Student's t, not 1.96.** At the sizes these batteries run, the normal
   value manufactures significance; at n = 2 it understates the interval more
   than sixfold.
@@ -102,6 +116,68 @@ def value(r: dict, field: str, how: str, side: str | None) -> float | None:
     return float(np.sum(vals) if how == "sum" else np.mean(vals))
 
 
+def _betacf(a: float, b: float, x: float) -> float:
+    """Continued fraction for the incomplete beta (Lentz).  Numerical Recipes
+    6.4; converges in tens of iterations over the range we ask of it."""
+    tiny, eps = 1e-30, 3e-16
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c, d = 1.0, 1.0 - qab * x / qap
+    d = tiny if abs(d) < tiny else d
+    d = 1.0 / d
+    h = d
+    for m in range(1, 300):
+        m2 = 2 * m
+        for num in (m * (b - m) * x / ((qam + m2) * (a + m2)),
+                    -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))):
+            d = 1.0 + num * d
+            d = tiny if abs(d) < tiny else d
+            c = 1.0 + num / c
+            c = tiny if abs(c) < tiny else c
+            d = 1.0 / d
+            h *= d * c
+        if abs(d * c - 1.0) < eps:
+            break
+    return h
+
+
+def _betainc(a: float, b: float, x: float) -> float:
+    """Regularised incomplete beta I_x(a, b)."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    lbeta = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+    front = math.exp(lbeta + a * math.log(x) + b * math.log1p(-x))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _betacf(a, b, x) / a
+    return 1.0 - front * _betacf(b, a, 1.0 - x) / b
+
+
+def t_sf(t: float, df: int) -> float:
+    """P(T > |t|) for Student's t.  Written out because scipy is NOT a
+    dependency of this workspace and never has been -- so the old fallback,
+    which took the half-width from a t-table but the p-value from `erfc` (the
+    NORMAL), is the path that computed every p-value in this repo's soccer
+    history.  That mixes two distributions: the interval and the test
+    disagreed, and the normal is anti-conservative at these sizes, which is
+    the very thing this script's own docstring warns about."""
+    if df <= 0:
+        return 1.0
+    return 0.5 * _betainc(0.5 * df, 0.5, df / (df + t * t))
+
+
+def t_ppf975(df: int) -> float:
+    """The two-sided 95% critical value, by bisection on `t_sf`."""
+    lo, hi = 0.0, 400.0
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if 2.0 * t_sf(mid, df) > 0.05:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 def paired(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float, int]:
     """(mean difference b−a, its 95% half-width, p, seeds b beat a on)."""
     d = b - a
@@ -113,17 +189,48 @@ def paired(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float, int]:
     if se == 0:
         return float(d.mean()), 0.0, 1.0 if d.mean() == 0 else 0.0, int((d > 0).sum())
     t = d.mean() / se
-    try:
-        from scipy import stats  # noqa: PLC0415
-        half, p = stats.t.ppf(0.975, n - 1) * se, 2 * stats.t.sf(abs(t), n - 1)
-    except ImportError:
-        # Student's t at 95%, by table, for the sizes these batteries run.
-        tab = {2: 12.71, 3: 4.30, 4: 3.18, 5: 2.78, 6: 2.57, 8: 2.36, 10: 2.26,
-               12: 2.20, 16: 2.13, 20: 2.09, 24: 2.07, 30: 2.05, 60: 2.00}
-        k = min(tab, key=lambda v: abs(v - (n - 1)))
-        half = tab[k] * se
-        p = math.erfc(abs(t) / math.sqrt(2))                       # normal, and say so
+    # One distribution for both, so the interval and the test agree: a
+    # difference is significant exactly when it exceeds the half-width.
+    half, p = t_ppf975(n - 1) * se, 2.0 * t_sf(abs(t), n - 1)
     return float(d.mean()), float(half), float(p), int((d > 0).sum())
+
+
+# A non-significant row is only a null if the battery could have SEEN the
+# effect it is denying.  MDE at or under this fraction of baseline is tight
+# enough to call a null; above it the honest verdict is "no result".
+TIGHT_PCT = 15.0
+
+# Metrics whose MDE has never once been under 100% of baseline on a real
+# battery — quoting a difference in them is quoting noise.  Measured over the
+# thirteen A/B batteries on disk: ballProgress needs ~21,000 seeds for 10%.
+UNQUOTABLE: frozenset[str] = frozenset({"ballProgress"})
+
+
+def pairing_gain(a: np.ndarray, b: np.ndarray) -> float:
+    """How much the shared seeds actually bought: the SD of the difference if
+    the arms were independent, over its real SD.  1.0 = the pairing is
+    decorative, which is what this harness measures on nearly every battery."""
+    sd_d = (b - a).std(ddof=1)
+    if sd_d == 0 or len(a) < 2:
+        return 1.0
+    return float(math.sqrt(a.var(ddof=1) + b.var(ddof=1)) / sd_d)
+
+
+def verdict(p: float, mde_pct: float, tight: float = TIGHT_PCT) -> str:
+    """`effect`, `null`, or `NO RESULT` — never `null` for a battery too small
+    to have resolved the effect it is denying."""
+    if p < 0.05:
+        return "effect"
+    return "null" if mde_pct <= tight else "NO RESULT"
+
+
+def seeds_for(half: float, n: int, base: float, target_pct: float = 10.0) -> int:
+    """Seeds needed to resolve `target_pct` of baseline, from this battery's
+    own spread.  MDE scales as 1/sqrt(n), so n scales as (MDE/target)^2."""
+    want = abs(base) * target_pct / 100.0
+    if want <= 0 or half <= 0 or not math.isfinite(half):
+        return 0
+    return max(2, math.ceil(n * (half / want) ** 2))
 
 
 def two_proportions(x1: int, n1: int, x2: int, n2: int) -> tuple[float, float]:
@@ -145,6 +252,11 @@ def main() -> None:
     ap.add_argument("--side", choices=("home", "away"), default=None,
                     help="read ONE side (an asymmetric roster A/B) instead of pooling both teams")
     ap.add_argument("--label", nargs=2, metavar=("A", "B"), default=None)
+    ap.add_argument("--tight-pct", type=float, default=TIGHT_PCT,
+                    help="MDE (%% of baseline) at or under which a non-significant row is a "
+                         "real null rather than NO RESULT (default: %(default)s)")
+    ap.add_argument("--target-pct", type=float, default=10.0,
+                    help="the effect size the footer sizes a battery for (default: %(default)s%%)")
     args = ap.parse_args()
     A, B = load(args.a), load(args.b)
     seeds = sorted(set(A) & set(B))
@@ -153,7 +265,9 @@ def main() -> None:
     side = f" · side {args.side}" if args.side else ""
     print(f"{lb} against {la}: {len(seeds)} shared seeds{side}"
           + (f" ({dropped} seed(s) in only one file, dropped)" if dropped else ""))
-    print(f"\n{'metric':<14}{la[:11]:>11}{lb[:11]:>11}{'Δ':>9}{'95%':>9}{'p':>8}{'up':>6}")
+    print(f"\n{'metric':<14}{la[:10]:>10}{lb[:10]:>10}{'Δ':>9}{'±MDE':>8}"
+          f"{'MDE%':>7}{'p':>7}{'pair':>6}  verdict")
+    thin: list[tuple[str, int]] = []
     for field, how, unit in (("goals", "", ""), ("falls", "", "")) + FIELDS:
         how = how or "sum"
         va = [value(A[s], field, how, args.side) for s in seeds]
@@ -163,9 +277,32 @@ def main() -> None:
             continue
         x, y = np.array([va[i] for i in keep]), np.array([vb[i] for i in keep])
         d, half, p, up = paired(x, y)
-        star = "  ←" if p < 0.05 else ""
-        print(f"{field:<14}{x.mean():>11.3f}{y.mean():>11.3f}{d:>+9.3f}{half:>9.3f}{p:>8.3f}"
-              f"{up:>4}/{len(keep)}{star}   {unit}")
+        # The 95% half-width IS the minimum detectable effect: a difference is
+        # significant exactly when it exceeds it.  It was always printed here
+        # and never read as one, which is how underpowered batteries came to be
+        # written up as nulls.
+        base = abs(x.mean())
+        pct = 100.0 * half / base if base else float("inf")
+        v = verdict(p, pct, args.tight_pct)
+        if field in UNQUOTABLE:
+            v = "unquotable"
+        elif v == "NO RESULT":
+            thin.append((field, seeds_for(half, len(keep), base, args.target_pct)))
+        mark = "  ←" if v == "effect" else ""
+        pc = "  inf" if not math.isfinite(pct) else f"{pct:>5.0f}%"
+        print(f"{field:<14}{x.mean():>10.3f}{y.mean():>10.3f}{d:>+9.3f}{half:>8.3f}"
+              f"{pc:>7}{p:>7.3f}{pairing_gain(x, y):>5.2f}x  {v}{mark}   {unit}")
+
+    if thin:
+        print(f"\n{len(thin)} metric(s) returned NO RESULT — the battery could not have seen"
+              f"\na {args.target_pct:.0f}% change, so it is not evidence of one being absent."
+              f"\nSeeds that would resolve {args.target_pct:.0f}% of baseline, from this battery's own spread:")
+        for field, n_need in sorted(thin, key=lambda t: t[1]):
+            print(f"  {field:<14}{n_need:>7} seeds"
+                  + ("   (unreachable — use a per-event metric or the gym)" if n_need > 400 else ""))
+    if any(f in UNQUOTABLE for f, _, _ in FIELDS):
+        print(f"\nunquotable: {', '.join(sorted(UNQUOTABLE))} — MDE has never been under"
+              f" 100% of baseline on a real battery here. Do not quote a difference in it.")
     print("\nevents (totals over the shared seeds):")
     for field, label in COUNTS:
         ta = sum(value(A[s], field, "sum", args.side) or 0 for s in seeds)

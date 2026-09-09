@@ -153,15 +153,53 @@ and later reversed; several "measured off" verdicts turned out to be noise.
    something on goals at 8 seeds, you are about to decide it on nothing.
    `eval-pitch` prints `ballAdvance` (the discriminator) and `possession`
    (the cheap screen); goals stay reported and are not the judge.
+3. **A null needs its MDE, or it is not a null — it is "no result".** This
+   is the rule that cost the most: a whole run of soccer knobs was written up
+   as "measured off" on p-values alone, from batteries that could never have
+   seen the effect being denied. At the 24 seeds these run, the minimum
+   detectable effect is **28% of baseline on kicks, 33% on falls, 19% on ball
+   advance, 48% on goals** — so a real 10% improvement is invisible BY
+   CONSTRUCTION and comes out as a null. The MDE was on screen the whole
+   time: it is the 95% half-width, which the table always printed and nobody
+   read as one (a difference is significant exactly when it exceeds it).
+   `compare_pitch.py` now prints it as a percentage of baseline and calls a
+   non-significant row `null` only when the MDE is tight enough to mean it;
+   otherwise it prints `NO RESULT` and the seeds that would settle it. Never
+   write "measured off" against a `NO RESULT`.
+
+4. **`ballProgress` is not quotable.** Its MDE has never once been under
+   100% of baseline on a real battery; the median seed budget for a 10%
+   change is ~21,000. It is printed for shape only. Differences in it have
+   been quoted in this repo and none of them meant anything.
+
+5. **Match the instrument to the event you are studying.** Measured cost per
+   kick event: the 3v3 pitch is **~15 CPU-seconds**, `scripts/kick_gym.py`
+   is **~0.8** — about **19x** cheaper, because a gym episode is one
+   placement and one swing while a pitch run is six bodies and ~85% dead
+   ball. Anything about the kick itself belongs in the gym; spend the pitch
+   only on what genuinely needs a team. And before spending either, measure
+   how often your knob's condition even fires: a rule that triggers on 1.3%
+   of the run cannot move a whole-match average, whatever it does when it
+   fires (that measurement is what closed item 12h's ball-memory arm).
+
 3. **Confirm on seeds the effect was NOT found on.** A "confirmation" that
    re-uses the discovery seeds is not one. A poacher supporter scored 10
    goals against 3 over four seeds and 21 against 12 over twelve - the
    twelve CONTAINED the four - then reversed on twelve fresh ones, 13
    against 19, for 34 against 31 over all 24 (p = 0.80). `--seed0` exists
    so a battery extends onto fresh seeds instead of re-running the old ones.
-4. **Prefer a paired reading.** Both arms run the same seed layouts, so
-   report per-seed wins/losses alongside the totals; it is strictly more
-   powerful than comparing two means.
+4. **A paired reading is free, but here it buys nothing — do not budget for
+   it.** Both arms run the same seed layouts, so report per-seed wins/losses
+   alongside the totals; pairing can never be worse. But it is not the power
+   this section long implied. Measured across all thirteen A/B batteries on
+   disk (`scripts/audit_power.py`), the median between-arm correlation is
+   **r = 0.05** and the variance reduction is **1.03x**. The sim diverges
+   within seconds of any knob that actually fires, so by 300 s the arms are
+   effectively independent runs and the shared seed cancels nothing. The one
+   battery where pairing paid (`t9 hunt`, r = 0.6) is the one whose knob
+   barely fired — a high pairing gain measures how little your arm perturbed
+   the run, not how good your design is. `compare_pitch.py` prints the
+   observed gain per metric; when it reads ~1.0, the seeds were decorative.
 5. **Ask what would inflate your metric.** `ballAdvance` keeps only the
    forward part of the ball's motion, so anything that makes the ball move
    MORE scores higher without moving it anywhere: the handover fix raised

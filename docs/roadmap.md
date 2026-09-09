@@ -5044,3 +5044,106 @@ them.
 (For the 61.3 % where nobody on the team sees it — support 26.7 %, search
 9.9 %, retreat 8.7 % — no amount of sharing helps; that is the real ceiling
 and it is item 12's blindness, not a plumbing gap.)
+
+---
+
+## Why everything came back null: it was the instrument, not the knobs (2026-09-09)
+
+A run of soccer experiments — the ball memory, the ToF blob, `lineup_keepout`,
+`opp_keepout`, `contest_margin` — all reported "measured off". Asked directly
+why, the answer is not that the ideas were bad. **Most of those batteries could
+never have resolved the effect they were denying**, and one bug meant the
+p-values were the wrong distribution entirely.
+
+`scripts/audit_power.py` (new) reads every A/B battery on disk and reports what
+each one could have seen. Thirteen pairs, 108 metric readings:
+
+| metric | median MDE (% of baseline) | median seeds for a 10% change | reading |
+|---|---|---|---|
+| ballProgress | 297% | 21,437 | noise — do not quote |
+| goals | 48% | 551 | too blunt for a null |
+| falls | 33% | 256 | too blunt for a null |
+| kickCount | 28% | 192 | too blunt for a null |
+| ballAdvance | 19% | 86 | too blunt for a null |
+| crowd | 16% | 65 | too blunt for a null |
+| possession | 10% | 23 | usable |
+| spread | 9% | 20 | usable |
+| depth | 5% | 6 | usable |
+
+**A real 10% improvement in kicks is invisible at 24 seeds and comes out as a
+null.** Every "measured off" verdict quoted above sat on `kicks` or
+`ballAdvance` at 12–24 seeds, i.e. on an instrument with a 19–28% floor.
+
+### The four defects, and what each one was hiding
+
+1. **The MDE was never read — and it was on screen the whole time.** It is the
+   95% half-width, which `compare_pitch.py` always printed: a difference is
+   significant exactly when it exceeds it. The table now prints it as a
+   percentage of baseline and gives every row a verdict — `effect`, `null`, or
+   **`NO RESULT`** — where `null` is reserved for a battery tight enough to
+   mean it (MDE ≤ 15% of baseline, `--tight-pct`). A footer prints the seeds
+   that would settle each `NO RESULT`.
+
+2. **Every p-value in this repo's soccer history came from the NORMAL, not
+   Student's t.** `paired()` took the t critical value from a lookup table but
+   computed p with `math.erfc` — the normal — in an `except ImportError` branch
+   for scipy. **scipy is not a dependency of this workspace and never has
+   been**, so that branch is the one that always ran. The interval and the test
+   disagreed, and the normal is anti-conservative: at 24 seeds a reported p
+   between **0.039 and 0.05 was significant only by that error**. Student's t
+   is now written out directly (regularised incomplete beta, exact to the
+   published tables to 4 dp, no new dependency). Three surviving readings flip:
+
+   | reading | normal p | Student's t p |
+   |---|---|---|
+   | t4 clamp · spread | 0.047 | 0.059 |
+   | t7 colour · possession | 0.043 | 0.055 |
+   | t8 comp · goals | 0.045 | 0.057 |
+
+   Only *paired* readings are affected. The two-proportion z-tests (back-kicks,
+   the gym's whiff rate, the contest's falls at p = 0.043) use the normal
+   correctly and stand.
+
+3. **The paired design buys nothing here, and the docs said it bought most of
+   the power.** Median between-arm correlation **r = 0.05**, variance reduction
+   **1.03x**. The sim diverges within seconds of any knob that fires, so by
+   300 s the arms are independent runs sharing only a layout. Pairing is kept —
+   it can never be worse — but it is no longer budgeted for, and the observed
+   gain is printed per metric. The one battery where it paid (`t9 hunt`,
+   r = 0.6) is the one whose knob barely fired: **a high pairing gain measures
+   how little your arm perturbed the run, not how good your design is.**
+
+4. **`ballProgress` is noise and has been quoted.** MDE has never once been
+   under 100% of baseline. It is now labelled `unquotable` in the table.
+
+### What to do instead
+
+Measured cost per kick event: the 3v3 pitch is **~15 CPU-seconds** (86 CPU-s a
+seed, 5.6 kicks a run), `scripts/kick_gym.py` is **~0.8** (129 CPU-s for 202
+swings) — about **19x cheaper**, because a gym episode is one placement and one
+swing while a pitch run is six bodies and a mostly dead ball. So:
+
+- Anything about the kick itself goes in the gym, where the whiff rate is a
+  proportion over hundreds of events instead of a mean over 24 runs.
+- Screen on `possession` / `spread` / `depth` (10% / 9% / 5% MDE), then confirm
+  the ball metrics — do not open on `kicks`.
+- Measure the **opportunity rate** before spending a battery at all: a rule that
+  fires on 1.3% of the run cannot move a whole-match average whatever it does
+  when it fires. That measurement is what closed the ball-memory arm, and it
+  costs minutes.
+
+### What this does and does not overturn
+
+It does **not** resurrect the five knobs. Their point estimates were flat or
+negative, not merely unresolved; the honest restatement is "**not shown to
+help, on an instrument that could not have shown a 10% gain**" rather than
+"measured off". The distinction matters for what gets retried: `contest_margin`
+and the ball memory are worth one more look **in the gym**, where the same
+compute buys ~19x the events.
+
+Locked by `tests/test_compare_power.py` (57 tests): the MDE identity, the
+three-way verdict, the seed budget's quadratic scaling, Student's t against the
+published tables, the anti-conservatism of the old normal, and the measured
+pairing gain on the real batteries — with the historical finding pinned to the
+files it was measured on, so a future pitch that makes it false fails the test
+rather than silently passing.
