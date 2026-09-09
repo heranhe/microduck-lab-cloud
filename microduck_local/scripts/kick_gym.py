@@ -92,6 +92,79 @@ def _drive(w: World, brains: dict) -> None:
             x.set_cmd(w.data, it.twist, it.head)
 
 
+def _board_rect(w: World) -> tuple[float, float]:
+    """The BOARD half-extents, read off the scenario's walls rather than
+    recomputed — the floor is 0.25 m larger than the boards on each side, and
+    confusing the two is what makes a placement look 25 cm further out than it
+    is."""
+    xs = [abs(c[0]) for wall in w.scenario.walls for c in (wall.start, wall.end)]
+    ys = [abs(c[1]) for wall in w.scenario.walls for c in (wall.start, wall.end)]
+    return max(xs), max(ys)
+
+
+def _place_at_boards(w: World, rng: np.random.Generator, margin: float):
+    """One episode's start with the ball AT A BOARD — the population the
+    boards line (`board_margin`) exists for, and the one the open-play draw
+    almost never reaches.
+
+    Measured on the shipped draw (200k samples): the ball lands within 0.40 m
+    of a board on 6.2% of episodes and within 0.15 m on 1.0%, because the duck
+    spawns at x = -0.9 and draws 0.45-1.4 m ahead, which does not reach the
+    end boards at all and reaches the side boards only in the tail. The clip
+    is against the FLOOR (0.25 m outside the boards), so it caps placement at
+    10 cm from a board rather than excluding the band — but only 0.62% of
+    draws are clipped at all. Either way there is no population to measure, so
+    an arm about the boards run in the open-play gym would measure the
+    baseline with extra steps.
+
+    The ball is drawn on a side chosen in proportion to its LENGTH, uniformly
+    along it (corners left in: they are part of the population, and 12m
+    measured them as slower to leave but not traps), and `margin` out from it.
+    The duck is then spawned a normal walk-in away — the SAME 0.45-1.4 m range
+    the open-play draw uses, so the two modes differ in where the ball is and
+    not in how far the duck walks — at a bearing that keeps it on the pitch."""
+    bx_h, by_h = _board_rect(w)
+    d = w.ducks["d0"]
+    r_ball = w.scenario.balls[0].radius
+    # Sides in proportion to length, so a long board is not under-sampled.
+    lens = np.array([2 * by_h, 2 * by_h, 2 * bx_h, 2 * bx_h], dtype=float)
+    side = int(rng.choice(4, p=lens / lens.sum()))
+    out = float(rng.uniform(r_ball + 0.01, max(margin, r_ball + 0.02)))
+    if side < 2:                                   # the +x / -x end boards
+        sx = 1.0 if side == 0 else -1.0
+        bx, by = sx * (bx_h - out), float(rng.uniform(-by_h + 0.05, by_h - 0.05))
+        inward = (-sx, 0.0)
+    else:                                          # the +y / -y side boards
+        sy = 1.0 if side == 2 else -1.0
+        bx, by = float(rng.uniform(-bx_h + 0.05, bx_h - 0.05)), sy * (by_h - out)
+        inward = (0.0, -sy)
+
+    # The duck: the same walk-in range as open play, on a bearing that leaves
+    # it inside the boards. Biased toward `inward` because a spawn behind the
+    # board is not a spawn.
+    base = math.atan2(inward[1], inward[0])
+    for _ in range(40):
+        rng_m = float(rng.uniform(0.45, 1.4))
+        th = base + float(rng.uniform(-1.2, 1.2))
+        dx, dy = bx + rng_m * math.cos(th), by + rng_m * math.sin(th)
+        if abs(dx) < bx_h - 0.25 and abs(dy) < by_h - 0.25:
+            break
+    else:                                          # straight in from the board
+        rng_m = 0.9
+        dx, dy = bx + rng_m * inward[0], by + rng_m * inward[1]
+        dx = float(np.clip(dx, -bx_h + 0.25, bx_h - 0.25))
+        dy = float(np.clip(dy, -by_h + 0.25, by_h - 0.25))
+    yaw = math.atan2(by - dy, bx - dx) + float(rng.uniform(-0.25, 0.25))
+    d.spawn = (dx, dy, yaw)
+    w._respawn(d)
+    j = w._ball_joint
+    q, v = int(w.model.jnt_qposadr[j]), int(w.model.jnt_dofadr[j])
+    w.data.qpos[q:q + 7] = [bx, by, r_ball + 0.005, 1.0, 0.0, 0.0, 0.0]
+    w.data.qvel[v:v + 6] = 0.0
+    mujoco.mj_forward(w.model, w.data)
+    return q, v
+
+
 def _place(w: World, rng: np.random.Generator, spread: float):
     """One episode's start: the duck on its spawn (a little yaw jitter so the
     approach is never the same twice), the ball ahead of it at a drawn range
@@ -117,7 +190,7 @@ def _place(w: World, rng: np.random.Generator, spread: float):
 
 
 def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s: float = 0.0,
-        knobs: str = "") -> list[dict]:
+        knobs: str = "", at_boards: float = 0.0) -> list[dict]:
     # An ARM is a `MICRODUCK_CHASE` string, applied here so it lands in the
     # worker process before any brain is built (`brain_kwargs` reads
     # `ChaseParams.from_env()`). Every arm of a comparison runs the same seeds
@@ -141,7 +214,8 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
     rng = np.random.default_rng(seed)
     rows = []
     for ep in range(episodes):
-        q, v = _place(w, rng, spread)
+        q, v = (_place_at_boards(w, rng, at_boards) if at_boards > 0.0
+                else _place(w, rng, spread))
         for b in brains.values():
             b.reset()
         t0 = w.t
@@ -375,6 +449,12 @@ if __name__ == "__main__":
                          "--arm 'shipped=' --arm 'memory=rest_predict_s=6,rest_coast_s=20'. "
                          "Repeat it; every arm runs the SAME seeds and episodes. "
                          "Without it the ambient environment is measured as one arm.")
+    ap.add_argument("--at-boards", type=float, default=0.0, metavar="M",
+                    help="place the ball within M metres of a BOARD instead of in open "
+                         "play, and spawn the duck a normal walk-in away. 0 (default) is "
+                         "the open-play draw, which reaches within 0.40 m of a board on "
+                         "only 6.2%% of episodes — there is no boards population in it to "
+                         "measure. Try --at-boards 0.25.")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
@@ -389,7 +469,7 @@ if __name__ == "__main__":
             print(f"\n[{label}] {warn}\n")
     arms: dict[str, list[dict]] = {}
     for label, knobs in specs:
-        args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s, knobs)
+        args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s, knobs, a.at_boards)
                 for s in range(a.seed0, a.seed0 + a.seeds)]
         rows: list[dict] = []
         if a.jobs > 1 and len(args) > 1:
