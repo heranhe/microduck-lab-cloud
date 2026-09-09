@@ -430,6 +430,19 @@ recomputed, re-derived, or rebuilt from reading the source is marked inline —
 to ask. It costs a word and it removes the whole class, because the reader no
 longer has to trust that the writer noticed.
 
+**A third shape, at the labelling end: a real number whose PROSE says
+something other than what the expression computed.** A corner share was
+reported as "within 0.30 m of two boards"; the expression was
+`min(dx, dy) < 0.30 and max(dx, dy) - min(dx, dy) < 0.30` — "the nearer board
+is under 0.30 away and the two distances are within 0.30 **of each other**",
+which counts a ball 0.10 off one board and 0.35 off the other. 31.4% for the
+predicate written, 19.2% for the one described. The measurement was real, the
+code was real, and the sentence was about a different quantity. Neither rule
+above catches it: nothing was reconstructed and no input was guessed. **So
+state a predicate, do not paraphrase one** — quote the condition or write it
+out whenever a number counts things satisfying something. A paraphrase is a
+reconstruction of your own code, performed in prose, and it fails the same way.
+
 **Marking is not enough for `[assumed input]`, and saying so is part of the
 rule.** A reconstruction announces itself to anyone who looks; a probe can be
 contradicted by a sweep. Correct arithmetic on a guessed constant has no tell
