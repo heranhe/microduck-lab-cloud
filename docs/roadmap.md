@@ -4571,9 +4571,18 @@ tests):
   stale sensing gives 0.146 (one seed of three equal), so it is the path,
   not the matcher's inputs; the bound is re-measured (0.85 × raw, 0.68 of
   the map on a wall) and the docstring says why.
-- **The Linux x86_64 goldens in `tests/goldens/` are invalidated** (obs
-  bytes and RNG draw order moved); re-record with
-  `MICRODUCK_RECORD_GOLDENS=1` on Linux before CI goes green.
+- ~~**The Linux x86_64 goldens in `tests/goldens/` are invalidated**~~ (obs
+  bytes and RNG draw order moved) — **re-recorded 2026-09-10** (`53ebaf3`),
+  the day `development` was first pushed and `main` fast-forwarded to it:
+  ubuntu CI failed the 11 parity tests as this bullet predicted, so
+  `.github/workflows/record-goldens.yml` (manual: `gh workflow run
+  record-goldens.yml`, commit the artifact) recorded both files on a hosted
+  runner (AMD EPYC, MuJoCo 3.10.0, numpy 2.5.3, the pinned model) and re-ran
+  them against itself bit for bit before upload; every other Linux CPU
+  compares by tolerance, per `golden_store.py`. The same push found the
+  `record-world` tests rendering on runners with no GL context (macOS
+  `CGLError`, ubuntu an interpreter abort inside GLFW) — they skip there now
+  (`4364868`). Next time the physics moves, run the workflow the same day.
 
 ## Later / parked
 

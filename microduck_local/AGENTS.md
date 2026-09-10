@@ -825,29 +825,35 @@ favourable framing with nothing in front of you contradicting it. The first is
 just reading your own output. Do not let a record of the first stand in for
 evidence of the second.
 
-## CI has never run on `development` — precommit is the only gate
+## CI runs on every pushed branch — precommit is the gate you run first
 
-Checked 2026-09-09: **`development` has 163 commits that are not on
-`origin/main`, and the branch has never been pushed.** `git ls-remote --heads
-origin` returns only `refs/heads/main`, and the branch has no upstream. The
-workflow triggers on `push: branches: ["**"]`, so CI *would* run — it has
-simply never been given the chance.
-
-**So every guarantee in this repo comes from `precommit.sh` and the tests you
-remember to run.** That is why a test could sit red on `development` for five
-commits (`test_the_chase_brain_tracks_a_ball_the_tof_sees_at_its_feet`, broken
-by e6dd8d3, found by finally running the full suite): the subsets were green,
+Until 2026-09-10, `development` had never been pushed (`git ls-remote --heads
+origin` returned only `main`), so every guarantee in this repo came from
+`precommit.sh` and the tests you remembered to run. That is how a test sat red
+on `development` for five commits
+(`test_the_chase_brain_tracks_a_ball_the_tof_sees_at_its_feet`, broken by
+e6dd8d3, found by finally running the full suite): the subsets were green,
 nobody ran `pytest tests/`, and nothing else was watching.
 
-**Pushing is the fix, but re-record the Linux goldens first (bead `mdl-uk6`).**
-They predate the 2026-09-06 physics change, so a push today gives a red CI for a
-known reason — and a permanently-red CI is worse than none, because it is the
-cry-wolf failure at the level of the whole project. Re-record (CI can, with
-`MICRODUCK_RECORD_GOLDENS=1`), then push, then the gate is real.
+**2026-09-10: pushed, and the gate is real.** `development` is on the remote and
+`main` fast-forwards to it; the workflow triggers on `push: branches: ["**"]`,
+so every push runs the matrix (ubuntu, macOS, Windows, viewer). The first run
+found two things the local suite could not: the `record-world` tests render
+video and the hosted runners have no GL context (macOS raised `CGLError`,
+ubuntu ABORTED the interpreter from inside GLFW and took the whole run with
+it) — they now skip where there is no offscreen context; and the Linux
+goldens, stale since the 2026-09-06 physics change, are re-recorded on a
+hosted runner by `.github/workflows/record-goldens.yml` (`gh workflow run
+record-goldens.yml`, then commit the artifact) — the store's policy makes a
+hosted runner a valid recorder, bit-exact on its own CPU and by tolerance on
+every other. A permanently-red CI is the cry-wolf failure at the level of the
+whole project, so when the goldens go stale again, re-record them the same
+morning, not "before someone pushes".
 
-Until then: run `pytest tests/` — the whole suite, ~6 minutes — before anything
+Still true: run `pytest tests/` — the whole suite, ~6 minutes — before anything
 you would be embarrassed to have broken. Subsets are not a substitute; they
-were green throughout the five commits above.
+were green throughout the five commits above, and CI takes 25 minutes to tell
+you what the suite tells you in six.
 
 ## Before you commit: `./scripts/precommit.sh` (1 second)
 

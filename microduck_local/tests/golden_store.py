@@ -12,9 +12,13 @@ failing on numbers it never produced. Record on the platform in question:
 2026-09-06: the physics-audit fixes (fresh IMU obs after the substep loop,
 implicitfast / 10 / 20, mass+inertia / CoM / armature DR and velocity
 pushes — walk_env.py) moved every obs byte and every DR draw, so the
-recordings in tests/goldens/ predate the trajectory they now pin and the
-Linux x86_64 files must be re-recorded on a Linux box with the command
-above (they skip on a Mac). Until then CI's Linux runner fails on them.
+recordings in tests/goldens/ predated the trajectory they pin and CI's
+Linux runner failed on them (11 tests) from the moment the audit reached
+main. Re-recorded 2026-09-10 on a hosted ubuntu runner by
+.github/workflows/record-goldens.yml (`gh workflow run record-goldens.yml`,
+then commit the artifact): a Mac cannot record the Linux file, and the
+same_cpu / tolerance split below is what makes a hosted runner a valid
+recorder. Do that the day the physics moves next, not when someone pushes.
 
 The file records the upstream model sha and the library versions it was
 made against; a mismatch on either is reported first, because a golden
