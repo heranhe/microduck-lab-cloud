@@ -8374,7 +8374,10 @@ whiff an effect on two seed blocks (18 → 9 %, 15 → 9 %); per-swing falls
 ship decision, not a measurement: vendoring `runs/kick-{left,right}-
 faceline-w12/policy.onnx` + `policy.json` into `policies/kick/` changes the
 lab's default kicks and every baseline built on them, so it is Jonathan's
-call; until then `policies/kick/` is the 2026-09-07 pair. Caveats that
+call; until then `policies/kick/` is the 2026-09-07 pair. **Shipped
+2026-09-10 on Jonathan's instruction (commit 5df504c):** that pair is now
+`policies/kick/`, sidecar exits −0.225 / −0.036; the 2026-09-07 pair stays
+under `runs/kick-{left,right}-headdown-v1/` and in git history. Caveats that
 survive: one training seed per arm; the ledger's own goals 0 → 6 (all
 graphite) unresolved at 24 seeds; the un-turned left foot leaves a whiffed
 ball in the blind radius (12k's, not the kick's).
