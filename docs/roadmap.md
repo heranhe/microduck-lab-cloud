@@ -4937,8 +4937,8 @@ settle keep the head on the ball's last place, so the track is fresh when the ga
 on the fresh block; the 2v2 ledger, two blocks of 24 seeds (0–23 without the sweep, 100–123 with it, 48 paired): possession
 +0.4 s/min (p 0.29), progress −0.03 (p 0.42; the fresh block alone read −0.095 at p 0.048, the first +0.03 — a
 sign flip, not an effect), advance −0.02 (p 0.53), goals 42 → 49 (p 0.39), back-kicks 1.9 → 1.4 (p 0.03), swings
-8.2 → 6.1 a run (p < 0.001 — the blind ones), own goals and falls flat. `gaze_still` alone sees the ball on 54 % of swings and changes nothing (45 % whiff). Still open here: the
-per-tick re-plan inside `approach_back`, and the head's side coverage (the side gate `kick_side_max` stays off). The plan is made once (median 3.6 s before the swing) and walked to. Re-plan
+8.2 → 6.1 a run (p < 0.001 — the blind ones), own goals and falls flat. `gaze_still` alone sees the ball on 54 % of swings and changes nothing (45 % whiff). ~~Still open here: the
+per-tick re-plan inside `approach_back`, and the head's side coverage (the side gate `kick_side_max` stays off).~~ **SECOND HALF MEASURED OFF (2026-09-10, 12aj): the freshness gate has no reachable set, the belief is 9 cm short on exactly the far balls, and re-planning closer doubles whiff on this sim.** The plan is made once (median 3.6 s before the swing) and walked to. Re-plan
 the spot every tick from the freshest ball while inside `approach_back` (0.22 m), and gate the swing on the ball being
 inside the kick's box *now* (from the tracker, with the sigma the tracker already carries): no swing at a ball the
 tracker has not seen for more than 0.3 s or whose sigma is over 5 cm. Number: spot-to-ball at the swing (0.166 → under
@@ -8390,3 +8390,67 @@ under `runs/kick-{left,right}-headdown-v1/` and in git history. Caveats that
 survive: one training seed per arm; the ledger's own goals 0 → 6 (all
 graphite) unresolved at 24 seeds; the un-turned left foot leaves a whiffed
 ball in the blind radius (12k's, not the kick's).
+
+
+### 12aj. The last metre, second half: a swing-time freshness gate has no reachable set, and the belief is wrong on exactly the balls it would gate (2026-09-10)
+
+12c's remaining ask — re-plan every tick inside `approach_back`, and no
+swing at a track older than 0.3 s or wider than 5 cm — measured in the kick
+gym before anything was built (12af's lesson: compute the reachable set
+first). `kick_gym` swing rows now carry the ball track's **age**, **sigma**
+and hit count at the decision tick (read before the brain steps, since the
+swing itself calls `tracker.disturb`) and the belief's side offset beside
+its ahead one. Seeds 0–11 × 40, the shipped brain and the weight-12 kicks:
+
+| at the swing (371 swings) | |
+|---|---|
+| track age, median (q1 / q3 / p90) | **1.54 s** (1.18 / 2.02 / 2.26) |
+| track sigma, median | **17 cm** |
+| swings with a track ≤ 0.3 s old | 8 (2 %) |
+| ≤ 0.6 s / ≤ 1.0 s | 3 % / 11 % |
+| the brain's predicted ball present (`predict_s` 1.0) | 44 (12 %) |
+| no track at all | 58 (16 %), whiff 10 % |
+| whiff by age: 0.6–1 s / 1–2 s / > 2 s | 0 % (n 30) / 9 % (191) / 12 % (81) |
+| truth more than 0.15 m ahead | 41 (11 %), **whiff 44 %**, predicted present on **0** |
+
+**The gate as registered keeps 2 % of swings.** The geometry says so: at the
+line-up gaze the ball leaves the frame ~0.18 m out (12k), the settle is
+0.4 s standing with the ball 0.08 m ahead under the chin, so the freshest
+sighting a swing can have is about a second old. Loosened to age ≤ 1 s and
+sigma ≤ 8 cm it keeps 12 %; nothing reachable separates whiffs from hits
+(the 1–2 s bin, half of all swings, whiffs 9 %). And `_too_far`, the gate
+that already exists for the far balls, cannot fire on one of the 41 swings
+it is for, because the belief it reads expires at `predict_s` = 1.0 s and
+the track is older than that at every swing.
+
+**Two levers, both worse on the same seeds** (paired, `compare_gym.py`):
+
+| arm | swings | whiff | far swings (truth > 0.15 m) | belief present | sweet spot | time to swing |
+|---|---|---|---|---|---|---|
+| shipped | 371 | 9 % | 41 (11 %) | 12 % | 15 % | 8.2 s |
+| `predict_s` 2.5 (the far gate can read the belief) | 324 | 13 % (null, p 0.11, worse 8 / 12) | **48** (15 %) | 81 % | 21 % | 9.7 s |
+| `refresh_min` 0.20 (re-plan to the gaze's floor) | 250 | **19 %** (effect, p < 0.001, worse 10 / 12) | 70 (28 %) | 12 % | 9 % | 10.5 s |
+
+With the longer horizon the belief is present on 44 of the 48 far swings and
+the gate fires on **none**: the belief puts the ball a median **9.2 cm ahead
+where the truth is 17.7 cm** (belief − truth −9.0 cm, q1 −13.8, q3 −5.3;
+sigma 16.6 cm; last hit 1.73 s ago), while on the near swings it is right to
+3 cm. The far balls are far because they moved during the blind settle, and
+the belief keeps them where they were last seen — the third time "you cannot
+predict your way out of not looking" has closed an aim-side lever here
+(`spot_lead`, `two_stage`, now the horizon). `refresh_min` 0.20 on this sim
+is not the touch-for-precision trade the 2026-09-08 match measured: with the
+calibrated camera and the weight-12 kicks it re-plans the spot on
+centimetre-noise bearings, kicks a third less, whiffs twice as often and the
+connected travel drops 0.86 → 0.54 m. Ships at 0.35; the comment on the knob
+carries both measurements.
+
+**What this leaves.** The 41 far swings are 11 % of swings and half the
+whiffs. Nothing that reads the belief can refuse them, because the belief is
+what is wrong. The two honest routes are the ones already on the list: see
+the ball at the feet during the settle (12d, a standing look-down at the
+neck's range, 12k's part 3), or a kick that does not need the ball on a spot
+(A.2 in-walk kicks, the other session's box recipe). Instrument:
+`scripts/kick_gym.py` rows `track_age`, `track_sigma`, `track_hits`,
+`pred_sigma`, `pred_side`; reader `scripts/read_swing_freshness.py` (the
+tables above).

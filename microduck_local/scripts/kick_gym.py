@@ -285,7 +285,16 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
         swing = None
         prev_skill = None
         last_spot, last_spot_t = None, None
+        pre_track = None            # (age, sigma, hits) of the ball track at the decision tick
         while w.t - t0 < EPISODE_S:
+            # WHAT A SWING GATE WOULD SEE (roadmap 12c, second half, 2026-09-10):
+            # the best ball track's age and 1-sigma error at the tick the
+            # brain decides on, read BEFORE the brain steps - at the swing it
+            # has already called `tracker.disturb`, and a row that reads the
+            # track afterwards measures the disturbance, not the decision.
+            trk = brain.tracker.best(brain.p.target_cls, w.t, min_hits=1)
+            pre_track = None if trk is None else (
+                trk.age(w.t), trk.sigma(w.t, brain.tracker.p.vel_prior, brain.tracker.p.vel_sig_after_s), trk.hits)
             _drive(w, brains)
             # LATCH the plan. `brain.spot` is consumed by the time the kick
             # skill takes the body -- reading it AT the swing returns None -- so
@@ -343,6 +352,20 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                     "pred_ahead": None if brain.predicted is None else round(
                         (brain.predicted[0] - odom_now[0]) * math.cos(odom_now[2])
                         + (brain.predicted[1] - odom_now[1]) * math.sin(odom_now[2]), 4),
+                    # ...and its SIDE offset in the same frame (+: left), so the
+                    # belief's whole offset from the sweet spot can be read.
+                    "pred_side": None if brain.predicted is None else round(
+                        -(brain.predicted[0] - odom_now[0]) * math.sin(odom_now[2])
+                        + (brain.predicted[1] - odom_now[1]) * math.cos(odom_now[2]), 4),
+                    # The belief's own 1-sigma error (m) at the decision tick,
+                    # and the track it rests on: seconds since its last hit and
+                    # its hit count. The "now" gate 12c asks for (no swing at a
+                    # track older than 0.3 s or wider than 5 cm) can only act
+                    # on swings these columns show it; measure that first.
+                    "pred_sigma": None if brain.predicted_sigma is None else round(brain.predicted_sigma, 4),
+                    "track_age": None if pre_track is None else round(pre_track[0], 3),
+                    "track_sigma": None if pre_track is None else round(pre_track[1], 4),
+                    "track_hits": None if pre_track is None else int(pre_track[2]),
                     # --- the re-bin ---
                     # The ball's own distance to the nearest board, so the curve
                     # can be binned by where the ball ACTUALLY was rather than by

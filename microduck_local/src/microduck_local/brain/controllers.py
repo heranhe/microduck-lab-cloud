@@ -668,6 +668,16 @@ class ChaseParams:
     # sighting; 0 = off. Measured with `gaze_still` (the numbers are on it):
     # alone it fires on 5% of swings, since the track is stale at the swing
     # without the held gaze (whiff 44 -> 38% on seeds 0-23).
+    #
+    # COVERAGE, MEASURED 2026-09-10 (roadmap 12aj): the belief this reads
+    # (`self.predicted`) expires at `predict_s` 1.0 s and the ball track is a
+    # median 1.54 s old at the swing (the ball is under the chin through the
+    # settle), so the belief exists on 12 % of swings and on NONE of the 41
+    # swings with the ball truly > 0.15 m ahead (whiff 44 %). Extending the
+    # horizon (`predict_s` 2.5) puts a belief on 81 % of swings and the gate
+    # still fires on none of the far ones: the belief says 9.2 cm where the
+    # truth is 17.7 - the ball moved during the settle and nothing saw it.
+    # A gate on the belief cannot refuse a swing the belief is wrong about.
     kick_ahead_max: float = 0.15
     # Plan the kick spot for where the ball WILL be when the duck gets there,
     # not where it was last seen: at most this many seconds of lead, from the
@@ -742,6 +752,13 @@ class ChaseParams:
     # touches, and the ball ends up no further forward. Ships at 0.35, with
     # the numbers, because the next person to reach for the blind radius
     # should start from here and not from the head.
+    #
+    # RE-MEASURED 2026-09-10 in the kick gym (roadmap 12aj), on the calibrated
+    # camera, the 12ac detector gates and the weight-12 kicks: 0.35 -> 0.20 is
+    # no longer a touch-for-precision trade - whiff 9 -> 19 % (p < 0.001,
+    # worse on 10 of 12 seeds), swings 371 -> 250, far swings 11 -> 28 %,
+    # connected travel 0.86 -> 0.54 m. The spot re-planned on centimetre
+    # bearing noise dithers; the ball moves anyway during the blind settle.
     refresh_min: float = 0.35
     # The line-up is two stages (traced: with the spot 8 cm behind the
     # ball, the walk-in's last steering steps and the square-up's turn in
