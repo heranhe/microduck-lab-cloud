@@ -25,7 +25,7 @@ import mujoco
 import numpy as np
 
 from .. import contract as C
-from .scenario import PICKABLE_KINDS, TEAM_COLORWAYS, Scenario
+from .scenario import PICKABLE_KINDS, TEAM_COLORWAYS, Scenario, Wall
 
 # Toys live in their own geom group: range sensors see them (they are
 # obstacles and pick targets), but the detector's line-of-sight test looks
@@ -101,6 +101,94 @@ def _yaw_quat(yaw: float) -> list[float]:
     return [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
 
 
+def _key(pt: tuple[float, float]) -> tuple[float, float]:
+    return (round(float(pt[0]), 6), round(float(pt[1]), 6))
+
+
+def _away(wall: Wall, pt: tuple[float, float]) -> tuple[float, float]:
+    """Unit direction along `wall` away from its endpoint `pt`."""
+    (ax, ay), (bx, by) = wall.start, wall.end
+    length = math.dist(wall.start, wall.end)
+    dx, dy = (bx - ax) / length, (by - ay) / length
+    return (dx, dy) if _key(pt) == _key(wall.start) else (-dx, -dy)
+
+
+def _add_cove(w, scenario: Scenario) -> None:
+    """The cove (`Scenario.cove`, a radius R): a quarter-round along the base
+    of every wall, from the floor one R in from the wall's inner face up to
+    the face one R above the floor, built from N tangent boxes - flat facets
+    on the arc's midpoints that meet at concave creases, which a ball rolls
+    across without a bump (the facet's sagitta is 0.7 mm at N = 8, R =
+    0.15; the ball is 35 mm). Where two walls share an endpoint each facet
+    stops short of the corner by its own inward offset over tan(half the
+    interior angle) - a mitre - so the two coves meet on the bisector. On a
+    pitch the cove is cut at the goal mouths: a goal needs the ball 8 cm
+    from the end line, and a cove there would roll a slow shot back out. The
+    cut ends are the posts. Static geoms never collide with each other, so
+    the facets may sit in the floor and in one another."""
+    R = float(scenario.cove)
+    n_seg = max(4, int(round(R / 0.02)))
+    dphi = (math.pi / 2) / n_seg
+    hw = R * math.tan(dphi / 2)             # half-width: tangent planes meet exactly at the creases
+    t = 0.01                                # half-thickness, hung below the tangent plane
+    walls = scenario.walls
+    ends: dict[tuple[float, float], list[int]] = {}
+    for i, wl in enumerate(walls):
+        ends.setdefault(_key(wl.start), []).append(i)
+        ends.setdefault(_key(wl.end), []).append(i)
+    gw = scenario.goal_width / 2
+    for i, wl in enumerate(walls):
+        p0, p1 = wl.start, wl.end
+        length = math.dist(p0, p1)
+        if length < 1e-6:
+            continue
+        ux, uy = (p1[0] - p0[0]) / length, (p1[1] - p0[1]) / length
+        nx, ny = -uy, ux                                     # the wall's left-hand normal
+        mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+        if (-mx) * nx + (-my) * ny < 0:                      # the floor's centre is on the right: flip
+            p0, p1, ux, uy, nx, ny = p1, p0, -ux, -uy, -nx, -ny
+        yaw = math.atan2(uy, ux)
+        # Mitres: per unit of inward offset, how far a facet stops short of each end.
+        cut = [0.0, 0.0]
+        for k, (pt, bx, by) in enumerate(((p0, ux, uy), (p1, -ux, -uy))):
+            for j in ends.get(_key(pt), []):
+                if j == i or math.dist(walls[j].start, walls[j].end) < 1e-6:
+                    continue
+                ax, ay = _away(walls[j], pt)
+                alpha = math.acos(max(-1.0, min(1.0, ax * bx + ay * by)))    # the interior angle
+                if alpha > 1e-3:
+                    cut[k] = 1.0 / math.tan(alpha / 2)
+        # Runs along the wall: all of it, minus the goal mouth on an END wall.
+        runs = [(0.0, length, cut[0], cut[1])]
+        if gw > 0 and abs(nx) > 0.9 and abs(uy) > 1e-9:
+            lam_a, lam_b = sorted(((-gw - p0[1]) / uy, (gw - p0[1]) / uy))
+            if lam_a < length and lam_b > 0:
+                runs = []
+                if lam_a > 0:
+                    runs.append((0.0, lam_a, cut[0], 0.0))
+                if lam_b < length:
+                    runs.append((lam_b, length, 0.0, cut[1]))
+        fx, fy = mx + nx * wl.thickness / 2, my + ny * wl.thickness / 2     # a point on the inner face
+        tilt, quat = np.zeros(4), np.zeros(4)
+        for r_i, (lam0, lam1, c0, c1) in enumerate(runs):
+            for k in range(n_seg):
+                phi = (k + 0.5) * dphi
+                s = R * (1.0 - math.sin(phi))               # the facet midpoint: in from the face…
+                z = R * (1.0 - math.cos(phi))               # …and up from the floor
+                a, b = lam0 + s * c0, lam1 - s * c1
+                if b - a < 1e-3:
+                    continue
+                lam_m = (a + b) / 2 - length / 2
+                mujoco.mju_axisAngle2Quat(tilt, np.array([1.0, 0.0, 0.0]), -phi)
+                mujoco.mju_mulQuat(quat, np.array(_yaw_quat(yaw)), tilt)
+                w.add_geom(name=f"cove{i}_{r_i}_{k}", type=mujoco.mjtGeom.mjGEOM_BOX,
+                           size=[(b - a) / 2, hw, t],
+                           pos=[fx + ux * lam_m + nx * (s - t * math.sin(phi)),
+                                fy + uy * lam_m + ny * (s - t * math.sin(phi)),
+                                z - t * math.cos(phi)],
+                           quat=list(quat), group=0, rgba=[0.74, 0.72, 0.68, 1.0])
+
+
 def _pin_mass_properties_to_walk(robot: mujoco.MjSpec) -> None:
     """Give a non-walk robot variant the walk file's `<inertial>` values.
 
@@ -152,6 +240,8 @@ def compose(scenario: Scenario) -> mujoco.MjModel:
                    size=[length / 2, wall.thickness / 2, wall.height / 2],
                    pos=[(x0 + x1) / 2, (y0 + y1) / 2, wall.height / 2],
                    quat=_yaw_quat(yaw), group=0, rgba=[0.82, 0.80, 0.76, 1.0])
+    if scenario.cove > 0:
+        _add_cove(w, scenario)
     for i, box in enumerate(scenario.boxes):
         half = [s / 2 for s in box.size]
         if box.mass > 0:

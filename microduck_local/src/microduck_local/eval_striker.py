@@ -193,6 +193,7 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
             "roles": {d.id: d.role for d in sc.ducks},
             "kickGoals": score["kicked"], "bumpGoals": score["bumped"],
             "ballOuts": score["ballOuts"], "ballOutS": 0.0, "getupS": 0.0,
+            "cove": 0.0, "corner": 0.0,          # flat, square boards: the pitch benchmark's baseline
             "getups": w.getups, "getupTimeouts": w.getup_timeouts,
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()},

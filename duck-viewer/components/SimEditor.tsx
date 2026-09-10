@@ -10,6 +10,8 @@ import { useState } from "react";
 import { LAB_HTTP } from "@/lib/lab";
 import {
   loadWorld,
+  PITCH_CORNER,
+  PITCH_COVE,
   PITCH_TEAMS,
   ROLE_NAMES,
   TEAM_COLORWAYS,
@@ -19,6 +21,7 @@ import {
   type RoleName,
   type Scenario,
   type ScenarioDuck,
+  type ScenarioWall,
   type TeamName,
   type WorldInfo,
 } from "@/lib/sim";
@@ -70,6 +73,88 @@ export function emptyDraft(base: Scenario | null): Scenario {
     balls: [],
     ducks: [],
     collision: "walk",
+  };
+}
+
+/** The room as an axis-aligned rectangle — its four sides, each drawn once
+ *  between two corners, in either direction — as [minX, maxX, minY, maxY], or
+ *  null for any other set of walls. */
+function rectangleOf(walls: ScenarioWall[]): [number, number, number, number] | null {
+  if (walls.length !== 4) return null;
+  const xs = walls.flatMap((w) => [w.from[0], w.to[0]]);
+  const ys = walls.flatMap((w) => [w.from[1], w.to[1]]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  if (x1 - x0 < 0.2 || y1 - y0 < 0.2) return null;
+  const sides: [[number, number], [number, number]][] = [
+    [[x0, y0], [x1, y0]], [[x1, y0], [x1, y1]], [[x1, y1], [x0, y1]], [[x0, y1], [x0, y0]],
+  ];
+  const same = (a: [number, number], b: [number, number]) => Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
+  const drawn = (a: [number, number], b: [number, number]) =>
+    walls.some((w) => (same(w.from, a) && same(w.to, b)) || (same(w.from, b) && same(w.to, a)));
+  return sides.every(([a, b]) => drawn(a, b)) ? [x0, x1, y0, y1] : null;
+}
+
+/** A rectangular room's walls with each corner chamfered at 45°, `c` along
+ *  each side from the corner point — the lab's pitch (world/scenario.py
+ *  `make_pitch(corner=)`), counter-clockwise from (−x, −y) so every wall
+ *  shares its endpoints with its neighbours. Null for a room that is not a
+ *  plain rectangle: those walls are the user's and stay as drawn. */
+export function chamferedWalls(walls: ScenarioWall[], c: number): ScenarioWall[] | null {
+  const r = rectangleOf(walls);
+  if (!r) return null;
+  const [x0, x1, y0, y1] = r;
+  c = Math.min(c, (x1 - x0) / 2 - 0.05, (y1 - y0) / 2 - 0.05);
+  if (c <= 0) return null;
+  const { height, thickness } = walls[0];
+  const pts: [number, number][] = [
+    [x0 + c, y0], [x1 - c, y0], [x1, y0 + c], [x1, y1 - c], [x1 - c, y1], [x0 + c, y1], [x0, y1 - c], [x0, y0 + c],
+  ];
+  return pts.map((p, i) => ({ from: p, to: pts[(i + 1) % pts.length], height, thickness }));
+}
+
+/** The reverse of `chamferedWalls`: the eight walls of a chamfered rectangle
+ *  back to its four sides. Null for anything else. */
+export function squaredWalls(walls: ScenarioWall[]): ScenarioWall[] | null {
+  if (walls.length !== 8) return null;
+  const axis = walls.filter((w) => Math.abs(w.from[0] - w.to[0]) < 1e-6 || Math.abs(w.from[1] - w.to[1]) < 1e-6);
+  if (axis.length !== 4) return null;
+  const xs = walls.flatMap((w) => [w.from[0], w.to[0]]);
+  const ys = walls.flatMap((w) => [w.from[1], w.to[1]]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const { height, thickness } = walls[0];
+  const pts: [number, number][] = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  return pts.map((p, i) => ({ from: p, to: pts[(i + 1) % 4], height, thickness }));
+}
+
+/** Make the draft a pitch: goals on the short walls, a ball on the spot, every
+ *  duck on the team of its own half facing the goal it attacks — and the
+ *  lab's boards, the cove and (for a rectangular room) the chamfered
+ *  corners, so what is drawn here is what `pitch-2v2` plays on. */
+export function makePitch(d: Scenario): Scenario {
+  const ducks = d.ducks.map((q) => ({
+    ...q,
+    brain: q.brain ?? "chase",
+    team: (q.spawn[0] < 0 ? PITCH_TEAMS[0] : PITCH_TEAMS[1]) as TeamName,
+    spawn: [q.spawn[0], q.spawn[1], q.spawn[0] < 0 ? 0 : Math.PI] as [number, number, number],
+  }));
+  return {
+    ...d,
+    goal_width: 0.7,
+    cove: PITCH_COVE,
+    walls: chamferedWalls(d.walls, PITCH_CORNER) ?? d.walls,
+    ducks,
+    balls: d.balls.length ? d.balls : [{ pos: [0, 0], radius: 0.035, mass: 0.015 }],
+  };
+}
+
+/** …and stop being one: no goals, no teams, flat boards, square corners. */
+export function makeRoom(d: Scenario): Scenario {
+  return {
+    ...d,
+    goal_width: 0,
+    cove: 0,
+    walls: squaredWalls(d.walls) ?? d.walls,
+    ducks: d.ducks.map((q) => ({ ...q, team: null, role: null })),
   };
 }
 
@@ -179,22 +264,10 @@ export function SimEditor({
     setDraft({ ...d, ducks: d.ducks.map((q, j) => (j === i ? { ...q, ...patch } : q)) });
   const pitch = (d.goal_width ?? 0) > 0;
   const brainKinds = brains ?? ["wander", "follow", "chase", "tidy", "script"];
-  /** Make it a pitch, or stop being one: goals on the short walls, and the
-   *  ducks split by the half they already stand in so the scene is legal the
-   *  moment it is toggled (a team facing both goals is refused on save). */
-  const togglePitch = () => {
-    if (pitch) {
-      setDraft({ ...d, goal_width: 0, ducks: d.ducks.map((q) => ({ ...q, team: null, role: null })) });
-      return;
-    }
-    const ducks = d.ducks.map((q) => ({
-      ...q,
-      brain: q.brain ?? "chase",
-      team: (q.spawn[0] < 0 ? PITCH_TEAMS[0] : PITCH_TEAMS[1]) as TeamName,
-      spawn: [q.spawn[0], q.spawn[1], q.spawn[0] < 0 ? 0 : Math.PI] as [number, number, number],
-    }));
-    setDraft({ ...d, goal_width: 0.7, ducks, balls: d.balls.length ? d.balls : [{ pos: [0, 0], radius: 0.035, mass: 0.015 }] });
-  };
+  /** Make it a pitch, or stop being one (`makePitch` / `makeRoom`): the ducks
+   *  split by the half they already stand in so the scene is legal the moment
+   *  it is toggled (a team facing both goals is refused on save). */
+  const togglePitch = () => setDraft(pitch ? makeRoom(d) : makePitch(d));
   const tool = (t: EditorTool) => setState({ ...state, tool: state.tool === t ? null : t, wallStart: null });
   const toolBtn = (t: EditorTool, label: string) => (
     <button key={label} style={{ ...BTN, borderColor: state.tool === t ? "#f2b632" : "#2b313b" }} onClick={() => tool(t)}>
@@ -269,7 +342,7 @@ export function SimEditor({
         <button
           style={{ ...BTN, borderColor: pitch ? "#43c2b8" : "#2b313b", marginLeft: "auto" }}
           onClick={togglePitch}
-          title={`goals on both short walls, a ball on the spot, and every duck on the team of its own half — ${TEAM_COLORWAYS[PITCH_TEAMS[0]].label.toLowerCase()} at −x, ${TEAM_COLORWAYS[PITCH_TEAMS[1]].label.toLowerCase()} at +x`}
+          title={`goals on both short walls, a ball on the spot, the lab's boards (a ${Math.round(PITCH_COVE * 100)} cm cove; a rectangular room gets its corners chamfered) and every duck on the team of its own half — ${TEAM_COLORWAYS[PITCH_TEAMS[0]].label.toLowerCase()} at −x, ${TEAM_COLORWAYS[PITCH_TEAMS[1]].label.toLowerCase()} at +x`}
         >
           {pitch ? "⚽ pitch" : "make a pitch"}
         </button>

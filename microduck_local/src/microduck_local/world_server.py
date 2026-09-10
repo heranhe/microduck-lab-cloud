@@ -75,10 +75,21 @@ from .sensors import DetectorNoise, TofNoise
 from .world import Ball, Duck, Person, Scenario, Wall, World, make_pitch, make_playroom, make_room
 from .world.scenario import NAME_RE, TOF_PRESETS, ScenarioError, validate_scenario
 
-# The lab's pitches play under the ball-out rule (`World.ball_out_s`): a ball
-# at rest against the boards for this long is placed back in play. eval-pitch
-# defaults to 0 (the benchmark's baseline) and takes --ball-out-s.
-PITCH_BALL_OUT_S = 5.0
+# The lab's pitches have the COVE (roadmap Track 4 item 14): a 15 cm
+# quarter-round along the base of the boards and a 45-degree chamfer 30 cm
+# across each corner, so a ball rolling into a wall climbs it and rolls back
+# out. The sim's wall is otherwise dead (MuJoCo models no restitution: e =
+# 0.06 where a real hollow ball is 0.5-0.7), and the ball-out rule below was
+# the referee that patched it. Measured 2026-09-09, 2v2 on the same seeds:
+# the cove alone takes dead-ball time 89 -> 65% and kicks 1.2 -> 3.7 a run,
+# which is what the referee did (66%, 3.5) - with no teleport. So the referee
+# is OFF on the lab's pitches, which now play exactly the "cove alone" arm.
+# `World.ball_out_s` stays a knob for eval-pitch (`--ball-out-s`), whose
+# baseline pitch is still flat and square (`--cove`, `--corner` opt in), so
+# no published number moves. The viewer draws the cove (SimStage.tsx).
+PITCH_COVE = 0.15
+PITCH_CORNER = 0.30
+PITCH_BALL_OUT_S = 0.0
 
 # …and a fallen duck on a pitch GETS UP instead of vanishing and reappearing
 # (roadmap B.1). Without this the lab respawns it the instant it falls, which
@@ -154,9 +165,9 @@ def builtin_scenarios() -> dict[str, Scenario]:
                         path=[(1.2, 1.2), (-1.2, 1.2), (-1.2, -1.2), (1.2, -1.2)], speed=0.25)])
     playroom = make_playroom(seed=0, n=6, name="playroom")
     playroom.ducks[0].policy = DEFAULT_POLICY
-    pitch = make_pitch(name="pitch")
-    pitch2 = make_pitch(name="pitch-2v2", per_side=2, formation=True)
-    pitch3 = make_pitch(name="pitch-3v3", per_side=3, formation=True)
+    pitch = make_pitch(name="pitch", cove=PITCH_COVE, corner=PITCH_CORNER)
+    pitch2 = make_pitch(name="pitch-2v2", per_side=2, formation=True, cove=PITCH_COVE, corner=PITCH_CORNER)
+    pitch3 = make_pitch(name="pitch-3v3", per_side=3, formation=True, cove=PITCH_COVE, corner=PITCH_CORNER)
     for d in pitch2.ducks + pitch3.ducks:
         d.policy = DEFAULT_POLICY
     for d in pitch.ducks:
@@ -271,7 +282,7 @@ class WorldState:
                 infer[d.id] = f
         world = World(scenario, infer_for=infer, seed=seed)
         if world.goal_width > 0:
-            world.ball_out_s = PITCH_BALL_OUT_S      # the referee's throw-in (arena.py, roadmap Track 4 item 11b)
+            world.ball_out_s = PITCH_BALL_OUT_S      # the referee's throw-in (11b) - 0 since the cove (item 14)
             # A real get-up, when the policy is there. `infer_for` already
             # degrades to None on a missing checkout, which is exactly the
             # teleport this replaces — so a lab without the shipped policies

@@ -271,6 +271,21 @@ class Scenario:
     # walker's flat-floor trajectory is bit-identical under both
     # (tests/test_arena.py), so "all" costs a policy nothing.
     collision: str = "all"
+    # A quarter-round COVE along the base of every wall, this radius (m):
+    # a ball rolling into the boards climbs it and rolls back out by
+    # gravity instead of dying flush against the wall. The physics audit
+    # (2026-09-06) found MuJoCo's soft contact does not model restitution -
+    # a 1.4 m/s kick rebounds at e = 0.06 where a real hollow ball is
+    # 0.5-0.7 - so in the sim a kicked ball sits at the wall it hits, and
+    # the ball-out rule (`World.ball_out_s`) is the referee that patches
+    # it. A cove returns the ball by a mechanism MuJoCo does model (a ball
+    # rolling on a slope; the climb at 1.4 m/s is 17 cm, at 1 m/s 8.5 cm,
+    # I = 2/3 m r^2), and on a real table it is a strip of quarter-round
+    # moulding. A dribbled ball settles at the cove's foot, one radius off
+    # the wall. Cut at the goal mouths, whose ends are the posts. 0 = flat,
+    # every number measured before it. compose.py builds it from tangent
+    # boxes; `make_pitch(cove=)` and `eval-pitch --cove` set it.
+    cove: float = 0.0
     version: int = SCENARIO_VERSION
 
     # -- serialisation -----------------------------------------------------
@@ -452,10 +467,11 @@ def validate_scenario(raw: dict) -> Scenario:
     goal_width = raw.get("goal_width", 0.0) or 0.0
     if not isinstance(goal_width, (int, float)) or not 0.0 <= goal_width <= 5.0:
         raise ScenarioError("goal_width must be a number in [0, 5]")
+    cove = _num(raw.get("cove", 0.0) or 0.0, "cove", 0.0, 0.5)
     attacks = _validate_attacks(raw.get("attacks") or {}, ducks, float(goal_width))
     return Scenario(name=name, seed=seed, floor=floor, walls=walls, boxes=boxes, goal_width=float(goal_width),
                     balls=balls, ducks=ducks, persons=persons, pickables=pickables,
-                    basket=basket, collision=collision, attacks=attacks)
+                    basket=basket, collision=collision, attacks=attacks, cove=cove)
 
 
 def _validate_attacks(raw: dict, ducks: list[Duck], goal_width: float) -> dict[str, str]:
@@ -569,7 +585,8 @@ def make_playroom(seed: int = 0, n: int = 6, size: tuple[float, float] = (3.0, 2
 
 def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
                goal_width: float = 0.7, per_side: int = 1,
-               teams: tuple[str, str] = PITCH_TEAMS, formation: bool = False) -> Scenario:
+               teams: tuple[str, str] = PITCH_TEAMS, formation: bool = False,
+               cove: float = 0.0, corner: float = 0.0) -> Scenario:
     """`per_side` ducks a side, one ball, walls all round (the soccer track).
     A goal is the ball crossing either short wall's line inside
     `goal_width`; the World counts them and re-centres the ball. The CREAM
@@ -582,6 +599,12 @@ def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
     builtins `pitch-2v2` / `pitch-3v3`). Off, which is the default and what
     `eval-pitch` uses, so the chase-vs-chase control stays role-free.
 
+    `cove` is the quarter-round along the base of the boards (`Scenario.
+    cove`, the radius) and `corner` chamfers each corner at 45 degrees,
+    starting that far along each wall from the corner point, so a ball
+    cannot wedge in a square corner. Both 0 by default: the benchmark's
+    pitch is bit for bit what it was.
+
     The teams are colorways and not "left"/"right" on purpose: those were
     the two SIDES, and the World writes its goal counts under the two
     MOUTHS with the same two words, so `goals["right"]` was the left
@@ -592,8 +615,16 @@ def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
     if size is None:
         size = (3.0 + 0.4 * (per_side - 1), 2.5 + 0.35 * (per_side - 1))
     hx, hy = size[0] / 2, size[1] / 2
-    corners = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
-    walls = [Wall(corners[i], corners[(i + 1) % 4], 0.3, 0.02) for i in range(4)]
+    pts = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+    if corner > 0:
+        # Chamfered corners: each side stops `corner` short of the corner
+        # point and a diagonal joins it to the next, counter-clockwise, so
+        # every wall still shares its endpoints with its neighbours (the
+        # cove's mitres in compose.py find the neighbours that way).
+        c = min(float(corner), hx - 0.05, hy - 0.05)
+        pts = [(-hx + c, -hy), (hx - c, -hy), (hx, -hy + c), (hx, hy - c),
+               (hx - c, hy), (-hx + c, hy), (-hx, hy - c), (-hx, -hy + c)]
+    walls = [Wall(pts[i], pts[(i + 1) % len(pts)], 0.3, 0.02) for i in range(len(pts))]
     ducks = []
     ys = [0.0] if per_side == 1 else [(-0.5 + i / (per_side - 1)) * (hy - 0.5) * 1.4 for i in range(per_side)]
     home, away = teams
@@ -608,4 +639,4 @@ def make_pitch(size: tuple[float, float] | None = None, name: str | None = None,
                           team=away, role=jobs[i]))
     return Scenario(name=name or ("pitch" if per_side == 1 else f"pitch-{per_side}v{per_side}"),
                     floor=(size[0] + 0.5, size[1] + 0.5), walls=walls,
-                    balls=[Ball((0.0, 0.0))], ducks=ducks, goal_width=goal_width)
+                    balls=[Ball((0.0, 0.0))], ducks=ducks, goal_width=goal_width, cove=float(cove))

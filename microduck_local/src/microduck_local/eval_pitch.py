@@ -120,9 +120,10 @@ ROW_FIELDS = METRIC_FIELDS + GOAL_FIELDS + SHAPE_FIELDS
 
 
 def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = None,
-            getup_s: float = 0.0, ball_out_s: float = 0.0, getup_policy: str | None = None) -> dict:
+            getup_s: float = 0.0, ball_out_s: float = 0.0, getup_policy: str | None = None,
+            cove: float = 0.0, corner: float = 0.0) -> dict:
     from .brain.team import brain_kwargs, kickoff_brains, throw_in_brains
-    sc = make_pitch(per_side=per_side)
+    sc = make_pitch(per_side=per_side, cove=cove, corner=corner)
     infer = onnx_infer(Path(walker) if walker else POLICIES_DIR / "alpha_walking.onnx")
     # A real get-up instead of the teleport stand-in (roadmap B.1): the
     # fallen duck is driven by this policy until it stands, and `--getup-s` is
@@ -166,6 +167,7 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
             "kickGoals": score["kicked"], "bumpGoals": score["bumped"],   # attributed by the World (KICK_GOAL_S)
             "ballOuts": score["ballOuts"],                                 # the ball-out rule's placements (0 unless --ball-out-s)
             "ballOutS": ball_out_s, "getupS": getup_s,   # the physics this row was measured under (`load_done` refuses to mix)
+            "cove": cove, "corner": corner,              # …and the boards' geometry (Scenario.cove, make_pitch corner)
             "getups": w.getups, "getupTimeouts": w.getup_timeouts,   # falls it stood up from / ran the timeout out
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()}, "simSeconds": round(w.t, 1),
@@ -372,6 +374,13 @@ def main() -> None:
                     help="the referee's throw-in (roadmap Track 4 item 11b): a ball at rest against the boards for "
                          "S seconds is placed 0.45 m in; the lab's pitches play at 5. 0 = off, the benchmark's baseline "
                          "(the ball is at the boards 72%% of a 3v3 run and unkickable there: kicks 2.9 -> 7.7 a run at 5)")
+    ap.add_argument("--cove", type=float, default=0.0, metavar="R",
+                    help="a quarter-round cove of this radius (m) along the base of the boards, so a ball rolling "
+                         "into a wall climbs it and rolls back out (Scenario.cove; the sim's wall is otherwise "
+                         "dead, e = 0.06). 0 = flat boards, the benchmark's baseline")
+    ap.add_argument("--corner", type=float, default=0.0, metavar="L",
+                    help="chamfer each corner at 45 degrees starting L m along each wall from the corner point, "
+                         "so a ball cannot wedge in it. 0 = square corners, the baseline")
     ap.add_argument("--getup-policy", default=None, metavar="ONNX",
                     help="drive a fallen duck with this policy until it stands, instead of teleporting it "
                          "(roadmap B.1); ../microduck/policies/alpha_stand.onnx is the one that works. "
@@ -388,7 +397,8 @@ def main() -> None:
     # that reclaims its container mid-run should cost one seed, not all of
     # them (it cost all of them, twice). Resume the rest with --seed0.
     done = load_done(args.out, args.tag, args.per_side, args.seconds,
-                     {"ballOutS": args.ball_out_s, "getupS": args.getup_s})
+                     {"ballOutS": args.ball_out_s, "getupS": args.getup_s,
+                      "cove": args.cove, "corner": args.corner})
     rows = [done[sd] for sd in seeds if sd in done]
     if not args.json:
         for r in rows:
@@ -405,7 +415,7 @@ def main() -> None:
             print(_seed_line(r), flush=True)
 
     args_list = [(sd, args.seconds, args.per_side, args.walker, args.getup_s, args.ball_out_s,
-                  args.getup_policy) for sd in todo]
+                  args.getup_policy, args.cove, args.corner) for sd in todo]
     try:
         if args.jobs > 1 and len(todo) > 1:
             import multiprocessing as mp

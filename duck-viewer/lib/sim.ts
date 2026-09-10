@@ -47,6 +47,12 @@ export const TEAM_NAMES = Object.keys(TEAM_COLORWAYS) as TeamName[];
  *  60 px tall, moving, and lit from one side. Their trims differ too (orange
  *  against yellow), so a duck that is a few pixels of leg still reads. */
 export const PITCH_TEAMS: readonly [TeamName, TeamName] = ["cream", "graphite"];
+/** The lab's boards (world_server.PITCH_COVE / PITCH_CORNER): a quarter-round
+ *  of this radius along the base of every wall, and a 45° chamfer this far
+ *  across each corner. The editor's "make a pitch" applies both, so a pitch
+ *  drawn there is the pitch the lab plays on. */
+export const PITCH_COVE = 0.15;
+export const PITCH_CORNER = 0.3;
 export const ROLE_NAMES = ["defender", "midfielder", "striker", "keeper"] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 
@@ -108,11 +114,46 @@ export interface Scenario {
   basket?: ScenarioBasket | null;
   /** > 0: a pitch — goals this wide centred on both short walls (the World counts them). */
   goal_width?: number;
+  /** > 0: a quarter-round cove of this radius (m) along the base of every wall,
+   *  cut at the goal mouths — the ball rolls up it and back into play
+   *  (world/scenario.py `Scenario.cove`). The stage draws it (SimStage.tsx). */
+  cove?: number;
   /** Which goal MOUTH each team attacks, for a roster not all facing it. */
   attacks?: Partial<Record<TeamName, "left" | "right">>;
   collision: "walk" | "all";
 }
 export interface ScenarioListing { name: string; builtin: boolean; ducks: number; objects: number; modified: number | null }
+
+/** Which goal MOUTH each team attacks, decided the way the World decides it
+ *  (world/arena.py `World.goal_for`): the scenario's declaration when it
+ *  carries one, else the mouth that team's ducks are spawned facing. "right"
+ *  is the mouth at +x. Empty off a pitch. */
+export function attackedMouths(scenario: Scenario | null): Record<string, "left" | "right"> {
+  const out: Record<string, "left" | "right"> = {};
+  if (!scenario || !(scenario.goal_width ?? 0)) return out;
+  for (const [team, mouth] of Object.entries(scenario.attacks ?? {})) {
+    if (mouth === "left" || mouth === "right") out[team] = mouth;
+  }
+  for (const d of scenario.ducks) {
+    if (!d.team || out[d.team]) continue;      // a declaration outranks the heading
+    out[d.team] = Math.cos(d.spawn[2]) >= 0 ? "right" : "left";
+  }
+  return out;
+}
+
+/** The team that DEFENDS each goal mouth — whose colours the stage paints that
+ *  goal frame, so the ends read as "cream's end" and "graphite's end" the way
+ *  the ducks do. A mouth belongs to a team only when exactly ONE other team
+ *  attacks it; a one-team pitch (eval-striker's) leaves the far end unpainted,
+ *  and so does a roster the server would refuse, rather than guessing. */
+export function goalDefenders(scenario: Scenario | null): { left: string | null; right: string | null } {
+  const attacks = attackedMouths(scenario);
+  const defender = (mouth: "left" | "right") => {
+    const attackers = Object.keys(attacks).filter((t) => attacks[t] !== mouth);
+    return attackers.length === 1 ? attackers[0] : null;
+  };
+  return { left: defender("left"), right: defender("right") };
+}
 
 export interface TofPayload {
   t: number;

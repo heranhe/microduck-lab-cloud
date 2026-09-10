@@ -26,7 +26,8 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { PICKABLE_COLORS, PICKABLE_SIZES, type Scenario, type SimClient } from "@/lib/sim";
+import { goalDefenders, PICKABLE_COLORS, PICKABLE_SIZES, TEAM_COLORWAYS,
+  type Scenario, type SimClient, type TeamName } from "@/lib/sim";
 
 // -- palette -----------------------------------------------------------------
 // Kept close to the page's UI accents (amber / teal) so the stage and the
@@ -36,6 +37,7 @@ const PLASTER_CAP = "#c3bcaf";
 const BASEBOARD = "#efe9de";
 const BOARD = "#ebe9e2";
 const BOARD_STRIPE = "#e8b24a";
+const COVE = "#e1ded5";
 const PERSON = "#4f7fc4";
 const PERSON_NOSE = "#a9c8ff";
 
@@ -110,6 +112,61 @@ function roomBounds(s: Scenario | null): Bounds | null {
 }
 function isPitch(s: Scenario | null): boolean {
   return !!s && (s.goal_width ?? 0) > 0;
+}
+
+/** The cove (`Scenario.cove`, a radius R): a quarter-round along the base of
+ *  every wall on its inward side, cut at the goal mouths whose ends are the
+ *  posts — the shape compose.py builds from tangent boxes for the physics.
+ *  One extruded profile per wall run, in the wall's own frame (x along the
+ *  wall, y inward, z up), placed like the wall's box. Where two walls meet
+ *  the prisms overlap; no faces coincide, so nothing fights. */
+interface CoveRun { cx: number; cy: number; yaw: number; geo: THREE.ExtrudeGeometry }
+function coveRuns(s: Scenario): CoveRun[] {
+  const R = s.cove ?? 0;
+  if (R <= 0) return [];
+  const gw = (s.goal_width ?? 0) / 2;
+  const out: CoveRun[] = [];
+  for (const w of s.walls) {
+    const dx = w.to[0] - w.from[0];
+    const dy = w.to[1] - w.from[1];
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) continue;
+    const ux = dx / len;
+    const uy = dy / len;
+    const mx = (w.from[0] + w.to[0]) / 2;
+    const my = (w.from[1] + w.to[1]) / 2;
+    // Inward is the wall's left-hand side unless the floor's centre lies on its right.
+    const side = uy * mx - ux * my >= 0 ? 1 : -1;
+    const runs: [number, number][] = [[0, len]];
+    if (gw > 0 && Math.abs(uy) > 0.9) {            // an end wall: leave the mouth flat
+      const ya = (-gw - w.from[1]) / uy;
+      const yb = (gw - w.from[1]) / uy;
+      const a = Math.min(ya, yb);
+      const b = Math.max(ya, yb);
+      if (a < len && b > 0) {
+        runs.length = 0;
+        if (a > 0) runs.push([0, a]);
+        if (b < len) runs.push([b, len]);
+      }
+    }
+    for (const [l0, l1] of runs) {
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0);
+      shape.lineTo(R, 0);
+      shape.absarc(R, R, R, -Math.PI / 2, -Math.PI, true);   // the concave arc, floor to wall face
+      shape.lineTo(0, 0);
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: l1 - l0, bevelEnabled: false, curveSegments: 12 });
+      // shape x → inward (local y, from the wall's inner face); shape y → up; the extrusion → along the wall.
+      geo.applyMatrix4(new THREE.Matrix4().set(
+        0, 0, 1, l0 - len / 2,
+        side, 0, 0, (side * w.thickness) / 2,
+        0, 1, 0, 0,
+        0, 0, 0, 1,
+      ));
+      out.push({ cx: mx, cy: my, yaw: Math.atan2(dy, dx), geo });
+    }
+  }
+  return out;
 }
 
 // -- shared textures (scenario-independent, painted once per page) -------------
@@ -445,6 +502,18 @@ export function StageEnvironment({ intensity = 0.55 }: { intensity?: number }) {
 // -- statics -----------------------------------------------------------------------
 
 const GOAL_H = 0.22;   // posts + crossbar height: under the 0.3 m boards, over a duck's head
+const GOAL_WHITE = "#f4f4f0";   // an unclaimed goal: a pitch with no teams on it
+
+/** The frame paint for one goal mouth: the colours of the team that DEFENDS
+ *  it, so the two ends read as the two teams at a glance — the same shell and
+ *  trim its ducks are printed in (lib/sim.ts TEAM_COLORWAYS). The trim is the
+ *  post SLEEVES rather than a tint of the shell: cream's shell is a hair off
+ *  the boards behind it (#f7e6cb on #ebe9e2) and a bar painted in it alone
+ *  disappears at the far end, which is the one thing this is for. */
+function goalPaint(team: string | null): { bar: string; sleeve: string | null } {
+  const look = team && team in TEAM_COLORWAYS ? TEAM_COLORWAYS[team as TeamName] : null;
+  return look ? { bar: look.shell, sleeve: look.trim } : { bar: GOAL_WHITE, sleeve: null };
+}
 
 function boxGeometryKey(size: [number, number, number]): string {
   return size.map((v) => v.toFixed(4)).join("x");
@@ -492,6 +561,15 @@ export function Statics({ scenario }: { scenario: Scenario | null }) {
     return geos;
   }, [scenario]);
   useEffect(() => () => furniture.forEach((g) => g.dispose()), [furniture]);
+
+  // The cove along the boards, when the scenario has one.
+  const coves = useMemo(() => (scenario ? coveRuns(scenario) : []), [scenario]);
+  useEffect(() => () => coves.forEach((c) => c.geo.dispose()), [coves]);
+
+  // Which team keeps which end (the World's own rule, lib/sim.ts): the frames
+  // are painted in its colours, so a glance at a goal says whose half of the
+  // pitch you are looking at.
+  const defenders = useMemo(() => goalDefenders(pitch ? scenario : null), [pitch, scenario]);
 
   // Goal nets: 5 cm cells, so the repeat depends on the goal width.
   const netTex = useMemo(() => {
@@ -555,22 +633,37 @@ export function Statics({ scenario }: { scenario: Scenario | null }) {
           </group>
         );
       })}
+      {coves.map((c, i) => (
+        <mesh key={`cove${i}`} position={[c.cx, c.cy, 0]} rotation={[0, 0, c.yaw]} geometry={c.geo}>
+          <meshStandardMaterial color={COVE} roughness={0.6} metalness={0} envMapIntensity={pitch ? 0.5 : 0.25} side={THREE.DoubleSide} />
+        </mesh>
+      ))}
       {pitch &&
         netTex &&
         [-1, 1].map((s) => {
           const thick = scenario.walls[0]?.thickness ?? 0.02;
           const h = GOAL_H;
+          const { bar, sleeve } = goalPaint(s < 0 ? defenders.left : defenders.right);
           return (
             <group key={`goal${s}`} position={[s * hx, 0, 0]}>
               {[-1, 1].map((q) => (
-                <mesh key={q} position={[-s * (thick / 2 + 0.012), (q * gw) / 2, h / 2]} rotation={[Math.PI / 2, 0, 0]}>
-                  <cylinderGeometry args={[0.012, 0.012, h, 12]} />
-                  <meshStandardMaterial color="#f4f4f0" roughness={0.35} metalness={0.1} />
-                </mesh>
+                <group key={q} position={[-s * (thick / 2 + 0.012), (q * gw) / 2, 0]}>
+                  <mesh position={[0, 0, h / 2]} rotation={[Math.PI / 2, 0, 0]}>
+                    <cylinderGeometry args={[0.012, 0.012, h, 12]} />
+                    <meshStandardMaterial color={bar} roughness={0.35} metalness={0.1} />
+                  </mesh>
+                  {sleeve &&
+                    [0.05, 0.13].map((z) => (
+                      <mesh key={z} position={[0, 0, z]} rotation={[Math.PI / 2, 0, 0]}>
+                        <cylinderGeometry args={[0.0135, 0.0135, 0.03, 12]} />
+                        <meshStandardMaterial color={sleeve} roughness={0.4} metalness={0.05} />
+                      </mesh>
+                    ))}
+                </group>
               ))}
               <mesh position={[-s * (thick / 2 + 0.012), 0, h]}>
                 <cylinderGeometry args={[0.012, 0.012, gw + 0.024, 12]} />
-                <meshStandardMaterial color="#f4f4f0" roughness={0.35} metalness={0.1} />
+                <meshStandardMaterial color={bar} roughness={0.35} metalness={0.1} />
               </mesh>
               {/* XYZ Euler: Ry then Rx takes the plane's width to world Y and its height to Z */}
               <mesh position={[-s * (thick / 2 + 0.003), 0, h / 2]} rotation={[Math.PI / 2, Math.PI / 2, 0]}>

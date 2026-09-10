@@ -52,14 +52,18 @@ def test_ball_out_is_off_by_default_and_places_the_ball_in_when_on():
     assert on.ball_outs == 0
 
 
-def test_the_lab_pitches_play_under_the_rule_and_rooms_do_not():
-    from microduck_local.world_server import PITCH_BALL_OUT_S, WorldState
+def test_the_lab_pitches_play_on_the_cove_with_the_referee_off():
+    """Since 2026-09-09 (roadmap Track 4 item 14) the lab's pitches have the
+    cove and the referee is off - the "cove alone" arm, exactly as measured.
+    The World knob stays for eval-pitch; a room has neither."""
+    from microduck_local.world_server import PITCH_BALL_OUT_S, PITCH_COVE, WorldState
     st = WorldState(None)
     st.preload("pitch-2v2")
-    assert st.world.ball_out_s == PITCH_BALL_OUT_S > 0
+    assert st.world.ball_out_s == PITCH_BALL_OUT_S == 0.0
+    assert st.world.scenario.cove == PITCH_COVE > 0 and len(st.world.scenario.walls) == 8
     room = WorldState(None)
     room.preload("living-room")
-    assert room.world.ball_out_s == 0.0
+    assert room.world.ball_out_s == 0.0 and room.world.scenario.cove == 0.0
 
 
 def _seen_ball(b: Chase, odom, bx, by, t=1.0):
