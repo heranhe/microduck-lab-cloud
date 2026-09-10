@@ -6414,7 +6414,7 @@ fall-through, and at 0.10 the corner branch wastes as often as it acts. **A
 corner needs a different move, because in a corner there is no other side to
 stand on.**
 
-**The next item is a design question, not a sweep.** Reachability belongs in
+**The next item is a design question, not a sweep** — **BUILT AND SHIPPED ON (2026-09-10, 12al: `spot_reach`).** Reachability belongs in
 `kickselect` as a CONSTRAINT on candidate spots — the selector already ranks by
 p_goal then value, and it can rank only reachable spots — rather than as a
 post-hoc rescue in `_hold_target` after a spot has been chosen. That separates
@@ -7286,7 +7286,7 @@ with a match-sized denominator behind it, and it is still open: the fix here
 gets the duck out of the corner, it does not make the ball in the corner
 playable. 12v's design note — reachability as a constraint in `kickselect`
 rather than a rescue in `_hold_target` — remains the next item, and this table
-is the size of the prize.
+is the size of the prize. **Built: 12al (`spot_reach`, ships on).**
 
 **THE LEDGER IS FLAT ON PLAY AND FLAGS FALLS, WHICH IS WHY IT SHIPS OFF.**
 `eval-pitch --per-side 2`, 24 seeds x 180 s, paired (`scripts/compare_pitch.py`):
@@ -8519,3 +8519,86 @@ floor is no longer a sensing problem: the lever that would USE a fresh
 sighting is a kick that adapts to where the ball is — A.2's in-walk kick or
 12h's learned last metre — not a gate on a planned spot. Both knobs ship off,
 with the numbers on them.
+
+
+### 12al. Reachability as a constraint in the kick selector (12v's design, built): board swings up three quarters, and the walker's bumper is the wall the body was never the problem of (2026-09-10)
+
+12v named it as a design question: the planner may lay a kick spot where the
+robot cannot stand, and `board_margin` — a rescue after the line is chosen,
+one number doing two jobs — measured a structural no-op. 12aa put the size
+on it: two in five kick plans at a board and two in three in a corner put
+the spot inside the walking body's own extent of a board. Built as
+`ChaseParams.spot_reach` (m; 0 = off): when `kick_select` lays its fan, a
+candidate whose STAND spot (`_plan`'s own geometry, `_spot_clear`) is closer
+than this to a board is not offered, so the selector ranks only spots the
+body can occupy; a fan with no reachable candidate — a tight corner — is
+left whole, so the plan is never worse than the shipped one. Off, the fan
+is untouched to the bit (`tests/test_spot_reach.py`; the open-play gym
+baseline re-run identical). Set to 0.129, the body extent 12v measured.
+
+**The gym, three populations, two seed blocks each** (`kick_gym`, 480
+episodes an arm; `--at-boards 0.15` draws the ball a median 10 cm off a
+flat board, `--at-corners 0.15` 8 cm off two):
+
+| population | arm | swings | connected | whiff | plans the body cannot occupy | fell |
+|---|---|---|---|---|---|---|
+| open play, seeds 0–11 | shipped | 371 | 337 | 9 % | 3.1 % | 0 |
+| | `spot_reach` 0.129 | 383 | 352 | 8 % (null) | 0.2 % | 0 |
+| open play, seeds 100–111 | shipped | 394 | 358 | 9 % | 2.9 % | 5 |
+| | `spot_reach` 0.129 | 391 | 348 | 11 % (null) | 0.0 % | 1 |
+| at a board, seeds 0–11 | shipped | 16 | 16 | 0 % | **50 %** | 0 |
+| | `spot_reach` 0.129 | **34** | **30** | 12 % (n 34) | **15 %** | 1 |
+| at a board, seeds 100–111 | shipped | 25 | 20 | 20 % | 45 % | 0 |
+| | `spot_reach` 0.129 | **38** | **36** | 5 % (n 38) | 12 % | 0 |
+| in a corner, seeds 0–11 | shipped | 0 | 0 | — | 68 % | 0 |
+| | `spot_reach` 0.129 | 0 | 0 | — | 32 % | 0 |
+
+Open play: a null on whiff both blocks, in opposite directions, no cost in
+connected kicks or falls. At the boards: swings 41 → 72 pooled (+76 %),
+connected 36 → 66, sweet-spot rate 6–12 → 29 %, the unreachable plans cut
+to a quarter (what remains are corners with nothing reachable, left whole).
+Corners: the unreachable share halves and nobody swings either way.
+
+**Why 93 % of board line-ups still time out with a reachable spot — the
+bumper.** `scripts/probe_board_states.py` (40 episodes, the ball 15 cm off
+a board, `spot_reach` on): 144 line-ups, 123 timeouts, zero settles, 55 % of
+the time in `lineup`. At the timeouts the duck stands a median **21 cm from
+the spot** (its closest that line-up 17 cm), heading 66° off, the spot's gap
+to the board 14 cm — the body could occupy it — and the DUCK's gap **32 cm**
+with the ToF reading **27 cm ahead**: under `tof_stop` 0.30, so the bumper
+zeroes the walk and the line-up spins in place until `lineup_s`. Only 6 %
+ever came within 5 cm of the spot. A servoed approach from the open field
+faces the wall until its last step, and the bumper halts it ~0.3 m out.
+**Body-reachable is not walker-reachable**, and the second predicate is the
+approach's, not the spot's.
+
+**What did not fix that.** The two-stage line-up (a pre-spot on the kick
+line, then straight in along it — the parallel approach the bumper allows)
+measured worse: 6 swings alone, 10 with the constraint, against 34, because
+its pre-spot lands in the same bumper band. Offering the push as the
+corner's way out re-plans 94–100 % of board and corner plans as pushes and
+executes 2 in 40 episodes: the push spot is walked to the same way.
+
+**2v2 ledger** (`eval-pitch --seeds 24 --seconds 300 --per-side 2
+--ball-out-s 5`, the knob off against on, `compare_pitch.py`): possession
+39.18 → 40.01 s/min (MDE 1.5, null), spread / crowd / depth null, kicks
+147 → 148, goals 24 → 21, falls 9 → 5, own goals 6 → 4, back-kicks 24 → 19 %
+(events; unresolvable at 24 seeds, every one leaning the right way). Flat on
+play, nothing worse anywhere, and never worse by construction.
+
+**SHIPS ON at 0.129.** ⚠ Every soccer number quoted before this item was
+measured on a fan that could plan into a wall; a battery re-run on the
+shipped brain is on `spot_reach` 0.129 from here, and `spot_reach=0` is the
+old fan to the bit.
+
+**Instruments:** `spot_board` on every gym row (the latched spot's distance
+to the nearest board, swing or not) is the census; `scripts/
+probe_board_states.py` is the timeout trace. Counters on the brain:
+`unreach_dropped`, `unreach_corners`.
+
+**Next, if the boards are worth more touches:** a walker-reachability
+predicate — the spot's gap to the wall against `tof_stop` along the approach
+heading — and an approach that runs along the wall in its last 0.3 m, which
+neither `_servo` nor the two-stage pre-spot does today. On the lab pitch the
+cove parks the ball 0.16–0.27 m off the wall line (item 14), so this is a
+flat-board problem more than a cove one.

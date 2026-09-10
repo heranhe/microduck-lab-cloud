@@ -562,6 +562,38 @@ class ChaseParams:
     # (eval-pitch's baseline), where it is the only thing that ever kicks
     # a ball at the boards. Roadmap Track 4 item 11b.
     board_margin: float = 0.0
+    # REACHABILITY AS A CONSTRAINT IN THE SELECTOR (roadmap 12v / 12aa, built
+    # 2026-09-10). `board_margin` above was measured a structural no-op: it
+    # rejects a spot AFTER the line is chosen and then escapes along the
+    # wall, one number doing two jobs. The census (12aa) says two in five
+    # kick plans laid against a board put the spot where the walking body
+    # (0.129 m of trunk extent) cannot stand, two in three in a corner - and
+    # every such line-up stands against the wall for `lineup_s` and times
+    # out. This is the other design: when `kick_select` lays its fan, a
+    # candidate whose STAND spot is closer than this to a board is not
+    # offered at all, so the selector ranks only spots the body can occupy
+    # and picks the best of those. When NO candidate is reachable (a tight
+    # corner) the fan is left whole and the plan is what it always was: the
+    # constraint never makes a plan worse than the shipped one, it only
+    # removes the choice of standing in a wall where another choice exists.
+    # 0 = off (the pre-2026-09-10 fan, to the bit). The body extent is the
+    # number.
+    #
+    # SHIPS ON at 0.129 (roadmap 12al). Kick gym, two seed blocks each: open
+    # play whiff 9 -> 8 % and 9 -> 11 % (null both ways), connected kicks
+    # and falls flat, plans the body cannot occupy 3 % -> 0 %; the ball at
+    # a board, swings 16 -> 34 and 25 -> 38 (connected 36 -> 66 pooled,
+    # +83 %), unreachable plans 50 -> 15 % and 45 -> 12 %; corners 68 ->
+    # 32 % unreachable and nobody swings either way. 2v2 ledger (24 x 300 s)
+    # flat: possession 39.2 -> 40.0 (null), spread / crowd / depth null,
+    # kicks 147 -> 148, goals 24 -> 21, falls 9 -> 5, own goals 6 -> 4,
+    # back-kicks 24 -> 19 % (events, unresolved). What it does NOT fix: 93 %
+    # of board line-ups still time out with a reachable spot, because the
+    # ToF bumper (`tof_stop` 0.30) halts a servoed approach ~0.3 m from the
+    # wall, 21 cm short of the spot (scripts/probe_board_states.py) - body-
+    # reachable is not walker-reachable, and that predicate is the
+    # approach's, not the spot's.
+    spot_reach: float = 0.129
     kick_side: float = 0.06
     # The kick map (a standing duck, the ball swept over (ahead, side) of
     # the trunk, kick_left; the right kick checked mirrored): the ball
@@ -2456,6 +2488,8 @@ class Chase:
         self.kicks = 0
         self.pushes = 0
         self.declines = 0          # swings refused by `kick_side_max`
+        self.unreach_dropped = 0   # candidate lines dropped by `spot_reach` (their spot in a board)
+        self.unreach_corners = 0   # plans where NO candidate was reachable (the fan left whole)
         self.attack: float | None = None                            # heading of the goal it attacks (first odom yaw)
         if self.loc is not None:                                    # the goal-post filter starts over with the episode
             from .localize import Localizer, pitch_posts  # noqa: PLC0415
@@ -2669,6 +2703,25 @@ class Chase:
             if along is not None:
                 return along
         return sx, sy, foot, h, "kick"
+
+    def _spot_clear(self, ball_xy, u: float, action: str, margin: float) -> bool:
+        """Can the body stand where this candidate's spot would be laid?
+        The spot is `_plan`'s own geometry for a kick (behind the ball on
+        the line, `kick_side` to the foot's side, in the deflected heading)
+        and a push's (`push_behind` squarely behind); True when it is at
+        least `margin` inside every board, and always True off a pitch."""
+        if self.bounds is None:
+            return True
+        p = self.p
+        bx, by = ball_xy
+        if action == "push":
+            sx, sy = bx - p.push_behind * math.cos(u), by - p.push_behind * math.sin(u)
+        else:
+            side = -p.kick_side if action == "kick_left" else p.kick_side
+            h = _wrap(u - (p.kick_deflect_left if action == "kick_left" else p.kick_deflect_right))
+            sx, sy = (bx - p.kick_ahead * math.cos(h) - side * math.sin(h),
+                      by - p.kick_ahead * math.sin(h) + side * math.cos(h))
+        return self.bounds[0] - abs(sx) >= margin and self.bounds[1] - abs(sy) >= margin
 
     def _clear_of_boards(self, x: float, y: float) -> bool:
         """Is a spot far enough off the boards to stand on? True off a pitch
@@ -3719,6 +3772,15 @@ class Chase:
             from .kickselect import push_model  # noqa: PLC0415
             lines += [(u_, "push") for u_, act in lines if act == "kick_left"]   # one push per line
             models = {"push": push_model(p.push_roll, p.push_dir_sd, max(p.ball_decel, 0.02))}
+        if p.spot_reach > 0.0:
+            # Only spots the body can occupy are offered (`spot_reach`); a
+            # fan with none left is a corner, and it is left whole.
+            reachable = [(u_, act) for u_, act in lines if self._spot_clear((bx, by), u_, act, p.spot_reach)]
+            if reachable:
+                self.unreach_dropped += len(lines) - len(reachable)
+                lines = reachable
+            else:
+                self.unreach_corners += 1
         model = KickModel(speed=p.kick_speed, speed_sd=p.kick_select_v_sd, dir_sd=p.kick_select_dir_sd,
                           decel=max(p.ball_decel, 0.02), exit_left=p.kick_exit_left, exit_right=p.kick_exit_right,
                           p_whiff=p.kick_select_p_whiff)
