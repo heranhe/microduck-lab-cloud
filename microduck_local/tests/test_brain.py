@@ -272,9 +272,10 @@ def test_a_blind_supporter_in_a_corner_retreats_instead_of_spinning(monkeypatch)
     measured at 123.4 s in one corner, with the duck making ZERO state
     transitions for the last 67 s of a 120 s recording.
 
-    `support_unstick_s` seconds of supporting inside `support_unstick_m` of a
-    board hands the duck to the retreat, which is the escape the brain already
-    has. The rule the shipped default arms is the one asserted here; the
+    `support_unstick_s` seconds of supporting without GETTING ANYWHERE hands
+    the duck to the retreat, which is the escape the brain already has. The
+    gate is displacement and not place: the same freeze happens in open play
+    (roadmap 12ac), and a place gate cannot reach it. The rule the shipped default arms is the one asserted here; the
     control is the same duck one clock tick earlier, still spinning.
 
     Deliberately NOT a scenario test: the trap needs a supporter, a lost ball
@@ -288,8 +289,8 @@ def test_a_blind_supporter_in_a_corner_retreats_instead_of_spinning(monkeypatch)
     b.role = "support"                       # no team board: hold the role the board would give
     corner = (1.60, 1.33, 0.0)               # 0.10 m off BOTH boards — the measured trap pose
     assert b.p.support_unstick_s > 0.0, "the shipped default arms this rule"
-    assert b.p.support_unstick_m < b.p.support_margin, \
-        "a duck on a legitimately clamped post must never be inside the zone"
+    assert b.p.support_hold_tol > 0.0, \
+        "a supporter standing ON its post must be exempt: that is the job, not a freeze"
 
     from microduck_local.brain.gait import TURN_KICK
     t, dt = 0.0, 0.02

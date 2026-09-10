@@ -13,6 +13,7 @@ person finds out it was already tried.
 ---
 
 > ## ⚠ EVERY LEVEL MEASURED BEFORE 2026-09-09 IS ON THE WRONG CAMERA — read 12z.
+> ## ⚠ ...AND ON THREE DETECTOR GATES THAT WERE BLINDER THAN THE ROBOT — read 12ac.
 >
 > The fitted lens is **116° × 60°** (vendor FOV table, supplied 2026-09-09).
 > `DetectorSpec` defaulted to **62° × 48°** until that date — the *stock* Pi
@@ -7356,3 +7357,176 @@ second: with the ball 164° behind, there is nothing for it to check WITH.
 a `--recover` window after the swing, recording re-acquisition, the states
 walked through, the body turn through the swing, and where the ball was on
 each camera frame of the `look`. `--arm LABEL=KNOBS` for a paired A/B.
+
+
+### 12ac. THE SIM WAS BLINDER THAN THE ROBOT — three gates fixed, whiff 27.3% → 16.5% (2026-09-09)
+
+Started from a plain question, not a metric: *the duck looked down at the
+ball, the top of it was plainly in frame, and it still did not detect it.*
+Three modelling shortcuts in `sensors/detector.py`, none of them a property
+of any camera, all of them costing more than the lens choice 12z is about.
+Full workings and every table in **`docs/camera-hardware.md` §5b**.
+
+**1. The lens was modelled UNCALIBRATED.** `a9a4829` made
+`projection="equidistant"` the default, which models a pinhole-calibrated
+reader on a fisheye — and the docstring's "worst in between: 9.7°" buries
+what it is. The slope at θ = 0 is `tan(58°)/58°rad` = **1.581**: near-axis
+bearings are inflated 58%, so a ball truly 7° off the nose reads as 11°. In
+play, median bearing error **3.81°** and **55% of ticks past the chase
+brain's tightest aim tolerance**. Flipped back to `pinhole`, because
+calibration is a one-off checkerboard and nobody ships a wide lens without
+one. `equidistant` is kept as the ship-it-uncalibrated arm.
+
+**2. The centre-in-frustum rule.** A target had to have its CENTRE in frame.
+For a round target that is exactly a 50%-visibility rule, so the sim was
+demanding a floor ball be more than half in view. At the shipped gaze clamp
+it blinds the duck at 0.155 m of ground distance where a partial rule reaches
+0.115 m — and the size gate passes at 1.00 throughout that band, so **this
+was never about pixels**.
+
+**3. Occlusion tested with ONE ray to the centre.** Over 72012 duck-ticks,
+the occlusion gate rejected 4.8% of them and **a quarter of those had a
+quarter or more of the ball's silhouette plainly reachable**. All of it is
+duck-on-duck: self-occlusion by the viewer's own body fired on **6 ticks in
+72012**, which settles the "nothing on the duck occludes it" note in
+`brain/controllers.py` — it is right.
+
+**Fixed** by `partial_min` (0.25), `occl_rays` (13), `occl_min` (0.25) and
+`seen_full` (0.5). Scored on the SAME trajectory both ways, the ball is
+geometrically visible on **35.0% → 39.3%** of duck-ticks (+12% relative).
+
+**The ledger** (`scripts/kick_gym.py`, 12 seeds × 40 episodes an arm):
+
+| arm | swings | whiff | on the sweet spot | median \|side\| | connected |
+|---|---|---|---|---|---|
+| old gates | 399 | 31.8% | 9.5% | 0.083 m | 272 |
+| **new gates** | 369 | **16.0%** | **17.3%** | **0.067 m** | **310** |
+
+whiff −15.8 pp against an MDE(80%) of 8.7 pp and sweet spot +7.8 pp against
+6.9 — **BOTH POWERED**, p < 1e-5 and p = 0.0014, better on **11 of 12 seeds**
+(sign test p = 0.0063). Checked against rule 6 before believing it: the swing
+count fell 8% and **connected kicks still went UP, 272 → 310**, so this is not
+the
+"better rate, fewer touches" shape that killed `two_stage` and `refresh_min`.
+
+**What it retires.** The strict `xfail` on
+`test_tidy_picks_a_toy_behind_the_basket_without_touching_it`, which had been
+a known regression since the lens re-baseline. Isolated on that test: the old
+baseline fails, `partial_min`/`occl_rays` alone fails, **`projection=pinhole`
+alone passes** — so it is the calibrated reader that retires this one, and the
+partial-visibility work neither fixes nor breaks it. Its assertions were never
+relaxed.
+
+**Two traps worth carrying forward, both found by a failing test.**
+
+1. Scaling find-probability linearly by the visible fraction looks like the
+   conservative choice and is not — a TALL target's extent overflows a 60°
+   frustum by design, so it taxes a person for its own height (a 1.6 m person
+   at 1.0 m fell to 14 detections in 20). Hence `seen_full`, which is the one
+   number in this work nobody has measured.
+2. **Modelling truncation faithfully made things WORSE, because only half of
+   it was modelled.** A clipped box really is narrower and its centre really
+   does migrate — but a real consumer knows the box is truncated and this
+   model has no flag for it, so the brain got confidently wrong numbers it
+   could not discount. The tidy brain's median `range_est` to the basket went
+   0.346 → 0.467 m on the clipped width, and the ~3° elevation migration cost
+   it the pick outright. Both reverted: for a POINT target, partial visibility
+   decides *whether* it is seen, never what you are told about it. The honest
+   fix is both halves — a truncation flag plus consumers that respect it —
+   and it is recorded, not built.
+
+**⚠ EVERY NUMBER MEASURED BEFORE THIS ITEM IS ON THE OLD GATES**, on top of
+12z's camera correction. The arm that restores them is
+`MICRODUCK_CAMERA="projection=equidistant,partial_min=0.5,occl_rays=1,seen_full=0.5"`.
+
+**What has NOT been re-measured, and is the next thing to do:** the soccer
+ledger itself. Everything above is the kick gym, which item 12 uses precisely
+because a match battery cannot resolve effects this size affordably (see
+"Read the MDE, not the p"). `eval-pitch` possession, goals and falls are all
+still quoted on the old gates.
+
+**Also killed while auditing, worth as much as the fixes:** self-occlusion
+(6/72012 ticks), `max_range_m` = 4.0 (never binds on a pitch), the detection
+rate (§4 of camera-hardware.md already settled it — 5 Hz is indistinguishable
+from 10), the colour classifier's 1.0 m range (nothing reads `Track.color`
+for any decision yet; it becomes load-bearing the day a brain tells teammate
+from opponent by sight), and the size gate (fires on 10.4% of ticks but at a
+mean p_find of 0.64, and 94% of those are above 0.25).
+
+
+### 12ad. The corner was where the freeze was SEEN, not what it was — regated on motion (2026-09-09)
+
+12aa shipped an escape gated on PLACE: `support_unstick_s` seconds of
+supporting within 0.30 m of a board. Jonathan, looking at /sim after it
+shipped: *"do a code review of this part of the code to make sure it doesn't
+get stuck again."* The review is the answer to that, and the answer was no.
+
+**AUDIT EVERY FREEZE, NOT THE ONE YOU SAW** (`scripts/probe_freeze_audit.py`):
+a duck that travels under 0.15 m in 15 s, in any state, attributed to whichever
+watchdog can reach it. 24 seeds × 180 s of 2v2, on 12aa's shipped brain:
+
+| | |
+|---|---|
+| real freezes | **154** (32 an hour of duck time) |
+| reachable by `stuck_s` | **0** |
+| reachable by `support_unstick_s` (the place gate) | **11** |
+| **no watchdog reaches** | **143** |
+| supporter stranded off its post | 52 |
+| supporter blind — no ball belief at all | 51 |
+| supporter AT its post (correct play, excluded) | 34 |
+
+**The place gate reaches 7% of the fault.** The corner is where a frozen duck
+is VISIBLE — the boards frame it — and in open field the identical duck reads
+as one standing around, which is why 12aa's own /sim observation, and mine,
+both landed on the corner. `stuck_s` reaches none of it for the reason 12aa
+already documented: its state list excludes `support` AND it wants a still
+head, so a duck turning on the spot is invisible to it wherever it stands.
+
+**THE GATE IS MOTION.** Under `support_unstick_move` 0.15 m of travel across
+`support_unstick_s`, and not on its post. The post exemption is the whole
+subtlety and it comes straight out of the audit: 34 of 188 long stands are a
+supporter standing ON its post facing the ball, which is the job — a rule
+without that exemption reports the brain working as a bug.
+
+| 24 seeds | place gate | motion gate |
+|---|---|---|
+| real freezes | 154 | **105** (−32%) |
+| no watchdog reaches | 143 | **59** |
+| supporter blind | 51 | **15** (−71%) |
+| supporter stranded | 52 | 31 |
+| **at post (correct play)** | 34 | **48** |
+
+The last row is the mechanism showing: ducks that used to freeze short of their
+posts now REACH them. And the ledger says the same thing from the other side
+(96 seeds an arm, against the rule off entirely): **ballAdvance 0.467 → 0.595
+m/min (p = 0.009)**, **crowd 0.244 → 0.188 (p < 0.001)**, spread 0.532 → 0.564
+(p = 0.005), and **falls back to baseline — 7 against 5 (p = 0.57)**, where the
+place gate cost 8 and the 2.0 s dose cost 13. Un-freezing ducks pays for itself.
+
+**WHAT IS NOT FIXED, and it is most of it.** 105 freezes an hour remain, 59
+beyond either watchdog: `retreat`, `lineup` and `blocked` stands, plus 31
+supporters still stranded off a post they cannot reach. And the motion gate
+spends MORE time near flat boards than either alternative (24.5 s a duck a run
+against 20.1 with no rule and 16.7 with the place gate). Proximity is not
+frozenness — the freeze count fell while the proximity rose, which is what
+"ducks are working the ball at the boards instead of standing frozen" looks
+like — but it is not nothing and it is not explained. Possession is also down
+1.9 s/min at p = 0.095, called null at MDE 7%, and it is the one metric whose
+sign runs against the rest.
+
+**THE PLACE GATE, OR-ED ON TOP, IS INERT.** Keeping both — fire on no-movement
+OR on 4 s within 0.30 m of a board — produced **six of six bit-identical seed
+files**: a supporter that has sat within 0.30 m of a board for four seconds has
+by then also failed the displacement test, so the place term never claims a tick
+the motion term has not. Removed rather than shipped inert (12o's lesson, and
+the second time this week).
+
+**TWO INSTRUMENT ERRORS INSIDE THIS ITEM, both mine, both caught by a diff and
+not by care.** I compared freeze counts printed by two different versions of my
+own report code — one subtracted the legitimate post-holds, the other did not —
+and read the difference as an effect. And I compared a 24-seed arm against a
+48-seed one and read a halved absolute count as the combined gate "recovering"
+the flat-board result. **An absolute count is not comparable across arms of
+different size, and a number is not comparable across versions of the tool that
+printed it.** Both would have been caught by printing the denominator beside
+every count, which the probe now does.

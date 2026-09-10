@@ -1773,8 +1773,8 @@ class ChaseParams:
     # `avoid`/`blocked`/`yield` and additionally wants under 0.3 rad of yaw
     # change, so a duck SPINNING in `support` fails both of its conditions.
     #
-    # `support_unstick_s` seconds of supporting closer than
-    # `support_unstick_m` to a board TRIGGERS THE RETREAT — the escape the
+    # `support_unstick_s` seconds of supporting without getting anywhere
+    # TRIGGERS THE RETREAT — the escape the
     # brain already has and already tunes (`retreat_turn_s`, `retreat_walk_s`),
     # reached by a trigger it was missing rather than by a second escape
     # beside it. Measured on the seed that produced the 123.4 s visit: 0.0 s
@@ -1795,9 +1795,7 @@ class ChaseParams:
     # flickers (the trapped duck had one on 29% of ticks, interleaved), so a
     # clock any sighting resets never reaches a threshold at all — the first
     # version of this rule was bit-identical to shipped for exactly that
-    # reason. `support_unstick_m` is below `support_margin`, so a duck parked
-    # on a legitimately clamped post is never inside the zone; only one deeper
-    # than any post can reach fires it. 0 disables the rule.
+    # reason. 0 disables the rule.
     # 4.0 and not 2.0, which was the surprise: firing LATER is better on every
     # axis measured. 48 seeds x 180 s of 2v2 — corner time a duck a run 2.1 s
     # (off) / 0.9 (at 2.0) / **0.5 (at 4.0)**, visits over 30 s 5 / 0 / 0, and
@@ -1806,7 +1804,36 @@ class ChaseParams:
     # them interrupt a search that was about to succeed on its own, which costs
     # the escape's own risk for nothing. 0 disables the rule.
     support_unstick_s: float = 4.0
-    support_unstick_m: float = 0.30
+    # THE GATE IS MOTION, NOT PLACE (roadmap 12ac). This rule first shipped
+    # gated on "within `support_unstick_m` 0.30 m of a board", because the
+    # corner was where the freeze was SEEN. Auditing every freeze the brain
+    # produces — 15 s with under 0.15 m of travel, `scripts/probe_freeze_audit.py`
+    # — says the corner was one instance of a general fault: of 25 such stands
+    # in 1440 duck-seconds, 2 were a supporter legitimately AT its post and
+    # **20 were a supporter with no ball belief at all, in OPEN PLAY, nowhere
+    # near a board**, which the place gate cannot reach. A supporter that loses
+    # the ball stops playing wherever it is standing.
+    #
+    # So the trigger is displacement: under `support_unstick_move` of travel
+    # across `support_unstick_s`. That is far more selective than the version
+    # this replaces AND than the ungated one rejected earlier ("walk home
+    # whenever the ball is unknown", which moved every supporter for +4.8 s a
+    # run of no-ball time and no measurable gain) — a supporter walking to its
+    # post, or turning and re-acquiring, never trips it.
+    #
+    # `support_hold_tol` is the exemption that makes it safe, and it is the
+    # whole subtlety: a supporter standing still ON its post is doing its job,
+    # not freezing. It matches `_support`'s own servo stop, so the rule and the
+    # controller agree on what "arrived" means by construction.
+    # THE PLACE GATE WAS TRIED BESIDE THIS ONE AND IS INERT. OR-ing the old
+    # "within 0.30 m of a board for `support_unstick_s`" term on top produced
+    # SIX OF SIX bit-identical seed files: a supporter that has sat within
+    # 0.30 m of a board for four seconds has by then also failed the
+    # displacement test, so the place term never fires on a tick the motion
+    # term has not already claimed. Not kept — a knob that changes nothing is
+    # dead code, and this repo has been caught shipping one before (12o).
+    support_unstick_move: float = 0.15
+    support_hold_tol: float = 0.12
     # Where a duck with a static ROLE stands when it is not the one on the
     # ball (roadmap Track 4.3). All three are a spot to hold, not a new state
     # machine: the same `_support` servo walks to them and faces the ball.
@@ -2294,8 +2321,7 @@ class Chase:
         self._field_prev: tuple[float, float] | None = None  # the field's last spot (support_field hysteresis)
         self._kickoff_wait = False                           # standing off the other side's kickoff (kickoff_wait)
         self.post: tuple[float, float] | None = None         # where a supporter is holding, for probes and tests
-        self._noball_t0: float | None = None                 # since when this supporter has been against the boards (support_unstick_s)
-        self._noball_last: float | None = None               # …and when that clock last ran, so a gap restarts it
+        self._sup_poses: list[tuple[float, float, float]] = []   # (t, x, y) while supporting: the freeze window (support_unstick_s)
         self._bump_t = -1e9                                  # last contact
         self._bump_t0 = -1e9                                 # onset of the current contact episode
         self.last = (0.0, 0.0, 0.0)
@@ -3123,28 +3149,30 @@ class Chase:
         # blind. Escaping it is the retreat's own job; only the trigger was
         # missing.
         #
-        # The clock is on WHERE THE DUCK IS STANDING, not on whether it can see
-        # the ball: the belief flickers (the trapped duck had one on 29% of
-        # ticks, interleaved), so a clock reset by every momentary sighting
-        # never reaches any threshold — the first version of this rule was
-        # bit-identical to shipped for exactly that reason. `support_unstick_m`
-        # is under `support_margin`, so a duck on a legitimately clamped post
-        # never enters the zone; only one deeper than any post can reach.
-        if p.support_unstick_s > 0 and self.bounds is not None and not self._kickoff_wait \
-                and self.state in ("support", "wait"):
-            near = min(self.bounds[0] - abs(odom[0]), self.bounds[1] - abs(odom[1]))
-            if near >= p.support_unstick_m or self._noball_last is None \
-                    or t - self._noball_last > 0.5:
-                self._noball_t0 = None if near >= p.support_unstick_m else t
-            elif self._noball_t0 is None:
-                self._noball_t0 = t
-            self._noball_last = t
-            if self._noball_t0 is not None and t - self._noball_t0 >= p.support_unstick_s:
-                self._noball_t0 = None
+        # The clock is on DISPLACEMENT, not on the ball: the belief flickers
+        # (the trapped duck had one on 29% of ticks, interleaved), so a clock
+        # any momentary sighting resets never reaches a threshold at all — the
+        # first version of this rule was bit-identical to shipped for exactly
+        # that reason. What does not flicker is whether the duck has got
+        # anywhere. A supporter ON its post is exempt (`support_hold_tol`):
+        # standing still there is the job, and the audit found those are 2 of
+        # every 25 long stands.
+        if p.support_unstick_s > 0 and self.state in ("support", "wait") and not self._kickoff_wait:
+            self._sup_poses.append((t, odom[0], odom[1]))
+            while self._sup_poses and t - self._sup_poses[0][0] > p.support_unstick_s:
+                self._sup_poses.pop(0)
+            held = self.post is not None and math.hypot(self.post[0] - odom[0],
+                                                        self.post[1] - odom[1]) <= p.support_hold_tol
+            if held:
+                self._sup_poses = []              # on its post: standing still IS the job
+            elif len(self._sup_poses) > 1 and t - self._sup_poses[0][0] >= p.support_unstick_s - 0.05 \
+                    and max(math.hypot(px - odom[0], py - odom[1])
+                            for _, px, py in self._sup_poses) < p.support_unstick_move:
+                self._sup_poses = []
                 self._retreat_t0 = t
                 self._retreat_sign = 1.0 if left_near >= right_near else -1.0
         elif p.support_unstick_s > 0:
-            self._noball_t0 = None
+            self._sup_poses = []
         # A turn in place keeps the head level whatever the state asked for:
         # the walker cannot turn in place with its head down (0.2 rad in 5 s
         # against 3.1 level, measured in tidy.py). A COLD turn carries
