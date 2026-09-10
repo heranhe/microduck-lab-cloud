@@ -4945,7 +4945,7 @@ tracker has not seen for more than 0.3 s or whose sigma is over 5 cm. Number: sp
 0.05 m), on-box rate (8 % → over 50 %), and the swings-per-minute that this refuses (the cost). This is the item 7
 "walk-in" lever the roadmap already names, made concrete.
 
-**12d. See the ball at the feet: a standing look-down before the swing.** The walking gaze is capped at 0.6 (0.95 rad
+**12d. See the ball at the feet: a standing look-down before the swing.** — **BUILT AND MEASURED OFF (2026-09-10, 12ak): the sighting arrives, whiff rises.** The walking gaze is capped at 0.6 (0.95 rad
 absolute) because deeper looks while *walking* cost falls (4c). The swing starts from a settle, standing. Let the
 settle look all the way down (the joints reach 84°; 1.3 rad absolute puts the floor from 0.05 m in the frame) for the
 0.3 s before the swing, and fire only on a sighting. The "settle that raises the head" (item 7, 2026-09-06) measured
@@ -8454,3 +8454,68 @@ neck's range, 12k's part 3), or a kick that does not need the ball on a spot
 `scripts/kick_gym.py` rows `track_age`, `track_sigma`, `track_hits`,
 `pred_sigma`, `pred_side`; reader `scripts/read_swing_freshness.py` (the
 tables above).
+
+
+### 12ak. The settle looks down (12d, built): the sighting arrives on 58 % of swings, and every way of acting on it whiffs more (2026-09-10)
+
+12aj left the far balls — 11 % of swings, half the whiffs — as the ones
+nothing sees move during the blind settle. 12d's ask is the fix in kind: the
+duck stands on the spot, so let the settle look where the walking gaze
+cannot. Built as two settle-only knobs, `ChaseParams.settle_gaze_neck` (the
+gaze fraction routed to the neck while in `settle`) and `settle_head_down`
+(the head clip there), overriding `gaze_neck` / `head_down` for that state
+only; off, the head tuple is the shipped one to the bit
+(`tests/test_settle_gaze.py`; the gym baseline on the edited tree matched
+this morning's rows on 480 / 480 episodes). 12k had the geometry: half the
+neck moves the floor window from 0.19–0.91 m to 0.12–0.36 m, which covers the
+far balls (median 0.177 m), and it lost in play only while walking; standing
+it fell zero times at any pose and the weight-12 kicks connect from the
+neck-split pose.
+
+**It sees.** Kick gym, seeds 0–11 × 40, paired against the shipped gaze:
+
+| arm | swings | whiff | track age at the swing | fresh ≤ 0.5 s | belief present | far swings (> 0.15 m) | sweet spot | connected travel | fell |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped | 371 | **9 %** | 1.54 s | 2 % | 12 % | 41 (11 %), whiff 44 % | 15 % | 0.86 m | 0 |
+| look-down (neck 1.0, head 1.0) | 378 | 13 % (null, p 0.12, worse 8 / 12) | **0.14 s** | **58 %** | **62 %** | 78 (21 %), 26 % | 10 % | 0.67 m | 2 |
+| + head level last 0.2 s | 392 | 15 % (effect, p 0.013) | 1.38 s | 23 % | 30 % | 63 (16 %), 43 % | 21 % | 0.77 m | 0 |
+| + level 0.2 s + gate 0.13 m | 346 | 16 % (effect, p 0.005) | 1.48 s | 9 % | 12 % | 56 (16 %), 48 % | 19 % | 0.73 m | 1 |
+| settle 0.6 s, level last 0.15 s | 380 | 13 % (null, p 0.07) | 0.29 s | 56 % | 57 % | 62 (16 %), 45 % | 16 % | 0.77 m | 3 |
+| look-down, far gate OFF | 468 | **32 %** (12 / 12 worse) | 0.12 s | 71 % | 75 % | 226 (48 %), 57 % | 6 % | 0.53 m | 0 |
+
+Fresh beliefs are right: on tracks ≤ 0.3 s old the belief's ahead error is
+2.4 cm median, and the knobs are live on the constructed brain.
+
+**And it whiffs more, for three reasons the rows separate.** (1) The pose: a
+neck pitched at the swing costs the kick — sweet-spot rate 15 → 10 %,
+connected travel 0.86 → 0.67 m, and levelling the head for the last 0.2 s
+restores the spot rate to 21 % but the servo has only 0.2 s to get down and
+see, so the fresh track falls back to 23 % and whiff is worst. A 0.6 s
+settle with the level in the last 0.15 s keeps the sighting (56 %) and still
+reads 13 %. (2) The gate's edge: the far balls the look reveals sit at
+16.5 cm truth / 14.3 cm belief, so `kick_ahead_max` 0.15 passes 34 of the 78;
+at 0.13 it declines more and whiff is 16 % on 346 swings — the re-laid
+attempt is no better than the one declined. (3) What the gate was doing all
+along: with the far gate OFF under the look, 468 of 480 episodes swing, 48 %
+of them at a far ball, whiff 32 %, the ball moving at the swing on 53 % of
+swings against 27 %. The shipped brain's gate looked starved (12aj: the
+belief expires) but it fires exactly on the balls that ROLL away during the
+walk-in, because a rolling ball stays in frame and keeps its belief fresh —
+a still ball goes under the chin and gets its swing. The gate is a
+"the ball rolled" detector by construction, and that is most of its value.
+
+**Neither the head nor the settle touches the ball** (`scripts/
+probe_settle_contact.py`, 40 episodes an arm, every ball contact while the
+brain is in `settle` attributed to the body): floor contacts only, four ankle
+steps in 34 episodes shipped and one with the look; the ball moves 4.3 cm
+during the shipped settle and 2.1 cm with the look — it is rolling in from
+the walk-in, in both. (A static sweep that held the duck at home under the
+servos with the neck pitched toppled it in 0.6 s, which is the kick scene's
+stripped head/trunk floor contacts and no walker, not a play fact.)
+
+**Verdict.** 12d's sighting can be had, and a sighting the brain can only act
+on by declining and re-laying is not worth the pose it costs. The whiff
+floor is no longer a sensing problem: the lever that would USE a fresh
+sighting is a kick that adapts to where the ball is — A.2's in-walk kick or
+12h's learned last metre — not a gate on a planned spot. Both knobs ship off,
+with the numbers on them.

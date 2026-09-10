@@ -1404,6 +1404,41 @@ class ChaseParams:
     # (docs/patches/microduck_rl-kick-head-down.patch). A longer raise
     # (0.5 s) is the brain-side alternative, not measured.
     settle_head_level: float = 0.0
+    # THE SETTLE LOOKS DOWN (roadmap 12d, built after 12aj, 2026-09-10). The
+    # ball track is a median 1.54 s old at the swing because the line-up gaze
+    # is clipped at `head_down` 0.6 with no neck: a 38 deg depression whose
+    # floor window starts 0.19 m from the root (12k), and the ball on the
+    # spot is 0.08 m out - the far balls that whiff (truth > 0.15 m, 11 % of
+    # swings, 44 % whiff) sit at a median 0.177 m, just inside that blind
+    # edge. `gaze_neck` while WALKING lost in play because the window
+    # slides (0.12-0.36 m at half the neck) and the far edge is where the
+    # ball is during the walk-in. The settle is different: the duck stands
+    # on the spot, 12k measured zero falls standing at any pose, and the
+    # weight-12 kicks connect from the neck-split pose (bench 0 % whiff).
+    # So, in `settle` ONLY: route this fraction of the gaze to the neck and
+    # clip the head at `settle_head_down` instead of `head_down`, so the
+    # existing far-ball gate (`kick_ahead_max`) reads a sighting instead of
+    # a belief that expired. 0 = off (the shipped gaze, to the bit).
+    #
+    # BUILT, MEASURED, SHIPS OFF (kick gym, seeds 0-11 x 40, paired; roadmap
+    # 12ak). It delivers the sighting: the track at the swing 1.54 -> 0.14 s
+    # old, fresh (<= 0.5 s) on 58 % of swings from 2 %, the belief present on
+    # 62 % from 12 % and right to 2.4 cm. And whiff goes UP: 9 -> 13 % (null,
+    # worse 8/12), because the deep neck at the swing costs the kick (sweet
+    # spot 15 -> 10 %, connected travel 0.86 -> 0.67 m) and the far balls it
+    # reveals sit at the gate's edge (truth 16.5 cm, belief 14.3). Levelling
+    # the head for the last 0.2 s (`settle_head_level`) gets the spot rate
+    # back (21 %) and loses the sighting (23 % fresh): 15 %, an effect the
+    # wrong way. A 0.6 s settle with 0.15 s level: 13 %. The gate at 0.13:
+    # 16 % on fewer swings. The far gate OFF with the look: 32 % - the gate
+    # does its work once it can see. Neither the settle nor the head touches
+    # the ball (scripts/probe_settle_contact.py: floor contacts only; the ball
+    # rolls in from the walk-in 4.3 cm during the shipped settle, 2.1 with
+    # the look). A fresh sighting the brain can only act on by declining and
+    # re-laying is not worth its pose; the lever that would use it is a kick
+    # that adapts to the ball (A.2 / 12h), not a gate.
+    settle_gaze_neck: float = 0.0
+    settle_head_down: float = 0.0
     # …and yaw the head at it too while standing. The pitch alone cannot
     # reach the endpoint: on the kick spot the ball is 0.08 m ahead and
     # 0.06 m to the kicking foot's side, which is 37° off the nose, and the
@@ -2467,22 +2502,26 @@ class Chase:
         self.gait.reset()
         self.blocker.reset()
 
-    def _gaze(self, rng: float) -> float:
+    def _gaze(self, rng: float, neck: float | None = None, down: float | None = None) -> float:
         """The gaze COMMAND that puts a floor ball at `rng` on the camera's
         axis. With `gaze_neck` > 0 the same command drives both slots, so the
         divisor is what the two of them deliver together (measured additive,
-        `head_gain` + `neck_gain` per unit); at 0 this is the old law."""
+        `head_gain` + `neck_gain` per unit); at 0 this is the old law.
+        `neck` / `down` override `gaze_neck` / `head_down` for one call (the
+        settle's own look, `settle_gaze_neck` / `settle_head_down`)."""
         p = self.p
+        k = p.gaze_neck if neck is None else neck
+        cap = p.head_down if down is None else down
         want = math.atan2(p.cam_z - 0.035, max(rng, 0.05))
-        gain = p.head_gain + p.neck_gain * p.gaze_neck
-        return float(np.clip((want - p.cam_level) / max(gain, 1e-6), 0.0, p.head_down))
+        gain = p.head_gain + p.neck_gain * k
+        return float(np.clip((want - p.cam_level) / max(gain, 1e-6), 0.0, cap))
 
-    def _head_pose(self, cmd: float, yaw: float = 0.0) -> tuple[float, float, float, float]:
+    def _head_pose(self, cmd: float, yaw: float = 0.0, neck: float | None = None) -> tuple[float, float, float, float]:
         """The 4-slot head command for a gaze of `cmd`. The neck looks UP on a
         positive command, so a downward gaze mirrors it negative. With both
         extras off the slots are plain 0.0 and not -0.0 — the old tuple, to
-        the bit."""
-        k = self.p.gaze_neck
+        the bit. `neck` overrides `gaze_neck` for one call."""
+        k = self.p.gaze_neck if neck is None else neck
         return (-k * cmd if k else 0.0, cmd, yaw, 0.0)
 
     def _track_pitch(self, rng: float, cam_z: float, walking: bool) -> float:
@@ -3333,7 +3372,16 @@ class Chase:
                                  -p.head_yaw_max, p.head_yaw_max)) if p.gaze_yaw else 0.0
             if p.yaw_clear > 0.0 and ahead < p.yaw_clear:
                 gyaw = 0.0
-            head = self._head_pose(self._gaze(gaze_at), gyaw)
+            if self.state == "settle" and (p.settle_gaze_neck > 0.0 or p.settle_head_down > 0.0):
+                # The settle's own look (`settle_gaze_neck` / `settle_head_down`):
+                # standing on the spot, the gaze may go where the walking one
+                # cannot. Off, this branch is not taken and the tuple is the
+                # shipped one to the bit.
+                nk = p.settle_gaze_neck if p.settle_gaze_neck > 0.0 else p.gaze_neck
+                dn = p.settle_head_down if p.settle_head_down > 0.0 else p.head_down
+                head = self._head_pose(self._gaze(gaze_at, nk, dn), gyaw, nk)
+            else:
+                head = self._head_pose(self._gaze(gaze_at), gyaw)
         if look_yaw is not None and self.state == "look":
             head = self._head_pose(self._gaze(gaze_at), float(np.clip(look_yaw, -p.head_yaw_max, p.head_yaw_max)))
         # Where the head looks, and the range that goes with it (the tracking
