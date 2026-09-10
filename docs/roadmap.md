@@ -336,8 +336,9 @@ Also still open, and probably the same root cause:
       satisfy both halves of this item at once**, on the battery at least.
       Still open: whether fix 2's single events-on fall goes away with more
       steps.
-- [ ] **A/B the turn term** at weight 0 vs 1.0, same warm start, same seed, 2M
-      steps each (`--weights-json` or the viewer's sliders).
+- [x] **A/B the turn term** at weight 0 vs 1.0, same warm start, same seed, 2M
+      steps each (`--weights-json` or the viewer's sliders). **RUN 2026-09-10 —
+      the term stays at 1.0; see the verdict below.**
       → still open, but **re-scope it before running it**: the premise was
       that stage 5's `turn_to_belief` bought back-bucket found rate at the
       cost of the chain's only falls. The control arm shows the term is not
