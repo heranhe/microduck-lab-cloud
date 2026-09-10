@@ -15,10 +15,10 @@ from microduck_local.brain.controllers import tof_clearance_bearings  # noqa: E4
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer  # noqa: E402
 from microduck_local.world.arena import World  # noqa: E402
 
-def run(seed, episodes, knobs, margin):
+def run(seed, episodes, knobs, margin, cove=0.0, corner=0.0):
     if knobs: os.environ["MICRODUCK_CHASE"] = knobs
     else: os.environ.pop("MICRODUCK_CHASE", None)
-    sc = gym_scenario(); infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
+    sc = gym_scenario(cove=cove, corner=corner); infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
     w = World(sc, infer_for={x.id: infer for x in sc.ducks}, seed=seed)
     bk = __import__("microduck_local.brain.team", fromlist=["brain_kwargs"]).brain_kwargs
     brains = {x.id: REGISTRY.make("chase", **bk(x, w, {})) for x in sc.ducks}
@@ -65,11 +65,11 @@ def run(seed, episodes, knobs, margin):
                     "final": brain.state})
     return out
 
-ap = argparse.ArgumentParser(); ap.add_argument("--arm", action="append", default=None); ap.add_argument("--episodes", type=int, default=20); ap.add_argument("--seeds", type=int, default=2); ap.add_argument("--margin", type=float, default=0.15)
+ap = argparse.ArgumentParser(); ap.add_argument("--arm", action="append", default=None); ap.add_argument("--episodes", type=int, default=20); ap.add_argument("--seeds", type=int, default=2); ap.add_argument("--margin", type=float, default=0.15); ap.add_argument("--cove", type=float, default=0.0); ap.add_argument("--corner", type=float, default=0.0)
 a = ap.parse_args()
 for spec in (a.arm or ["base="]):
     label, knobs = spec.split("=", 1)
-    rows = [r for s in range(a.seeds) for r in run(s, a.episodes, knobs, a.margin)]
+    rows = [r for s in range(a.seeds) for r in run(s, a.episodes, knobs, a.margin, a.cove, a.corner)]
     tot = Counter()
     for r in rows: tot.update(r["states"])
     n = len(rows); secs = sum(tot.values())

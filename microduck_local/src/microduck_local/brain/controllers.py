@@ -915,8 +915,48 @@ class ChaseParams:
     backoff_range: float = 0.35
     search_walk_after: float = 0.0     # 0: off (measured with the two-stage line-up, see above)
     search_walk_s: float = 1.0
-    lineup_tol: float = 0.03       # trunk within this of the kicking spot: kick
+    # Trunk within this of the kicking spot: kick. 0.03 until 2026-09-10;
+    # 0.05 SHIPS ON (roadmap 12ao). 12a's funnel priced a 3-6 cm spot error
+    # at 8 % whiff, and the gym says the opposite, two seed blocks, both
+    # populations: the ball at a board on the cove, connected kicks +21 %
+    # pooled (129 -> 169, 146 -> 164) with whiff 38 -> 33 and 37 -> 33 %;
+    # open play, whiff a null both blocks (11 -> 10, 10 -> 8), the sweet-spot
+    # rate 16-17 -> 22-23 %, connected travel 0.82-0.89 -> 1.00-1.02 m, the
+    # ball's advance per episode +25 %; falls flat. The reason is in the
+    # line-up: a 3 cm target makes the servo creep and turn around the spot,
+    # and that creeping nudges the ball off it; settling at 5 cm settles
+    # sooner with the ball where the plan put it. 2v2 ledger, two blocks of
+    # 24: possession null both, spread / crowd / depth null, kicks 305 -> 309,
+    # goals 40 -> 45, own goals 9 = 9 - and two trends the wrong way at sizes
+    # the battery cannot resolve, falls 6 -> 10 and back-kicks 24 -> 29 %
+    # (p 0.14 on 600 events); the gym's per-swing falls are flat, so the
+    # ledger's are not the swing's. Recorded on the knob; `lineup_tol=0.03`
+    # is the old brain to the bit if the next ledger says otherwise.
+    lineup_tol: float = 0.05
     lineup_s: float = 4.0          # give up a line-up after this long
+    # THE SQUARE-UP AT A REACHED SPOT (roadmap 12ao, built 2026-09-10). On
+    # the lab's boards a line-up that has been within 1 cm of its spot
+    # still times out 5 cm from it, 64 deg off heading, with the wall 29 cm
+    # away and the bumper silent (probe_board_states on the coved gym: 41
+    # of 76 line-ups): outside `lineup_tol` the servo walks AT the spot,
+    # whose bearing flips sign at close range, so it creeps and turns
+    # toward the spot instead of the heading and is never both on it and
+    # squared before `lineup_s`. Inside this distance of a kick spot the
+    # order changes: turn in place to the heading first, then close the
+    # last centimetres straight along it with the two-stage's lateral law
+    # (`k_lat` / `k_head`, capped at `approach_wz`). 0 = off (the servo to
+    # the spot as before).
+    #
+    # BUILT, MEASURED OFF in three cuts on the lab's boards (12ao, 40
+    # episodes each): turn then walk straight (2 swings, 76 timeouts - after
+    # a turn in place the spot is beside the duck), turn then a proportional
+    # holonomic close (4 / 74 - a 0.1 m/s ask moves the walker nothing), turn
+    # then a fixed 0.25 m/s vector at the spot (14 / 59 - squared to 24 deg
+    # and still 5-7 cm off). Within 8 cm no command law here puts the trunk
+    # within 3 cm of a point; the walker's positioning is the floor. The
+    # crab it plumbed (the twist's lateral component) stays wired and tested.
+    lineup_square: float = 0.0
+    square_speed: float = 0.25     # the close's speed (m/s) along the body-frame vector to the spot
     settle_s: float = 0.4          # stand this long on the spot before the kick (robotd kicks at standing tuning)
     kick_clear: float = 0.35       # no kick with anything closer than this ahead
     aim_tol: float = 0.25          # face the kick direction within this before kicking (rad)
@@ -3152,6 +3192,7 @@ class Chase:
         skill = None
         head = (0.0, 0.0, 0.0, 0.0)
         gaze_at: float | None = None
+        vy = 0.0                                             # the crab: only the last centimetres of a line-up use it
         gaze_yaw = 0.0
         look_yaw: float | None = None                       # the post-kick sweep (look_sweep)
         retreating = t - self._retreat_t0 < p.retreat_turn_s + p.retreat_walk_s
@@ -3295,6 +3336,31 @@ class Chase:
             else:
                 tol = p.push_tol if (mode == "push" and p.push_tol > 0.0) else p.lineup_tol   # a push's own tolerance
                 vx, wz, dist, bearing = self._servo(odom, (sx, sy), cold, tol)
+                if p.lineup_square > 0.0 and mode == "kick" and not p.two_stage and self.state != "settle" \
+                        and tol < dist <= p.lineup_square:
+                    # The last centimetres (`lineup_square`): square to the
+                    # heading first, then walk straight along it onto the spot.
+                    if abs(heading_err) > p.aim_tol:
+                        vx, _, wz = turn(heading_err, cold)
+                    else:
+                        # Squared: close the spot as a HOLONOMIC error in the
+                        # heading frame - forward along it, a crab across it
+                        # (the walker trained on lateral commands; the omni
+                        # bucket), the heading held by `k_head`. A straight
+                        # walk cannot reach a spot that is beside the duck,
+                        # which after a turn in place it usually is (12ao's
+                        # first cut: squared to 19 deg, stuck 7 cm off, 76
+                        # timeouts of 97).
+                        along = (sx - odom[0]) * math.cos(odom[2]) + (sy - odom[1]) * math.sin(odom[2])
+                        lat = -(sx - odom[0]) * math.sin(odom[2]) + (sy - odom[1]) * math.cos(odom[2])   # +: the spot is to the LEFT
+                        # A FIXED-SPEED vector at the spot, not a proportional
+                        # one: the walker trained on forward commands clamped
+                        # at 0.3 and a 0.1 m/s ask moves nothing (12ao's second
+                        # cut: squared to 23 deg, still 5 cm off, 74 timeouts).
+                        n = math.hypot(along, lat)
+                        vx = float(p.square_speed * along / n) if n > 1e-6 else 0.0
+                        vy = float(p.square_speed * lat / n) if n > 1e-6 else 0.0
+                        wz = float(np.clip(p.k_head * heading_err, -p.approach_wz, p.approach_wz))
                 if mode == "kick" and p.two_stage and self.state != "settle":
                     # Stage two: in along the line, steering onto it (the
                     # walker crabs on a pure forward command), stop on the
@@ -3645,7 +3711,7 @@ class Chase:
                 vx, _, wz = back_up()                           # back out of it, which standing never does
             elif p.bump_stand_s > 0:
                 vx, wz = 0.0, 0.0                               # touching a body: stand, do not turn in place
-        self.last = (vx, 0.0, wz)
+        self.last = (vx, vy, wz)
         return Intent(twist=self.last, head=head, note=self.role if self.role != "attack" else self.state, skill=skill)
 
     def _attack_x(self, x: float) -> float:

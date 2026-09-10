@@ -70,19 +70,19 @@ def test_in_the_open_and_off_the_kick_plan_is_untouched():
 
 
 def test_a_push_spot_has_its_own_line_up_tolerance():
-    """5 cm from a push spot, squared: on the spot at `push_tol` 0.06, so the
-    line-up settles; a KICK spot 5 cm away is not on its spot (`lineup_tol`
-    0.03) and keeps walking."""
+    """5.5 cm from a push spot, squared: on the spot at `push_tol` 0.06, so
+    the line-up settles; a KICK spot 5.5 cm away is not on its spot
+    (`lineup_tol` 0.05) and keeps walking."""
     from microduck_local.brain.runtime import Senses
     for mode, foot, expect in (("push", None, "settle"), ("kick", "kick_right", "lineup")):
         b = _brain(gaze_still=True)
         b.state, b.lined, b.t_state = "lineup", True, 5.0
-        b.spot = (0.05, 0.0, foot, 0.0, mode)
+        b.spot = (0.055, 0.0, foot, 0.0, mode)
         b.step(Senses(t=5.0, det=None, det_age=None, odom=(0.0, 0.0, 0.0), speed=0.0))
         assert b.state == expect, (mode, b.state)
     b = _brain(gaze_still=True, push_tol=0.0)                          # off: the kick's tolerance for a push too
     b.state, b.lined, b.t_state = "lineup", True, 5.0
-    b.spot = (0.05, 0.0, None, 0.0, "push")
+    b.spot = (0.055, 0.0, None, 0.0, "push")
     b.step(Senses(t=5.0, det=None, det_age=None, odom=(0.0, 0.0, 0.0), speed=0.0))
     assert b.state == "lineup"
 

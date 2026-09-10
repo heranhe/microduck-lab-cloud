@@ -414,6 +414,9 @@ def test_the_head_yaw_is_gated_on_forward_clearance_and_fails_open():
     assert abs(out.head[2] - wanted) < 0.02
 
 
+# `_settling` walks a brain into its settle by the 2026-09-08 geometry; the line-up
+# tolerance shipped at 0.05 on 2026-09-10 (roadmap 12ao) and these scenes pin the
+# settle's HEAD behaviour, not the tolerance, so they keep the 3 cm they were laid on.
 def _settling(still: bool, neck: float = 0.0, yaw: bool = False,
               heading_off: float = 0.0, stale: float | None = None, n: int = 9, **params):
     """Walk a Chase in to the settle in front of a kick, the way the sim does:
@@ -426,7 +429,7 @@ def _settling(still: bool, neck: float = 0.0, yaw: bool = False,
     `stale` moves the TRACK that far out in front before one last step: the
     plan gone stale, which is the ordinary case in play (spot-to-ball a
     median 0.285 m over 191 kicks) and the one a held gaze is for."""
-    b = Chase(ChaseParams(gaze_still=still, gaze_neck=neck, gaze_yaw=yaw, **params), goal=(1.5, 0.0))
+    b = Chase(ChaseParams(lineup_tol=0.03, gaze_still=still, gaze_neck=neck, gaze_yaw=yaw, **params), goal=(1.5, 0.0))
     x, y, head = 0.0, 0.0, 0.0
     out = None
     for i in range(n):

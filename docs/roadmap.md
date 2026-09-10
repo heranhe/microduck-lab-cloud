@@ -8958,3 +8958,89 @@ turn, not a different touch.
 **Instruments:** `kick_gym --cove R --corner L`, rows `touch` / `advance`;
 `scripts/probe_board_states.py` (pushes, endings); reader in the 12an
 scratch (`touch_read.py`).
+
+
+### 12ao. The square-up at a reached spot: three cuts of a last-centimetres rule lose, and the walker's positioning is the floor; a 5 cm tolerance is what the boards can have (2026-09-10)
+
+12am's recorded lever, measured on the LAB's boards this time
+(`probe_board_states --cove 0.15 --corner 0.3`, 40 episodes, the ball
+placed at a board). The shipped brain: 76 line-ups, 19 swings, **41
+timeouts**, and at the timeouts the duck is 5 cm from its spot having been
+within **1 cm** of it at some point, **64° off heading**, the wall 29 cm
+away, the bumper silent. So on the cove the square-up is the whole
+remaining failure: outside `lineup_tol` 0.03 the servo walks AT the spot,
+whose bearing flips sign at close range, so the duck creeps and turns
+toward the spot instead of the heading and is never both on it and squared
+before `lineup_s`.
+
+**Three cuts of `ChaseParams.lineup_square`** (inside that distance of a kick
+spot: turn in place to the heading first, then close), each traced:
+
+| cut | swings / 40 | timeouts | at the timeouts |
+|---|---|---|---|
+| shipped | 19 | 41 | 5 cm off, 64° |
+| turn, then walk straight along the heading | 2 | 76 | squared to 19°, **7 cm off, never closer than 5** — after a turn in place the spot is beside the duck and a straight walk cannot reach it |
+| turn, then a proportional holonomic close (forward + crab, 2 m/s per m) | 4 | 74 | squared to 23°, 5–6 cm off — a 0.1 m/s ask moves the walker nothing (it trained on forward commands clamped at 0.3) |
+| turn, then a fixed 0.25 m/s vector at the spot | 14 | 59 | squared to 24°, **5–7 cm off** — the walker does not place its trunk to 3 cm on a holonomic command |
+| …with `lineup_tol` 0.05 as well | 17 | 45 | 7 cm off |
+
+The crab is real (the twist's lateral component, which the chase brain had
+never used, is now plumbed and tested — `tests/test_lineup_square.py`) and
+it does not help: **within 8 cm, no command law here puts the trunk within
+3 cm of a point**, while the shipped servo, walking a line with steering,
+touches 1 cm in 73 % of its timed-out line-ups and then loses the spot in
+the turn. The floor is the walker's positioning precision, not the brain's
+order of operations. `lineup_square` ships off.
+
+**The tolerance is the lever that is left**, priced by 12a's funnel (a 3–6 cm
+spot error whiffs 8 % against 0 %). `lineup_tol` 0.05: swings 19 → 22,
+timeouts 41 → 24, and the far gate declines 7 → 17 of the settles it
+creates (the ball further from the foot at the settle). At 0.06: 19 / 31 /
+17 — the wider tolerance stops paying.
+
+**The tolerance in the gym, two seed blocks, both populations**
+(`lineup_tol` 0.03 shipped against 0.05; 480 episodes an arm):
+
+| population | arm | touches | connected | whiff | sweet spot | connected travel | advance per episode | fell |
+|---|---|---|---|---|---|---|---|---|
+| the cove, ball ≤ 0.15 m from a board, seeds 0–11 | shipped | 207 | 129 | 38 % | 12 % | 0.85 m | +0.064 m | 2 |
+| | `lineup_tol` 0.05 | 252 | **169** | 33 % (better 8 / 12) | 19 % | 0.88 m | +0.073 m | 1 |
+| …seeds 100–111 | shipped | 232 | 146 | 37 % | 12 % | 0.92 m | +0.094 m | 2 |
+| | `lineup_tol` 0.05 | 246 | **164** | 33 % (7 / 12) | 11 % | 0.92 m | +0.092 m | 3 |
+| open play, seeds 0–11 | shipped | 406 | 361 | 11 % | 17 % | 0.89 m | +0.373 m | 1 |
+| | `lineup_tol` 0.05 | 414 | 371 | 10 % (null) | **23 %** | **1.02 m** | **+0.440 m** | 2 |
+| …seeds 100–111 | shipped | 412 | 372 | 10 % | 16 % | 0.82 m | +0.334 m | 2 |
+| | `lineup_tol` 0.05 | 405 | 374 | 8 % (null) | **22 %** | **1.00 m** | **+0.441 m** | 0 |
+
+Not what 12a's funnel priced. Connected board kicks +21 % pooled; and in
+the OPEN, where the tolerance was expected to cost whiff, whiff is a null
+both blocks (better on 5 / 12 and 7 / 12), the sweet-spot rate rises from
+16–17 % to 22–23 % on both blocks, the connected travel from 0.82–0.89 to
+1.00–1.02 m, and the ball's advance per episode by a quarter. The reason
+is in the line-up, not the swing: a 3 cm target makes the servo creep and
+turn around the spot for the last centimetres, and that creeping is what
+nudges the ball off its spot (12a: the ball moves 4.3 cm during the
+shipped settle); settling at 5 cm settles sooner, with the ball still
+where the plan put it. Falls flat, 0–3 in ~400 swings.
+
+**2v2 ledger, two blocks of 24** (`eval-pitch --seeds 24 --seconds 300
+--per-side 2 --ball-out-s 5`, seeds 0–23 and 100–123, the shipped brain
+against `lineup_tol` 0.05, `compare_pitch.py`): possession 39.9 → 40.6 and
+40.4 → 39.5 s/min (null both), spread / crowd / depth null, ballAdvance
+NO RESULT both; events pooled over 48 seeds: kicks 305 → 309, goals
+40 → 45, own goals 9 = 9, **falls 6 → 10**, **back-kicks 24 → 29 %**
+(73 / 305 → 91 / 309, p 0.14). Flat on everything the battery resolves, one
+trend the right way and two the wrong way at sizes it cannot (falls need
+~6900 seeds); the gym's per-swing fall column, ~800 swings an arm pooled,
+is flat, so the ledger's extra falls are not the swing's.
+
+**Verdict.** `lineup_tol` **ships at 0.05**, on the gym's replicated gains
+in both populations, with the ledger's two trends written on the knob and
+this section; `lineup_tol=0.03` is the old brain to the bit if the next
+ledger reads them as real. `lineup_square` ships off. ⚠ Every soccer number
+before this item is on a 3 cm line-up tolerance. What is left at the boards
+is the walker's positioning itself — a spot reached to 5 cm and lost in the
+turn — which no command law in this brain fixes; a walker that turns in
+place without creeping, or a kick that does not need a spot (A.2), is the
+route. Instruments: `probe_board_states --cove/--corner` (endings,
+timeouts), `tests/test_lineup_square.py` (the crab).
