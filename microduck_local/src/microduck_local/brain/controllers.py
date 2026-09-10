@@ -1746,6 +1746,28 @@ class ChaseParams:
     # the fresh block could see (median loss 1.10 with it, 1.14 without, on
     # the same seeds). 0: off.
     look_hold_s: float = 2.5
+    # THE HEAD ON THE REMEMBERED BALL WHERE THE BLIND TIME IS (roadmap 12af).
+    # The loss audit's per-tick trace: support, retreat and avoid own 74% of
+    # the long blind stretches and consult the ball in none of them, while
+    # every head law above runs off the tracker, which forgets in 2.5 s. With
+    # `head_memory_s` > 0, in `head_memory_states` (a "+"-joined list, since
+    # "," is MICRODUCK_CHASE's separator) and with no fresher look target,
+    # the head yaws (and, under `track_pitch`, pitches) toward the ball the
+    # BOARD has - a teammate sees it now - else toward this duck's own last
+    # sighting (`self.memory`, odometry frame) while it is younger than
+    # `head_memory_s`. The head only: nothing walks anywhere on this memory
+    # (`seek_s` stays the walk's own knob), and the `yaw_clear` bumper gate
+    # applies as to every other head yaw. 0 = off, the head before 2026-09-10.
+    # MEASURED (roadmap 12ag; `probe_ball_loss`, 24 seeds x 180 s of 2v2 in
+    # two blocks, paired): ball in view 45.9 -> 50.0% (+4.1 pp +-3.6, p =
+    # 0.027, 16/24 seeds), the `behind` blind frames 52 619 -> 29 808, long-loss
+    # duck-seconds -20%, falls 0.12 -> 0.08 a run; `eval-pitch` 24 x 300 s:
+    # possession null at a 4% MDE, falls 4 -> 4, own goals 9 -> 0, kicks 102
+    # -> 112 events. SHIPS ON at 30 s. With `avoid` added the view gain is
+    # +4.8 pp but the pitch trends the wrong way (goals 26 -> 19, back-kicks
+    # 22 -> 32%, both unresolved at 24 seeds): recorded, off.
+    head_memory_s: float = 30.0
+    head_memory_states: str = "support+wait+retreat"
     head_lead_s: float = 0.0
     # `track_pitch_turn` = 0.15 (the benched-free head pitch during a turn in
     # place) measured on the fresh block beside the bundle: median loss 1.14
@@ -2919,8 +2941,9 @@ class Chase:
             self._hunt_t0 = -1e9
             self._hunt_u = None
         if (not seen and not hunting and self.memory is not None
-                and (t - self.memory[2] > p.seek_s
-                     or math.hypot(self.memory[0] - odom[0], self.memory[1] - odom[1]) <= p.seek_min)):
+                and (t - self.memory[2] > max(p.seek_s, p.head_memory_s)
+                     or (p.seek_s > 0.0
+                         and math.hypot(self.memory[0] - odom[0], self.memory[1] - odom[1]) <= p.seek_min))):
             self.memory = None                                  # stale, or here with nothing seen: forget it
         seeking = p.seek_s > 0 and not seen and not hunting and self.memory is not None
         if seeking and (ahead < p.hunt_stop or self._beside(t)):
@@ -3317,6 +3340,15 @@ class Chase:
             look_at = p.kick_exit_left if self._last_foot == "kick_left" else p.kick_exit_right
         elif look_at is None and self.state == "search" and p.search_sweep > 0 and self._search_t0 is not None:
             look_at = p.search_sweep * math.sin(2.0 * math.pi * (t - self._search_t0) / p.search_sweep_s) / p.head_yaw_gain
+        elif look_at is None and p.head_memory_s > 0.0 and self.state in p.head_memory_states.split("+"):
+            # The head on the remembered ball (`head_memory_s`): the board's
+            # ball if a teammate has it, else our own last sighting.
+            mem = self.team.ball(t) if self.team is not None else None
+            if mem is None and self.memory is not None and t - self.memory[2] <= p.head_memory_s:
+                mem = (self.memory[0], self.memory[1])
+            if mem is not None:
+                look_at = _wrap(math.atan2(mem[1] - odom[1], mem[0] - odom[0]) - odom[2])
+                look_rng = math.hypot(mem[0] - odom[0], mem[1] - odom[1])
         if look_at is not None and senses.skill is None and (p.head_yaw_when == "always" or self.state in ("search", "look")) \
                 and not (p.yaw_clear > 0.0 and ahead < p.yaw_clear):
             # …unless the way ahead is not clear. The ToF is ON THE HEAD, so
