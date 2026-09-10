@@ -76,7 +76,12 @@ def _seen_ball(b: Chase, odom, bx, by, t=1.0):
 
 
 def test_a_ball_at_the_boards_gets_a_spot_along_them_on_the_open_side():
-    p = ChaseParams(board_margin=0.08)                                 # ships off; the lab's pitches use the ball-out rule
+    # `board_margin` ships off (the lab's pitches use the ball-out rule), and
+    # this exercises its rescue on its own: with `spot_reach` (ships on,
+    # roadmap 12al) the selector's fan keeps the one body-reachable line -
+    # the line of sight, spot 0.135 m off this wall - BEFORE the rescue can
+    # re-lay a scoring line along the wall, so the two are measured apart.
+    p = ChaseParams(board_margin=0.08, spot_reach=0.0)
     hx, hy = 1.5, 1.25
     b = Chase(p, goal=(hx, 0.0), bounds=(hx, hy), goal_w=0.7)
     odom = (-0.5, hy - 0.4, 0.0)
@@ -87,7 +92,7 @@ def test_a_ball_at_the_boards_gets_a_spot_along_them_on_the_open_side():
     assert abs(h) < 0.3                                                # the line runs UP the pitch, along the wall
     assert y < by                                                      # the body on the open side of the ball
     # The same ball with the margin off: the spot lands inside the boards.
-    b0 = Chase(ChaseParams(board_margin=0.0), goal=(hx, 0.0), bounds=(hx, hy), goal_w=0.7)
+    b0 = Chase(ChaseParams(board_margin=0.0, spot_reach=0.0), goal=(hx, 0.0), bounds=(hx, hy), goal_w=0.7)
     _, y0, _, _, _ = b0._plan(odom, _seen_ball(b0, odom, bx, by))
     assert hy - abs(y0) < p.board_margin
     # The OWN end board (the goal line points away from it, so the spot
@@ -107,7 +112,7 @@ def test_a_ball_at_the_boards_gets_a_spot_along_them_on_the_open_side():
     # foot hysteresis remembers the last spot).
     odom = (-0.5, 0.0, 0.0)
     b1 = Chase(p, goal=(hx, 0.0), bounds=(hx, hy), goal_w=0.7)
-    b2 = Chase(ChaseParams(board_margin=0.0), goal=(hx, 0.0), bounds=(hx, hy), goal_w=0.7)
+    b2 = Chase(ChaseParams(board_margin=0.0, spot_reach=0.0), goal=(hx, 0.0), bounds=(hx, hy), goal_w=0.7)
     a = b1._plan(odom, _seen_ball(b1, odom, 0.0, 0.0))
     c = b2._plan(odom, _seen_ball(b2, odom, 0.0, 0.0))
     assert np.allclose(a[:2], c[:2]) and a[2:] == c[2:]

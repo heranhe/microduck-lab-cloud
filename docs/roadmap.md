@@ -8591,6 +8591,12 @@ measured on a fan that could plan into a wall; a battery re-run on the
 shipped brain is on `spot_reach` 0.129 from here, and `spot_reach=0` is the
 old fan to the bit.
 
+**Interaction with `board_margin`** (ships off): the constraint acts before
+the rescue. For a ball 4 cm off a side wall the fan keeps its one
+body-reachable line — the line of sight, spot 0.135 m in — and the rescue
+never sees the scoring line whose spot was inside the wall; CI caught it in
+`test_ball_out.py`, which now measures the rescue with `spot_reach` at 0.
+
 **Instruments:** `spot_board` on every gym row (the latched spot's distance
 to the nearest board, swing or not) is the census; `scripts/
 probe_board_states.py` is the timeout trace. Counters on the brain:

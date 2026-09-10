@@ -592,7 +592,10 @@ class ChaseParams:
     # ToF bumper (`tof_stop` 0.30) halts a servoed approach ~0.3 m from the
     # wall, 21 cm short of the spot (scripts/probe_board_states.py) - body-
     # reachable is not walker-reachable, and that predicate is the
-    # approach's, not the spot's.
+    # approach's, not the spot's. With `board_margin` also on, this acts
+    # FIRST: a ball 4 cm off a wall keeps its one body-reachable line (the
+    # line of sight) and the rescue never sees the scoring line whose spot
+    # was in the wall (tests/test_ball_out.py measures the rescue at 0).
     spot_reach: float = 0.129
     kick_side: float = 0.06
     # The kick map (a standing duck, the ball swept over (ahead, side) of
