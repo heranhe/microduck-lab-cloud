@@ -49,8 +49,9 @@ get zero commands and just do their trick. The **keyboard flies the camera**,
 Maya/Blender-style: drag to orbit, scroll/two-finger-vertical to zoom,
 **two-finger horizontal swipe** to slide laterally (natural-scrolling
 direction; browser back-swipe is suppressed over the scene, and panels keep
-native scrolling), **A/D** slide, **W/S·↑↓** dolly, **←/→** orbit, **Q/E**
-rise/fall, **Shift+R** reset view — all held keys move smoothly (velocity × dt).
+native scrolling — one swipe is locked to one axis, `lib/swipe.ts`),
+**A/D** slide, **W/S·↑↓** dolly, **←/→** orbit, **Q/E** rise/fall,
+**Shift+R** reset view — all held keys move smoothly (velocity × dt).
 The one non-camera key is **R**, which **restarts the sim** (`{"reset": true}`
 to the lab): every duck's episode drops back to step zero at the same moment,
 which is what makes a side-by-side comparison legible. **Clicking a duck**
@@ -224,6 +225,10 @@ each duck senses:
 - **Drive** (`P`, then WASD/arrows, Q/E strafe): every duck takes your twist
   for 6 s after the last key; otherwise ToF-equipped ducks wander on the
   lab's `Wander` brain and blind ducks follow a demo script. `R` restarts.
+- **The camera flies exactly as on the lab page** — same keys, same
+  **two-finger horizontal swipe** to slide laterally (the shared
+  `components/useTruckSwipe.ts`; drive mode takes WASD away from the camera
+  but never the swipe, since nothing on the trackpad steers a duck).
 - **Inspector · brain**: which brain steers the selected duck (`wander`,
   `follow`, `tidy`, `script`, or a trained `learned:<run>`), switchable live,
   its inputs with their ages (ToF, detector, the target it is tracking), its
@@ -235,7 +240,10 @@ each duck senses:
 - **Editor** (`E`): place walls (two clicks), boxes, balls, ducks, persons,
   toys and the basket on the floor, set each duck's brain, then save-and-load
   under a name (`PUT /scenarios/{name}`; built-ins are read-only, so a draft
-  of one saves as a copy). The scene menu in the top bar splits into
+  of one saves as a copy). `make a pitch` gives the room the lab's boards —
+  the 15 cm cove and, for a rectangular room, 30 cm chamfered corners — and
+  toggling back takes them away, so a pitch drawn here is the one `/sim`
+  plays on. The scene menu in the top bar splits into
   `built in` and `saved by you`; each of your saved scenes carries a `✕`
   that deletes it in place (`DELETE /scenarios/{name}`, after a confirm) —
   built-ins have none, and the live world keeps running whatever it loaded.
@@ -278,8 +286,11 @@ what the lab simulates:
   the room — touchlines, halfway line, centre circle, goal areas, penalty
   spots, corner arcs — a dark apron outside white rink boards with an amber
   stripe, and goal frames with nets on both short walls exactly where
-  `World` counts a goal. The ball wears a 32-panel skin so you can see it
-  roll.
+  `World` counts a goal. A pitch with a `cove` (the lab's all have one,
+  15 cm) gets a quarter-round along the base of the boards, cut flat at the
+  goal mouths, so a ball rolls up it and back into play; its chamfered
+  corners are walls like any other. The ball wears a 32-panel skin so you
+  can see it roll.
 - **Rooms** (`living-room`, `playroom`, `follow-me`, anything you draw in the
   editor): oak planks, plaster walls with a baseboard and a cap, a rug in the
   middle of the room, bevelled furniture on soft footprint shadows, a wicker

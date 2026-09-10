@@ -16,7 +16,6 @@ import {
   cameraKeyDown,
   cameraKeyUp,
   cameraKeysClear,
-  truckImpulse,
 } from "@/lib/camera";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { getCapture } from "@/lib/record";
@@ -24,6 +23,7 @@ import { getSelectedDuck, setSelectedDuck } from "@/lib/select";
 import { modalIsOpen } from "@/lib/ui";
 import { buildBodyGeometries, Duck } from "./Duck";
 import CameraKeys, { type ControlsLike } from "./CameraKeys";
+import { useTruckSwipe } from "./useTruckSwipe";
 import { Hud } from "./Hud";
 import { PolicyPanel } from "./PolicyPanel";
 import { TeachPanel } from "./TeachPanel";
@@ -281,6 +281,8 @@ export default function Viewer() {
   const [savedCam] = useState(loadSavedCamera);
   const clientRef = useRef<LabClient | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Two-finger horizontal swipe → the same lateral truck as A/D.
+  useTruckSwipe(rootRef);
 
   useEffect(() => {
     const client = new LabClient(setConnected);
@@ -389,60 +391,6 @@ export default function Viewer() {
     window.addEventListener("keyup", onKeyUp, true);
     window.addEventListener("blur", onBlur);
 
-    // Two-finger trackpad swipes arrive as wheel events: horizontal-dominant
-    // ones truck the camera (same motion as A/D). Vertical-dominant and
-    // ctrlKey (pinch) events pass through untouched so OrbitControls keeps
-    // zooming. Capture-phase + passive:false, because preventDefault must
-    // beat the browser's two-finger back/forward navigation and
-    // stopPropagation must keep OrbitControls from also treating the event
-    // as zoom. Only STAGE events count: the side panels (policies, teach,
-    // HUD) scroll with two fingers and must keep doing so, so anything whose
-    // target isn't the wrapper itself or the <canvas> is ignored.
-    // GESTURE-AXIS LOCK: a two-finger swipe is one gesture that should do ONE
-    // thing — per-event dominance flipped slide/zoom mid-swipe on any slightly
-    // diagonal motion (both at once, felt awful). The axis is decided once per
-    // gesture, from the first ~6px of accumulated motion, and held until a
-    // pause in the wheel stream (a momentum fling keeps events flowing well
-    // under the gap, so the lock survives the coast).
-    const GESTURE_GAP_MS = 180;
-    const LOCK_AFTER_PX = 6;
-    let gestureAxis: "x" | "y" | null = null;
-    let undecidedX = 0, undecidedY = 0;
-    let lastWheelAt = 0;
-    const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) return; // pinch-zoom stays OrbitControls'
-      const root = rootRef.current;
-      const t = e.target;
-      if (!root || !(t instanceof HTMLElement) || !root.contains(t)) return;
-      if (t !== root && t.tagName !== "CANVAS") return; // panel UI scrolls natively
-
-      const now = performance.now();
-      if (now - lastWheelAt > GESTURE_GAP_MS) {
-        gestureAxis = null; // stream paused → next events are a new gesture
-        undecidedX = undecidedY = 0;
-      }
-      lastWheelAt = now;
-
-      // Rare line-mode mice report lines, not pixels — normalize roughly.
-      const dx = e.deltaMode ? e.deltaX * 16 : e.deltaX;
-      const dy = e.deltaMode ? e.deltaY * 16 : e.deltaY;
-      if (gestureAxis === null) {
-        undecidedX += Math.abs(dx);
-        undecidedY += Math.abs(dy);
-        if (undecidedX + undecidedY < LOCK_AFTER_PX) {
-          e.preventDefault(); // hold the ambiguous first pixels back from BOTH
-          e.stopPropagation();
-          return;
-        }
-        gestureAxis = undecidedX > undecidedY ? "x" : "y";
-      }
-      if (gestureAxis === "y") return; // whole gesture = zoom (OrbitControls)
-      truckImpulse(dx); // whole gesture = slide; zoom never sees it
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener("wheel", onWheel, { capture: true, passive: false });
-
     // Pull keyboard focus into the page up front: embedded panes and some
     // browsers won't route key events to the document until something in it
     // has been focused.
@@ -452,7 +400,6 @@ export default function Viewer() {
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", onBlur);
-      window.removeEventListener("wheel", onWheel, true);
       client.close();
     };
   }, []);

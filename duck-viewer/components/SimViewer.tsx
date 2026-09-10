@@ -55,6 +55,7 @@ import {
 import { camAspect, renderInset } from "@/lib/inset";
 import { buildBodyGeometries, Duck, type BodyGeometry } from "./Duck";
 import CameraKeys from "./CameraKeys";
+import { useTruckSwipe } from "./useTruckSwipe";
 import { CaptureCanvas, Snapshotter } from "./Capture";
 import { SimRecord } from "./SimRecord";
 import { BrainPanel } from "./SimBrain";
@@ -1209,6 +1210,11 @@ export default function SimViewer() {
   const lastBytes = useRef({ bytes: 0, at: 0 });
   const clientRef = useRef<SimClient | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Two-finger horizontal swipe → the same lateral truck as A/D, the
+  // lab page's gesture (components/useTruckSwipe.ts). It stays live in
+  // drive mode: nothing on the trackpad steers a duck, so there is no
+  // owner to hand it to.
+  useTruckSwipe(rootRef);
   const held = useRef<Held>(new Set());
   const drivingRef = useRef(driving);
   drivingRef.current = driving;
