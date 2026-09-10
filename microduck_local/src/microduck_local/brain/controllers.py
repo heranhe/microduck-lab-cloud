@@ -1676,6 +1676,53 @@ class ChaseParams:
     yaw_clear: float = 0.45
     head_yaw_when: str = "always"  # or "search": yaw the head only while searching / looking
     predict_steer: bool = False    # the hunt bends and the search opens toward the prediction
+    # THE HEAD IN TWO AXES (2026-09-09, `scripts/probe_ball_loss.py`). The
+    # yaw law above follows the predicted ball; the pitch never does - the
+    # gaze (`_gaze`) is a line-up law, refused past `gaze_bearing_max` and
+    # off in every other state. Audited on 12 seeds x 180 s of 2v2, a duck
+    # loses the ball 93 times a run, and HALF of those losses (571 of 1113)
+    # begin with the ball slipping BELOW the frame at a median 0.27 m, 38 deg
+    # off the nose, with the head yawed at it (|cmd| 0.50) and its pitch
+    # command exactly 0.00 - after which the duck walks on, the ball ends up
+    # behind it, and the loss runs a median 2.2 s (53% over 2 s). Those
+    # events are 68% of all blind time. The other half is the ball behind
+    # the body (a fix for the legs, not the head), occluded by a duck, or too
+    # far to find.
+    #
+    # `track_pitch` pitches the head, in the same states and under the same
+    # clearance gate as the yaw, by the SMALLEST command that keeps the
+    # predicted ball `track_pitch_margin` inside the bottom edge of the frame
+    # (`_track_pitch`; the gaze centres it, which is 2-3x deeper). Slant
+    # geometry: the tracker's range is `radius / tan(width / 2)`, the slant,
+    # and `_gaze`'s `atan2(height, range)` reads it as ground distance, which
+    # at 0.27 m under-aims by 12 deg. Benched on the shipped walker
+    # (scratchpad bench, 4 seeds x 6 s a pose, head slot alone): a cold turn
+    # is unaffected at any pitch; the WARM in-place turn runs 0.61 rad/s at
+    # 0.10 and 0.00 from 0.20 up - the "cannot turn head-down" rule's
+    # threshold; walking at 0.3 costs 4% of speed at 0.20, 6.5% at 0.30, 9%
+    # at 0.45, 13% at 0.60, no falls. So `track_pitch_max` caps the ask,
+    # `track_pitch_turn` is what a turn in place may still take (0: none,
+    # the shipped rule), and `cam_level_walk` is the walking camera's level -
+    # the gait holds the head 0.08 rad higher than the standing 0.197
+    # (DetectionFrame's note; measured in play, camera pitch 5.7 deg at the
+    # median loss).
+    track_pitch: bool = False
+    track_pitch_margin: float = 0.15   # rad inside the bottom edge the predicted ball is kept
+    track_pitch_max: float = 0.30      # the deepest command the tracking pitch asks for
+    track_pitch_turn: float = 0.0      # ...during a turn in place (bench: 0.10 is free, 0.20 stalls the turn)
+    cam_level_walk: float = 0.117      # the camera's depression while WALKING, rad (standing: `cam_level`)
+    # ...and the same head in TIME. `look_hold_s`: the yaw law stops following
+    # the track at `predict_s` (1.0 s) while the tracker keeps it to `coast_s`
+    # (2.5 s), so for 1.5 s the brain believes in a bearing the head is not
+    # pointed at - 15.8% of all blind frames in the audit above sit in that
+    # gap. 0: the shipped `predict_s` horizon; else the head follows the
+    # coasting track (its bearing turns with the body, by odometry) this long
+    # after the last hit. `head_lead_s`: the head servo is a measured 7 ticks
+    # (140 ms) behind its command at gain 1.04 (the audit's cross-correlation
+    # over every duck), so aim it at the ball predicted that far ahead. 0:
+    # off, the shipped law.
+    look_hold_s: float = 0.0
+    head_lead_s: float = 0.0
     search_dip_every: float = 1.5
     search_dip_s: float = 0.6
     dip_range: float = 0.22
@@ -2286,6 +2333,11 @@ class Chase:
         self._reentry_warned = False
         self.tracker = Tracker(TrackerParams.for_detector(
             det_noise, rest_coast_s=self.p.rest_coast_s, rest_vel=self.p.rest_vel))
+        # Half the camera's vertical field of view: what `_track_pitch` keeps
+        # the ball inside. The camera the sim runs (`MICRODUCK_CAMERA`), read
+        # once here the way the tracker reads the detector's datasheet.
+        from ..sensors.detector import DetectorSpec  # noqa: PLC0415
+        self._half_v = math.radians(DetectorSpec.from_env().fov_v_deg) / 2
         self.gait = GaitWatch()
         self.blocker = Interceptor()
         self._kick_rng = None              # kick_select's generator, seeded from the duck id on first use
@@ -2363,6 +2415,23 @@ class Chase:
         the bit."""
         k = self.p.gaze_neck
         return (-k * cmd if k else 0.0, cmd, yaw, 0.0)
+
+    def _track_pitch(self, rng: float, cam_z: float, walking: bool) -> float:
+        """The SMALLEST head-pitch command that keeps a floor ball at slant
+        range `rng` inside the frame, `track_pitch_margin` above its bottom
+        edge (`track_pitch`; `_gaze` centres it instead, 2-3x deeper). `rng`
+        is the tracker's range, which is the SLANT: the ball's depression is
+        asin(height / slant), not atan2(height / ground). `cam_z` is the
+        camera's height (the last frame's, or `cam_z`) and the level it rests
+        at is `cam_level_walk` walking, `cam_level` standing. Clipped to
+        `track_pitch_max`."""
+        p = self.p
+        h = cam_z - 0.035                                   # the lens above the ball's centre
+        dep = math.asin(float(np.clip(h / max(rng, 0.05), -1.0, 1.0)))
+        want = dep - (self._half_v - p.track_pitch_margin)   # the axis depression that puts the ball at the margin
+        level = p.cam_level_walk if walking else p.cam_level
+        gain = p.head_gain + p.neck_gain * p.gaze_neck
+        return float(np.clip((want - level) / max(gain, 1e-6), 0.0, p.track_pitch_max))
 
     def _gaze_range(self, odom, ball) -> tuple[float, float] | None:
         """(range, bearing) to aim the gaze at during a line-up when the ball
@@ -3197,8 +3266,23 @@ class Chase:
             head = self._head_pose(self._gaze(gaze_at), gyaw)
         if look_yaw is not None and self.state == "look":
             head = self._head_pose(self._gaze(gaze_at), float(np.clip(look_yaw, -p.head_yaw_max, p.head_yaw_max)))
-        look_at = pred_bearing if pred_bearing is not None else (
-            ball.bearing if p.predict_s > 0 and ball is not None and ball.age(t) <= p.predict_s else None)
+        # Where the head looks, and the range that goes with it (the tracking
+        # pitch, `track_pitch`). The prediction while it is fresh; then, with
+        # `look_hold_s`, the coasting track - whose bearing the tracker turns
+        # with the body - until that runs out; `head_lead_s` aims at the ball
+        # where it will be when the servo gets there.
+        look_rng: float | None = None
+        if pred_bearing is not None:
+            look_at = pred_bearing
+            look_rng = math.hypot(self.predicted[0] - odom[0], self.predicted[1] - odom[1])
+            if p.head_lead_s > 0.0:
+                lx, ly = ball.predict(t + p.head_lead_s, p.ball_decel)
+                look_at = _wrap(math.atan2(ly - odom[1], lx - odom[0]) - odom[2])
+        elif p.predict_s > 0 and ball is not None and ball.age(t) <= max(p.predict_s, p.look_hold_s):
+            look_at = ball.bearing
+            look_rng = ball.range
+        else:
+            look_at = None
         if look_at is None and self.state == "look" and p.look_aim and self._last_foot is not None:
             look_at = p.kick_exit_left if self._last_foot == "kick_left" else p.kick_exit_right
         elif look_at is None and self.state == "search" and p.search_sweep > 0 and self._search_t0 is not None:
@@ -3214,7 +3298,20 @@ class Chase:
             # That is where head-tracking's falls come from. The brain has the
             # signal and did not consult it; this consults it, keeping the
             # head on the line whenever something is inside `yaw_clear`.
-            head = (head[0], head[1], float(np.clip(p.head_yaw_gain * look_at, -p.head_yaw_max, p.head_yaw_max)), head[3])
+            yaw_cmd = float(np.clip(p.head_yaw_gain * look_at, -p.head_yaw_max, p.head_yaw_max))
+            pitch = 0.0
+            if p.track_pitch and look_rng is not None and head[1] == 0.0 \
+                    and (not turning or p.track_pitch_turn > 0.0):
+                # ...and the PITCH that keeps that ball inside the frame, only
+                # where no gaze law has already put the head somewhere (a
+                # line-up gaze centres the ball, deeper; the look and the
+                # search dip aim at their own ranges), and never more than a
+                # turn in place can take (`track_pitch_turn`).
+                cam_z = senses.det.cam_z if senses.det is not None and senses.det.cam_z > 0.0 else p.cam_z
+                pitch = self._track_pitch(look_rng, cam_z, walking=vx > TURN_KICK)
+                if turning:
+                    pitch = min(pitch, p.track_pitch_turn)
+            head = self._head_pose(pitch, yaw_cmd) if pitch > 0.0 else (head[0], head[1], yaw_cmd, head[3])
         # The two arms of the same rule, on the SAME gate - a turn in place,
         # beside a body, in a state where that turn is not itself the escape
         # - so an A/B between them measures the action and nothing else.
