@@ -56,12 +56,12 @@ def test_on_the_line_up_walks_to_its_spot_past_the_bumper():
     assert _walk("settle", on_spot, 200, lineup_tof_stop=0.12) == 0.0
 
 
-def test_the_shorter_stop_needs_the_spot_near_body_clear_and_a_kick():
+def test_the_shorter_stop_needs_the_spot_near_and_body_clear():
     far = (0.80, 0.0, "kick_right", 0.0, "kick")                     # outside lineup_tof_within 0.45
     assert _walk("lineup", far, 200, lineup_tof_stop=0.12) == 0.0
     in_wall = (BOUNDS[0] - 0.05, BOUNDS[1] - 0.05, "kick_right", 0.0, "kick")   # the body cannot occupy it
     b = Chase(ChaseParams(), bounds=BOUNDS, goal=(BOUNDS[0], 0.0), goal_w=0.7)
     assert not b._spot_body_clear(*in_wall[:2]) and b._spot_body_clear(*NEAR[:2])
-    push = (0.30, 0.0, None, 0.0, "push")                            # a push spot: the shipped bumper
-    assert _walk("lineup", push, 200, lineup_tof_stop=0.12) == 0.0
+    push = (0.30, 0.0, None, 0.0, "push")                            # a body-clear PUSH spot walks too (12g's board push needs it)
+    assert _walk("lineup", push, 200, lineup_tof_stop=0.12) > 0.0
     assert _walk("chase", None, 200, lineup_tof_stop=0.12) == 0.0    # not a line-up: the shipped bumper

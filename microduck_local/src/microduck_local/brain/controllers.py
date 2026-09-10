@@ -1934,6 +1934,56 @@ class ChaseParams:
     push_behind: float = 0.16
     push_speed: float = 0.3
     push_s: float = 0.5
+    # A push spot's own line-up tolerance (m; 0 = `lineup_tol`). A kick needs
+    # its foot within 3 cm of the spot (12a's funnel: 0-3 cm 0 % whiff,
+    # 3-6 cm 8 %); a push walks 0.64 m through a ball 0.16 m ahead and does
+    # not. At the boards a line-up that has REACHED its spot to 5 cm still
+    # times out (12am: 66-72 deg off heading at the timeouts), because
+    # outside `lineup_tol` it servos at the spot along the wall instead of
+    # turning to the heading; a looser tolerance lets a push square up and
+    # go. The kick's tolerance is untouched. A no-op on the shipped brain,
+    # which plans no push (`push_beyond` inf, `kick_select_push` off,
+    # `board_push` 0); it is what any push arm needs (12an: 0 -> 2 -> 24
+    # pushes in 40 board episodes with this and `push_aim_tol`).
+    push_tol: float = 0.06
+    # ...and its own AIM tolerance (rad; 0 = `aim_tol`). The square-up at a
+    # reached spot beside a wall is the line-up's last blocker (12am, 12an:
+    # 68 deg off heading at the timeouts); a kick needs `aim_tol` 0.25, a
+    # push along a wall the wall guides does not. Measured in the board
+    # probe: pushes 13 -> 24 in 40 episodes at 0.5 (with the side stop
+    # off in that arm; the side stop alone made them fewer, 13 -> 9).
+    push_aim_tol: float = 0.5
+    # THE BOARD PUSH (roadmap 12g, built 2026-09-10). A ball at the boards is
+    # a ball almost nothing can be done with (12p): the kick's stand spot is
+    # in the wall or past the bumper, and every board line-up times out.
+    # Dribbling everywhere lost (13a: the pusher stands on the ball and the
+    # kicks vanish), so this is the SITUATIONAL rule the ask named: a ball
+    # closer than `board_push` to a board is walked through along the wall
+    # toward the goal - the same lines `_along_the_boards` lays a kick on,
+    # up the pitch on a side board, away from our own mouth on our end
+    # board, across the mouth on theirs - from `push_behind` behind it, so
+    # the wall keeps it rolling and it comes off the boards into room where
+    # a kick has a chance. The spot must be somewhere the body can stand; a
+    # ball nearer the wall than that is pushed on a line tilted INTO the
+    # wall by the smallest angle up to `board_push_tilt` that moves the spot
+    # out to a body-clear gap. 0 = off (the kick plan everywhere).
+    #
+    # BUILT, MEASURED OFF (roadmap 12an; kick gym, 480 episodes an arm, the
+    # ball placed at a board, on flat boards AND on the lab's cove). The
+    # push touches the ball more and moves it less than the kick line-up it
+    # replaces: a push's travel is 5-12 cm (the 0.5 s walk at 0.3 m/s from
+    # 0.16 m behind reaches the ball and nudges it - against a wall, into
+    # the wall) against a connected kick's 0.75-0.86 m, so the ball's
+    # advance toward the goal per episode is five times worse on flat
+    # boards (+0.038 -> +0.007 m), flat on the cove's near band, 40 % worse
+    # on its wider one (+0.098 -> +0.059). A push made strong (`push_s` 1.0
+    # at `push_speed` 0.45) whiffs 13-26 % instead of 42-69 % and travels
+    # 0.26 m, and per episode still trails the kick (+0.083 v +0.098 cove,
+    # +0.015 v +0.038 flat). Falls 0-2 everywhere. The shipped brain on the
+    # cove touches a board ball 207 times an arm where the flat gym said 66:
+    # the board problem the push was for is mostly the flat gym's.
+    board_push: float = 0.0
+    board_push_tilt: float = math.radians(45.0)
     # The other duck's BODY (measured over 4 traced runs: 5 of 7 falls had the
     # other duck 3–9 cm away and this one turning in place — search, blocked
     # or lining up — the walker tips over when it turns against a body it
@@ -2699,6 +2749,11 @@ class Chase:
             pred = ball.predict(self._senses.t + eta, p.ball_decel)
             if pred is not None:
                 bx, by = pred
+        if p.board_push > 0.0 and self.bounds is not None \
+                and min(self.bounds[0] - abs(bx), self.bounds[1] - abs(by)) < p.board_push:
+            bp = self._board_push(bx, by)                    # the board push (12g): a walk along the wall, not a swing
+            if bp is not None:
+                return bp
         if self.goal is not None:
             u = math.atan2(self.goal[1] - by, self.goal[0] - bx)
             far = math.hypot(self.goal[0] - bx, self.goal[1] - by) > p.push_beyond
@@ -2779,16 +2834,15 @@ class Chase:
         return (self.bounds[0] - abs(x) >= self.p.board_margin
                 and self.bounds[1] - abs(y) >= self.p.board_margin)
 
-    def _along_the_boards(self, bx: float, by: float) -> tuple[float, float, str, float, str] | None:
-        """A kick spot for a ball at the boards (`board_margin`): the line
-        along the nearer wall - up the pitch on a side board, toward the
-        middle on an end board - with whichever foot puts the body on the
-        open side. None if neither foot's spot is clear (a tight corner)."""
-        p = self.p
+    def _board_line(self, bx: float, by: float) -> float:
+        """The line along the nearer wall a ball at the boards is played on:
+        up the pitch on a side board, away from our own mouth on our end
+        board, across the mouth on theirs. Shared by the kick rescue
+        (`_along_the_boards`) and the board push (`_board_push`)."""
         att = 1.0 if (self.goal is None or self.goal[0] >= 0) else -1.0
         if self.bounds[1] - abs(by) < self.bounds[0] - abs(bx):
-            u = 0.0 if att > 0 else math.pi                          # the side board: up the pitch
-        elif bx * att < 0.0:
+            return 0.0 if att > 0 else math.pi                        # the side board: up the pitch
+        if bx * att < 0.0:
             # OUR end board. Sideways is the only line the body can reach
             # here, and toward the middle is an OWN GOAL: a ball on our own
             # goal line is already inside the scoring band (`_check_goal`
@@ -2797,9 +2851,41 @@ class Chase:
             # (-1.45, +0.40) aimed at -90 deg is a goal against us after
             # 0.10 m of travel. Clear it AWAY from the mouth, toward the
             # corner - which is what a defender does with it.
-            u = math.pi / 2 if by >= 0 else -math.pi / 2
+            return math.pi / 2 if by >= 0 else -math.pi / 2
+        return -math.pi / 2 if by >= 0 else math.pi / 2               # their end board: across the mouth is a chance
+
+    def _board_push(self, bx: float, by: float) -> tuple[float, float, None, float, str] | None:
+        """A PUSH for a ball at the boards (`board_push`, roadmap 12g): walk
+        through it along the nearer wall (`_board_line`) from `push_behind`
+        behind it, from a spot the body can stand on. A ball nearer the wall
+        than the body's extent gets the line tilted INTO the wall, by the
+        smallest angle up to `board_push_tilt` that moves the spot out to a
+        body-clear gap - the wall keeps the ball rolling along itself. None
+        when no tilt does (the caller lays its kick plan as before)."""
+        p = self.p
+        u = self._board_line(bx, by)
+        # The unit normal INTO the nearer wall.
+        if self.bounds[1] - abs(by) < self.bounds[0] - abs(bx):
+            nx, ny = 0.0, (1.0 if by >= 0 else -1.0)
         else:
-            u = -math.pi / 2 if by >= 0 else math.pi / 2              # their end board: across the mouth is a chance
+            nx, ny = (1.0 if bx >= 0 else -1.0), 0.0
+        steps = max(1, int(round(math.degrees(p.board_push_tilt) / 5.0)))
+        for k in range(steps + 1):
+            th = p.board_push_tilt * k / steps
+            dx = math.cos(u) * math.cos(th) + nx * math.sin(th)
+            dy = math.sin(u) * math.cos(th) + ny * math.sin(th)
+            sx, sy = bx - p.push_behind * dx, by - p.push_behind * dy
+            if self._spot_body_clear(sx, sy):
+                return sx, sy, None, math.atan2(dy, dx), "push"
+        return None
+
+    def _along_the_boards(self, bx: float, by: float) -> tuple[float, float, str, float, str] | None:
+        """A kick spot for a ball at the boards (`board_margin`): the line
+        along the nearer wall - up the pitch on a side board, toward the
+        middle on an end board - with whichever foot puts the body on the
+        open side. None if neither foot's spot is clear (a tight corner)."""
+        p = self.p
+        u = self._board_line(bx, by)
         for foot in ("kick_left", "kick_right"):
             side = -p.kick_side if foot == "kick_left" else p.kick_side
             h = _wrap(u - (p.kick_deflect_left if foot == "kick_left" else p.kick_deflect_right))
@@ -3207,7 +3293,8 @@ class Chase:
                     vx, _, wz = turn(heading_err, cold)
                 dist = pdist + p.approach_back if self.spot is not None else 9.0   # nowhere near the spot yet
             else:
-                vx, wz, dist, bearing = self._servo(odom, (sx, sy), cold, p.lineup_tol)
+                tol = p.push_tol if (mode == "push" and p.push_tol > 0.0) else p.lineup_tol   # a push's own tolerance
+                vx, wz, dist, bearing = self._servo(odom, (sx, sy), cold, tol)
                 if mode == "kick" and p.two_stage and self.state != "settle":
                     # Stage two: in along the line, steering onto it (the
                     # walker crabs on a pure forward command), stop on the
@@ -3225,8 +3312,10 @@ class Chase:
             # square-up and the settle at the tolerance (measured: 22 s
             # standing at the spot, no kick).
             settling = self.state == "settle"
-            on_spot = dist <= p.lineup_tol + (0.03 if settling else 0.0)
-            squared = abs(heading_err) <= p.aim_tol + (0.15 if settling else 0.0)
+            tol = p.push_tol if (mode == "push" and p.push_tol > 0.0) else p.lineup_tol
+            on_spot = dist <= tol + (0.03 if settling else 0.0)
+            aim = p.push_aim_tol if (mode == "push" and p.push_aim_tol > 0.0) else p.aim_tol   # a push's own aim
+            squared = abs(heading_err) <= aim + (0.15 if settling else 0.0)
             if self.spot is None:
                 pass                                            # backing off (above)
             elif on_spot and not squared and mode == "kick" and p.two_stage:
@@ -3392,8 +3481,9 @@ class Chase:
             elif wz < 0 and right_near < p.side_stop and left_near > right_near:
                 wz = max_wz()
         stop = p.tof_stop
+        # (a body-clear PUSH spot walks past the bumper too - 12an; the shipped brain plans none)
         if p.lineup_tof_stop > 0.0 and self.state in ("lineup", "settle") and self.spot is not None \
-                and self.spot[4] == "kick" and self.bounds is not None \
+                and self.spot[4] in ("kick", "push") and self.bounds is not None \
                 and math.hypot(self.spot[0] - odom[0], self.spot[1] - odom[1]) <= p.lineup_tof_within \
                 and self._spot_body_clear(self.spot[0], self.spot[1]):
             stop = p.lineup_tof_stop                 # the spot keeps the body out of the wall (`lineup_tof_stop`)

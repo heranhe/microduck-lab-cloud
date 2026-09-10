@@ -57,14 +57,27 @@ SETTLE_S = CARRY_S
 EPISODE_S = 25.0        # a walk-in from ~1 m plus a line-up; beyond this the episode is a no-swing
 
 
-def gym_scenario(size=(3.0, 2.5), goal_width=0.7, opponents: int = 0) -> Scenario:
+def gym_scenario(size=(3.0, 2.5), goal_width=0.7, opponents: int = 0,
+                 cove: float = 0.0, corner: float = 0.0) -> Scenario:
     """One duck at the centre facing +x, one ball, boards, and a goal to aim
     at (the brain needs one to lay a kick line). No team: with a single duck
     `brain_kwargs` gives no blackboard, so there is no attacker/support
     churn, no yielding and no avoid - the swing is the only thing happening."""
     hx, hy = size[0] / 2, size[1] / 2
     corners = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
-    walls = [Wall(corners[i], corners[(i + 1) % 4], 0.3, 0.02) for i in range(4)]
+    if corner > 0:
+        # THE LAB'S BOARDS (roadmap item 14): chamfered corners and, below, the
+        # cove - the quarter-round that parks a ball off the wall and returns
+        # one rolled into it. Flat boards stay the default: every gym number
+        # before 2026-09-10 is on them, and a flat wall has no restitution,
+        # so a ball pushed into it simply dies - which is the difference a
+        # board PUSH is most sensitive to (12an).
+        c = min(float(corner), hx - 0.05, hy - 0.05)
+        pts = [(-hx + c, -hy), (hx - c, -hy), (hx, -hy + c), (hx, hy - c),      # make_pitch's own list, counter-
+               (hx - c, hy), (-hx + c, hy), (-hx, hy - c), (-hx, -hy + c)]      # clockwise, endpoints shared
+        walls = [Wall(pts[i], pts[(i + 1) % len(pts)], 0.3, 0.02) for i in range(len(pts))]
+    else:
+        walls = [Wall(corners[i], corners[(i + 1) % 4], 0.3, 0.02) for i in range(4)]
     ducks = [Duck("d0", (-0.9, 0.0, 0.0), None, "datasheet", "datasheet", "chase", team="cream")]
     # An OPPONENT is the one thing the match has that the clean gym does not:
     # another body contesting the same ball, which brings `avoid`, `yield`,
@@ -74,7 +87,7 @@ def gym_scenario(size=(3.0, 2.5), goal_width=0.7, opponents: int = 0) -> Scenari
         ducks.append(Duck(f"o{i}", (0.9 + 0.3 * i, 0.0, math.pi), None, "datasheet", "datasheet",
                           "chase", team="graphite"))
     return Scenario(name="kick-gym", floor=(size[0] + 0.5, size[1] + 0.5), walls=walls,
-                    balls=[Ball((0.5, 0.0))], ducks=ducks, goal_width=goal_width)
+                    balls=[Ball((0.5, 0.0))], ducks=ducks, goal_width=goal_width, cove=float(cove))
 
 
 def _drive(w: World, brains: dict) -> None:
@@ -234,7 +247,8 @@ def _place(w: World, rng: np.random.Generator, spread: float):
 
 
 def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s: float = 0.0,
-        knobs: str = "", at_boards: float = 0.0, at_corners: float = 0.0) -> list[dict]:
+        knobs: str = "", at_boards: float = 0.0, at_corners: float = 0.0,
+        cove: float = 0.0, corner: float = 0.0) -> list[dict]:
     # An ARM is a `MICRODUCK_CHASE` string, applied here so it lands in the
     # worker process before any brain is built (`brain_kwargs` reads
     # `ChaseParams.from_env()`). Every arm of a comparison runs the same seeds
@@ -243,7 +257,7 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
         os.environ["MICRODUCK_CHASE"] = knobs
     else:
         os.environ.pop("MICRODUCK_CHASE", None)
-    sc = gym_scenario(opponents=opponents)
+    sc = gym_scenario(opponents=opponents, cove=cove, corner=corner)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
     w = World(sc, infer_for={x.id: infer for x in sc.ducks}, seed=seed, ball_out_s=ball_out_s)
     bk = __import__("microduck_local.brain.team", fromlist=["brain_kwargs"]).brain_kwargs
@@ -286,6 +300,7 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
         prev_skill = None
         last_spot, last_spot_t = None, None
         pre_track = None            # (age, sigma, hits) of the ball track at the decision tick
+        pushes0 = brain.pushes      # a PUSH is a touch too (roadmap 12g): the brain counts them, the skill never starts
         while w.t - t0 < EPISODE_S:
             # WHAT A SWING GATE WOULD SEE (roadmap 12c, second half, 2026-09-10):
             # the best ball track's age and 1-sigma error at the tick the
@@ -310,8 +325,12 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                 # the row records how long ago it was and the analysis can split
                 # those episodes out instead of averaging the corruption in.
                 last_out_t = w.t
-            if d.skill is not None and prev_skill is None and str(d.skill).startswith("kick"):
-                # THE SWING. Everything the three candidates of item 12a need,
+            pushed = brain.pushes > pushes0
+            if pushed or (d.skill is not None and prev_skill is None and str(d.skill).startswith("kick")):
+                # THE SWING - or the PUSH, the moment the brain commits to
+                # walking through the ball (12g): the same row, `touch` says
+                # which, and the carry window below measures both alike.
+                # Everything the three candidates of item 12a need,
                 # captured at the instant the skill takes the body.
                 p = d.trunk_pos(w.data)
                 yaw = d.yaw(w.data)
@@ -320,7 +339,8 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                 dx, dy = bx - float(p[0]), by - float(p[1])
                 joints = np.asarray(w.data.qpos[d.adr.joint_qpos], float)
                 swing = {
-                    "ep": ep, "foot": str(d.skill), "t": round(w.t - t0, 2),
+                    "ep": ep, "foot": "push" if pushed else str(d.skill), "touch": "push" if pushed else "kick",
+                    "t": round(w.t - t0, 2),
                     # where the ball was, in the duck's own yaw frame
                     "ahead": dx * math.cos(yaw) + dy * math.sin(yaw),
                     "side": -dx * math.sin(yaw) + dy * math.cos(yaw),
@@ -415,7 +435,10 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
             w.step()
         bx1, by1 = float(w.data.qpos[q]), float(w.data.qpos[q + 1])
         travel = math.dist(swing["ball0"], (bx1, by1))
-        swing.update(swing=True, travel=travel, whiff=travel < WHIFF_M, seed=seed,
+        # ...and how much of it went TOWARD the goal (+x is the attacked
+        # mouth in this gym): the number a board touch is for (12g).
+        advance = bx1 - swing["ball0"][0]
+        swing.update(swing=True, travel=travel, advance=round(advance, 4), whiff=travel < WHIFF_M, seed=seed,
                      arm=knobs, live=live, fell=int(d.falls) > swing["falls_before"])
         swing.pop("ball0")
         rows.append(swing)
@@ -625,6 +648,10 @@ if __name__ == "__main__":
                          "a corner spot for board_margin 0.25 is infeasible below a 0.33 m "
                          "gap, so 0.30 and under is a clean falsifier and 0.35+ silently "
                          "stops being one. EXPECTED VERDICT FOR 0.25 HERE IS *BROKEN*.")
+    ap.add_argument("--cove", type=float, default=0.0, metavar="R",
+                    help="the lab's quarter-round at the boards (0 = flat boards, the gym's default; the lab runs 0.15)")
+    ap.add_argument("--corner", type=float, default=0.0, metavar="L",
+                    help="chamfer each corner at 45 deg starting this far along each wall (the lab runs 0.3)")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
@@ -648,7 +675,7 @@ if __name__ == "__main__":
     arms: dict[str, list[dict]] = {}
     for label, knobs in specs:
         args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s, knobs,
-                 a.at_boards, a.at_corners)
+                 a.at_boards, a.at_corners, a.cove, a.corner)
                 for s in range(a.seed0, a.seed0 + a.seeds)]
         rows: list[dict] = []
         if a.jobs > 1 and len(args) > 1:

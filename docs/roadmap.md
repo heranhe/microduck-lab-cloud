@@ -4964,7 +4964,7 @@ and nothing else touching it should be *kept where it is* until something is see
 Number: searches a run a duck (~33 → ?), time from losing the ball to the next swing, and the own-goal ledger (a kept
 ball that is not there is a swing at nothing).
 
-**12g. When the swing is not the tool: push it.** At the boards and with the ball under the body, the push-first arms
+**12g. When the swing is not the tool: push it.** — **BUILT AND MEASURED OFF (2026-09-10, 12an): a push moves a board ball a third as far as the kick it replaces, on flat boards and on the cove.** At the boards and with the ball under the body, the push-first arms
 measured +3.2 s/min of possession against the kick (A.4) and the walker touches the ball 50/50 times walking through
 it. The selector already has the push as an action (`kick_select_push`, off). The ask is the *situational* rule: a ball
 inside 0.12 m ahead, or against a board, is pushed out to a kickable spot first, then kicked. Number: whiff on the
@@ -8677,3 +8677,78 @@ goals 21 = 21, **kicks 148 → 169**, falls 5 → 3, own goals 4 = 4, back-kicks
 boards whiff twice as often as the few the bumper let through. ⚠ Every
 soccer number before this item is on a line-up the bumper stopped 0.3 m from
 every wall; `lineup_tof_stop=0` is that brain to the bit.
+
+
+### 12an. The board push (12g, built): a walk through a ball at the boards touches it more and moves it less, on flat boards and on the cove (2026-09-10)
+
+Asked from the /sim page: when the ball is along the boards and no kick
+spot is any good, why not walk into it and dribble it up the wall until it
+comes off into room? Dribbling everywhere had lost (13a: the pusher stands
+on the ball, kicks vanish), so this is 12g's SITUATIONAL rule, built:
+`ChaseParams.board_push` (m; 0 = off) — a ball closer than that to a board
+is walked through along the wall toward the goal, on the lines the kick
+rescue already lays (`_board_line`: up the pitch on a side board, away from
+our own mouth on our end board, across the mouth on theirs), from
+`push_behind` behind it on a spot the body can stand on; a ball nearer the
+wall than the body's extent gets the line tilted INTO the wall by the
+smallest angle up to `board_push_tilt` that clears the spot. Three things a
+push needed that a kick did not, all built and locked
+(`tests/test_board_push.py`): the line-up's own stop (12am) applies to a
+body-clear PUSH spot too; a push spot has its own line-up tolerance
+(`push_tol` 0.06 — a walk-through does not need a foot within 3 cm); and
+its own aim tolerance (`push_aim_tol` 0.5 — the wall guides the ball).
+Without the last two, zero pushes executed in 40 board episodes: the push
+line-up reached its spot and died in the square-up exactly as the kick
+line-up did (12am). With them, pushes 24 in 40.
+
+**The gym counts a push as a touch now** (`kick_gym` rows carry `touch`
+kick / push and `advance`, the ball's travel toward the goal), and the gym
+can have **the lab's boards** (`--cove 0.15 --corner 0.3`; flat is still
+the default). Both were needed to read this, and the second changes the
+board question itself:
+
+| ball placed ≤ 0.15 m from a board, 480 episodes | touches | kicks / pushes | whiff | advance per touch | advance per episode | connected travel | fell |
+|---|---|---|---|---|---|---|---|
+| flat boards, shipped | 66 | 66 / 0 | 29 % | +0.10 m | +0.038 m | 0.75 m | 2 |
+| flat boards, `board_push` 0.25 | 108 | 19 / 89 | 59 % (pushes 69 %) | +0.03 m | **+0.007 m** | 0.25 m | 0 |
+| **the cove, shipped** | **207** | 207 / 0 | 38 % | +0.02 m | +0.064 m | 0.85 m | 2 |
+| the cove, `board_push` 0.25 | 220 | 194 / 26 | 41 % (pushes 65 %) | +0.01 m | +0.065 m | 0.56 m | 0 |
+| ≤ 0.25 m, the cove, shipped | 212 | 212 / 0 | 25 % | +0.06 m | +0.098 m | 0.86 m | 1 |
+| ≤ 0.25 m, the cove, `board_push` 0.25 | 207 | 131 / 76 | 33 % (pushes 42 %) | +0.01 m | **+0.059 m** | 0.34 m | 1 |
+
+**Two findings.** (1) **The flat gym overstates the board problem three
+times over.** On the lab's boards the shipped brain touches the ball 207
+times where the flat gym says 66, because the cove parks a dribbled ball at
+its foot, 0.16–0.27 m off the wall line (item 14), where the kick spot is
+body-clear and the line-up completes. Every board number in 12al and 12am
+was read on flat boards; the mechanisms hold (the constraint and the stop
+act on the same geometry), the levels do not transfer. (2) **The push moves
+the ball less than the kick it replaces, everywhere.** A push's travel is
+5–12 cm median against a kick's 0.75–0.86 m: the push mode is a 0.5 s walk
+at 0.3 m/s from 0.16 m behind the ball, which reaches the ball and nudges
+it — against a wall, into the wall — where A.4's 0.64 m "push roll" was the
+whole approach walking through a ball in the open. Advance per episode:
+five times worse on flat boards, flat on the cove's near band, 40 % worse
+on its wider band. Falls flat (0–2).
+
+**A stronger push does not change the order.** `push_s` 1.0 at `push_speed`
+0.45 (the walk-through A.4 measured is closer to this than to the 0.5 s
+window): pushes whiff 13 % on the cove and 26 % on flat boards instead of
+42 % and 69 %, travel 0.26 m instead of 0.12, falls 0 — and per episode the
+ball still goes less far than under the kick line-ups it replaces, +0.083 v
++0.098 on the cove's wide band, +0.015 v +0.038 on flat boards. If a push
+is ever planned again, that is the push to plan; the defaults stay as A.4
+measured them.
+
+**Verdict.** 12g ships off (`board_push` 0). What survives: the push path
+now has the three things a push needs (`push_tol`, `push_aim_tol`, the
+line-up stop for a body-clear push spot), all no-ops on the shipped brain;
+the gym counts pushes and records the ball's advance; and the gym can wear
+the lab's boards. The board question is smaller than 12al and 12am read
+it: on the cove the kick line-up already gets to a board ball three times
+in four, and the lever there is still the last three centimetres and the
+turn, not a different touch.
+
+**Instruments:** `kick_gym --cove R --corner L`, rows `touch` / `advance`;
+`scripts/probe_board_states.py` (pushes, endings); reader in the 12an
+scratch (`touch_read.py`).
