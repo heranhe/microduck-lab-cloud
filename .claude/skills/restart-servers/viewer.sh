@@ -10,6 +10,24 @@
 #
 # Usage: viewer.sh [--force]   (--force restarts even if one is already up)
 set -u
+# Launch a server DETACHED IN ITS OWN SESSION. `nohup … &` is not enough: the
+# child stays in this shell's process group, and when the Claude harness
+# reaps a tool call it has backgrounded it kills that whole group — on
+# 2026-09-10 that took the lab down hours after a bring-up had printed
+# "lab: up". macOS has no `setsid`, so the new session comes from Python
+# (start_new_session). Usage: detach LOGFILE cmd args…  (env prefixes pass
+# through; the log is truncated first, as the old `> LOG` did).
+detach() {
+  local log=$1; shift
+  : > "$log"
+  python3 - "$log" "$@" <<'PY'
+import subprocess, sys
+log, cmd = sys.argv[1], sys.argv[2:]
+with open(log, "ab") as fh:
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
+print(f"detached pid {p.pid} (its own session)")
+PY
+}
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 DV=$ROOT/duck-viewer
 LOG=$DV/viewer-server.log
@@ -30,8 +48,7 @@ sleep 2
 
 echo "[2/2] starting viewer detached (:$PORT)..."
 cd "$DV" || { echo "no duck-viewer at $DV"; exit 1; }
-PORT=$PORT nohup npm run dev > "$LOG" 2>&1 &
-disown 2>/dev/null
+PORT=$PORT detach "$LOG" npm run dev
 
 for i in $(seq 1 40); do
   sleep 2

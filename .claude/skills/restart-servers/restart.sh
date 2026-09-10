@@ -19,6 +19,25 @@ if pgrep -fl 'train_behavio[r]' 2>/dev/null | grep -q python && [ "${MICRODUCK_R
   exit 1
 fi
 
+# Launch a server DETACHED IN ITS OWN SESSION. `nohup … &` is not enough: the
+# child stays in this shell's process group, and when the Claude harness
+# reaps a tool call it has backgrounded it kills that whole group — on
+# 2026-09-10 that took the lab down hours after a bring-up had printed
+# "lab: up". macOS has no `setsid`, so the new session comes from Python
+# (start_new_session). Usage: detach LOGFILE cmd args…  (env prefixes pass
+# through; the log is truncated first, as the old `> LOG` did).
+detach() {
+  local log=$1; shift
+  : > "$log"
+  python3 - "$log" "$@" <<'PY'
+import subprocess, sys
+log, cmd = sys.argv[1], sys.argv[2:]
+with open(log, "ab") as fh:
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
+print(f"detached pid {p.pid} (its own session)")
+PY
+}
+
 echo "[1/3] stopping old servers..."
 pkill -f "duck-lab" 2>/dev/null; pkill -f "duck-farm" 2>/dev/null
 pkill -f "viz_server import main" 2>/dev/null
@@ -30,7 +49,7 @@ echo "[2/3] starting backend (duck-lab :8788)..."
 # Entry-point name has churned (duck-farm -> duck-lab); resolve from pyproject.
 ENTRY=$(grep -oE '^(duck-[a-z]+) *= *"microduck_local.viz_server:main"' "$ML/pyproject.toml" | cut -d' ' -f1)
 ENTRY=${ENTRY:-duck-lab}
-MICRODUCK_ACTUATOR=bam nohup uv run --directory "$ML" "$ENTRY" --port 8788 "$@" > "$LOG" 2>&1 &
+MICRODUCK_ACTUATOR=bam detach "$LOG" uv run --directory "$ML" "$ENTRY" --port 8788 "$@"
 
 for i in $(seq 1 40); do
   sleep 2
@@ -39,7 +58,7 @@ done
 if [ "${ok:-0}" != 1 ]; then
   if grep -q "no ducks" "$LOG" 2>/dev/null; then
     echo "empty roster — retrying with the default walker..."
-    MICRODUCK_ACTUATOR=bam nohup uv run --directory "$ML" "$ENTRY" --port 8788       ../microduck/policies/alpha_walking.onnx > "$LOG" 2>&1 &
+    MICRODUCK_ACTUATOR=bam detach "$LOG" uv run --directory "$ML" "$ENTRY" --port 8788 ../microduck/policies/alpha_walking.onnx
     for i in $(seq 1 40); do
       sleep 2
       curl -s -m 2 http://127.0.0.1:8788/joints >/dev/null 2>&1 && { echo "backend UP on :8788"; ok=1; break; }

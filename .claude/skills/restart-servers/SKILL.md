@@ -52,4 +52,10 @@ Known gotchas these scripts already handle: the shell cwd resets to the parent
 repo (breaks bare `uv run`); the backend entry point was renamed
 (duck-farm → duck-lab) and may churn again; a stale Next lock file can block
 viewer spawns (`viewer.sh` kills the port holder with `lsof` first); a managed
-preview would not survive a session restart (hence the detached launch).
+preview would not survive a session restart (hence the detached launch). And — since 2026-09-10 — **each
+server starts in its own session** (`detach` in both scripts: Python's
+`start_new_session`, because macOS has no `setsid`). `nohup … &` alone left
+the server in the tool call's process group, and when the Claude harness
+reaped a tool call it had backgrounded, the lab went down with it hours after
+"backend UP". The `sim-smoke` bring-up delegates every launch here for that
+reason; from an agent shell, never start these servers any other way.

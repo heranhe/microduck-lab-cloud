@@ -13,8 +13,19 @@ Two scripts, both from the repo root:
    bash .claude/skills/sim-smoke/bringup.sh living-room --restart
    ```
 
-   Built-in scenarios: `empty-floor`, `wall-test`, `living-room`
-   (`GET /scenarios` lists user ones too). Logs: `$TMPDIR/sim-smoke/`.
+   Every launch goes through the `restart-servers` scripts (`restart.sh`,
+   `viewer.sh`), which start each server in its own session so it outlives
+   the agent shell — **never start the lab with a bare `nohup` from an agent
+   shell.** This script used to, with `setsid` as the detach; macOS has none,
+   so the lab stayed in the tool call's process group, and on 2026-09-10 the
+   harness reaped a backgrounded call of it and took the lab down with it,
+   hours after "lab: up". The scenario is then loaded over the lab's own API
+   (`POST /world/load`), so the lab is the user's — its roster, its logs.
+   `restart.sh` refuses while a teach job is training.
+
+   Built-in scenarios: `empty-floor`, `wall-test`, `living-room`, `playroom`,
+   `pitch`, `pitch-2v2`, `pitch-3v3` (`GET /scenarios` lists saved ones too).
+   Logs: `microduck_local/lab-server.log`, `duck-viewer/viewer-server.log`.
 
 2. **Screenshot the page** (needs Playwright; on the web runner it is in the
    global node modules and Chromium is at `/opt/pw-browsers/chromium`; on a
@@ -36,9 +47,12 @@ and presets, and `curl -s :8788/replay/ring | tail -c 600` for the last
 recorded frames (once record/replay exists).
 
 Gotchas: never `pkill -f duck-lab` from an agent shell (the pattern matches
-your own command line and kills your shell; bringup.sh uses `duck-la[b]`);
-the container has no EGL, so do not set `MUJOCO_GL=egl` here; headless
-software GL is slower than a Mac GPU, so give the page a few seconds.
+your own command line and kills your shell; the restart script's own command
+line does not contain it); the container has no EGL, so do not set
+`MUJOCO_GL=egl` here; headless software GL is slower than a Mac GPU, so give
+the page a few seconds. If a bring-up call ever overruns the tool timeout and
+is backgrounded, the servers now survive its reaping — that is the point of
+the delegation above.
 
 A screenshot is one instant. For *what happened over a minute* — a fall, a
 stall, a scrum — use the `record-world` skill instead: it runs the same
