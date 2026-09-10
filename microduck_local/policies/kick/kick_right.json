@@ -1,8 +1,10 @@
 {
-  "run": "kick-right-headdown-v1",
+  "run": "kick-right-faceline-w12",
   "behavior": "kick_right",
-  "trained": "2026-09-07, this Mac, 2M steps (~4 min)",
-  "exit_rad": 0.0,
-  "bench": "scripts/bench_kick_headdown.py: 0% whiff from every gaze pose, 1.0-1.3 m at 1.2-1.5 m/s peaking at 0.14-0.19 s, no falls",
-  "in_play": "2v2 kick probe, 48 seeds pooled: whiff 61% -> 40% (p=0.0025), on the sweet spot 5 -> 16%; 3v3 ledger flat, back-kicks fewer"
+  "trained": "2026-09-10, this Mac, 2M steps, seed 0: the point-strike recipe (behaviors/kick.py kick_right) plus the catalog heading anchor face_home at weight 12.0 via teach weights - roadmap 12ab/12ah/12ai. Replaces kick-right-headdown-v1 (the anchor-free strike, shipped 2026-09-07) as the default; that pair is still under runs/ and in git history.",
+  "exit_rad": -0.036,
+  "exit_bench_rad": -0.036,
+  "exit_measured": "bench median across gaze poses (the previous default's left exit was re-measured in play at 0.26 after a bench -0.16; do the same for this pair when a play block is run)",
+  "bench": "scripts/bench_kick_headdown.py 12 seeds a pose: 0% whiff from every gaze pose, 1.05-1.36 m, exit -1..-5 deg, no falls; grid (scripts/grid_kick_bench.py): 69/67/77% of the 4-16 x 1-13 cm box, sweet spot 100%, |body turn| 13/21/14 deg (previous default 90/60/64)",
+  "in_play": "probe_kick_recover 6x50: body turn through the swing +117 -> -1 deg median, 84% of swings under 20 deg, whiffed ball seen again within 2 s 27% -> 88%. kick gym, both feet pinned, vs the previous default on the same seeds: whiff 18% -> 9% (seeds 0-11, MDE 5, p 0.001, 10/12) and 15% -> 9% (seeds 100-111, p 0.009, 10/12), connected kicks 319 -> 337 and 335 -> 358; fell inside the 2 s carry window 0 of 371 swings (previous default 2 of 388). 2v2 ledger (eval-pitch 24 x 300 s): possession 40.2 -> 39.2 null, goals 24 vs 24, kicks 112 -> 147, falls 4 -> 9 and own goals 0 -> 6 unresolved at that size."
 }

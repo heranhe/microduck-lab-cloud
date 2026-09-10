@@ -3380,6 +3380,99 @@ What is left, in the order it is worth doing:
    that produced every wrong verdict on the old pitch is **possession**,
    which pays a duck for standing next to a ball it is not moving.
 
+14. **The boards themselves: a Rocket League cove instead of a referee
+   (2026-09-09).** The question was whether the ball-out teleport (11b) is
+   necessary at all. The physics audit had already said why the ball dies
+   at the boards: MuJoCo's soft contact has no restitution — a 1.4 m/s
+   kick rebounds at e = 0.06 where a real hollow ball is 0.5–0.7, and
+   `compose.py` measured every solref without buying it. So the 72%-at-
+   the-boards floor was partly the simulator's own, and the referee was
+   patching a wall deader than any real one. A quarter-round cove along
+   the base of the boards returns the ball by gravity — a ball rolling up
+   a slope, which MuJoCo does model — and on a real table it is a strip
+   of quarter-round moulding.
+
+   **Built:** `Scenario.cove` (the radius, m; 0 = flat, bit for bit the
+   old pitch), `make_pitch(cove=, corner=)` where `corner` chamfers each
+   corner at 45° starting that far along each wall, `eval-pitch --cove R
+   --corner L` (recorded in the row; a resume refuses to mix boards),
+   `tests/test_cove.py`. `compose.py` builds the cove from 8 tangent boxes
+   a wall (facet sagitta 0.7 mm against a 35 mm ball), mitred where two
+   walls meet, cut at the goal mouths whose ends are the posts. Bench, on
+   an empty 2v2 pitch: a 1.0 m/s ball dies 13 cm off a flat board and
+   comes back 1.36 m off a 15 cm cove (climb 5 cm; at 1.4 m/s it climbs
+   11 cm and returns 1.84 m); a 0.2 m/s nudge that sits flush on the flat
+   settles 0.27 m off the coved board; a 0.3 m/s shot scores through the
+   cut mouth on both pitches and the same shot 10 cm outside the post
+   turns back. The walkers' open-floor trajectory is bit-identical on the
+   two pitches (locked by a test); throughput 719 → 653 steps/s for the
+   84 extra static geoms.
+
+   **Measured, 2v2, 300 s, get-up on, on one frozen package copy: three
+   arms of 24 seeds (0–23) through `eval-pitch`, plus a per-tick game-flow
+   probe on the first 12 seeds of each arm and of a fourth, flat boards
+   with no referee — so the cove's own effect is read on the same seeds.
+   Brain: the pre-12ae chase head (the package was frozen before
+   `track_pitch` / `look_hold_s` existed); `MICRODUCK_CHASE="track_pitch=0,
+   look_hold_s=0"` is that brain bit for bit, if this is ever re-run:**
+
+   | arm | ball ≤ 0.20 m of the boards | ball at rest ≥ 5 s | referee placements | kicks a run |
+   |---|---|---|---|---|
+   | flat boards, no referee | 74% | 89% | — | 1.17 |
+   | cove 0.15 + chamfer 0.3, no referee | **29%** (p<0.001) | **65%** (p<0.001) | — | **3.67** (p=0.006) |
+   | flat boards + referee at 5 s (the lab today) | 10% | 66% | 4.50 | 3.50 |
+   | cove + chamfer + referee | 9% | 61% (p=0.16 vs the row above) | 3.00 (p=0.043) | 3.17 |
+
+   **The cove alone does what the referee does** on the two instruments
+   item 11 named: dead time 89 → 65% against the referee's 89 → 66%,
+   kicks 1.2 → 3.7 against 1.2 → 3.5 — with no teleport. What it does not
+   do is take the ball off the boards: it parks within 0.20 m of the wall
+   line 29% of the run against the referee's 10%, and that is the cove's
+   foot (a dribbled ball settles 0.16–0.27 m off the line), from which the
+   ducks evidently play it, since neither the kicks nor the dead clock
+   move. With both on, the referee still fires 3.0 times a run: it is
+   catching balls at the cove's foot — playable ones — because its 0.20 m
+   band was drawn for a flat wall.
+
+   The 24-seed ledger (`scripts/compare_pitch.py`, paired, Student's t):
+
+   | | flat + referee | cove + referee | cove alone |
+   |---|---|---|---|
+   | ballAdvance m/min | 1.008 | **1.156 (+15%, p=0.019)** | 1.018 (NO RESULT, MDE 18%) |
+   | possession s/min | 41.3 | 43.1 (p=0.04) | 43.4 (p=0.005) |
+   | kicks (events over 24 seeds) | 90 | 81 | 74 (MDE 28%: not resolvable) |
+   | back-kicks / kicks | 22% | 12% (p=0.09) | 15% (p=0.23) |
+   | goals | 18 | 15 | 15 (needs ~500 seeds) |
+   | falls (events) | 4 | 8 | 14 |
+
+   Falls: 9 of the cove-alone arm's 14 are ONE duck in seed 8 falling
+   eight times in seven seconds at (−0.4, −1.0), 0.4 m from the nearest
+   wall — rendered: the get-up stands it up into an opponent and the pair
+   topple together, the get-up cascade B.1 documented, on the open floor
+   with nothing under it but the plane. Seeds with any fall are 4 / 5 / 6
+   of 24 across the arms, and in the 12 probe seeds one of the cove arms'
+   ten falls was within 0.25 m of a wall. Unresolvable at this size (MDE 193–422%), and the one
+   near-wall event is not a signal.
+
+   **Verdict: the referee is not necessary.** The cove keeps the ball in
+   play by physics the sim gets right and a table can be built with, at no
+   measurable cost on dead time, kicks, advance or falls.
+
+   **Landed as the lab default, later the same day.** The viewer draws the
+   cove (`SimStage.tsx`: one extruded quarter-round per wall run on the
+   wall's inward side, cut at the goal mouths, from `Scenario.cove` on the
+   streamed scene) and `world_server` builds every pitch builtin with
+   `cove=0.15, corner=0.3` and the referee off (`PITCH_BALL_OUT_S = 0`),
+   so `/sim` and `record-world` play exactly the "cove alone" arm above.
+   `eval-pitch`'s baseline pitch is unchanged (flat, square, no referee;
+   `--cove --corner --ball-out-s` opt in), so no published number moves.
+   The editor's `make a pitch` applies the cove and, for a rectangular
+   room, the chamfered corners (`SimEditor.makePitch`; `makeRoom` takes
+   them back), so a pitch drawn there is the one `/sim` plays on.
+   Rows: `runs/cove-flat-rule.jsonl`, `runs/cove-rule.jsonl`,
+   `runs/cove-alone.jsonl`; the probe arms were scratchpad-only, the
+   numbers are the table above.
+
 And one thing this track did NOT settle, which every item above kept
 running into: **the score.** Goals need 136 seeds to move 25% and own goals
 347 (1.5). Positional play buys shape, safety and a ball that goes less
@@ -7530,3 +7623,758 @@ the flat-board result. **An absolute count is not comparable across arms of
 different size, and a number is not comparable across versions of the tool that
 printed it.** Both would have been caught by printing the denominator beside
 every count, which the probe now does.
+
+
+### 12ae. "Better head tracking so it does not lose the ball" — the loss audit, and why the head is not where the losses are (2026-09-09)
+
+Jonathan: *"Could we add better head tracking for the ball so the robot
+doesn't lose it as often?"* Head-yaw tracking already ships (item 4, +8 pp of
+ball-in-view) and every gaze variant since has been argued from the diff and
+judged on pooled view percentages. Nobody had asked the detector WHY a frame
+does not contain the ball. `scripts/probe_ball_loss.py` does: at every frame
+without a ball it reads the truth and files the miss under the gate that fired
+(`behind` the camera plane, `h_out` the side of the frame, `v_low` below it,
+`occluded`, `small`, a datasheet `noise` miss), snapshots the brain and the
+head at the start of every loss event, and cross-correlates the head-yaw
+command against the camera's true yaw. 12 seeds × 180 s of 2v2, the shipped
+brain, ball-out 5 s:
+
+| | |
+|---|---|
+| ball in view | 43.2 % of ticks |
+| loss events | 1113 (93 a run); median 1.40 s, 41 % over 2 s |
+| blind frames by cause | **behind 53 %**, below the frame 20 %, off the side 13 %, occluded 8 %, small 4 %, noise 1 % |
+| loss EVENTS by cause | **below the frame 571 (51 %)**, occluded 293, small 149, behind 57, off the side 42 |
+| head servo | **7 ticks (140 ms) behind its command, gain 1.04** |
+
+**Half of all losses begin with the ball slipping under the frame**, at a median
+0.27 m, 38° off the nose, with the head yawed at it (|cmd| 0.50) and its pitch
+command 0.00 — and those events are 68 % of all blind seconds, because the duck
+then walks on and the ball ends up behind it (59 % of the frames inside a
+"below the frame" event are `behind`). The yaw law follows the ball; nothing
+pitches at it outside the line-up gaze, which refuses past `gaze_bearing_max`
+(0.6 rad = 34°): exactly where the ball is when it drops out.
+
+**Three knobs, built, all shipping OFF and bit-identical to the shipped head
+(`tests/test_head_track.py`; the shipped arm on the A/B copy reproduced the
+baseline to the event):**
+
+* `track_pitch` — the SMALLEST pitch that keeps the predicted ball
+  `track_pitch_margin` inside the bottom of the frame, in the yaw law's
+  states and under its clearance gate, capped at `track_pitch_max`, off during
+  a turn in place unless `track_pitch_turn`. Slant geometry: the tracker's
+  range is `radius / tan(width/2)` — the slant — and `_gaze`'s
+  `atan2(height, range)` reads it as ground distance, which under-aims by 12°
+  at 0.27 m. (Recorded; `_gaze` is left as measured.)
+* `look_hold_s` — keep the head on the coasting track past `predict_s`
+  (15.8 % of blind frames have a live track the head is not pointed at).
+* `head_lead_s` — aim at the ball predicted the servo's lag ahead.
+
+**Benched first, on the shipped walker** (4 seeds × 6 s a pose): a cold turn is
+unaffected by any head pose; the WARM in-place turn runs 0.61 rad/s with the
+head slot at 0.10 and **0.00 from 0.20 up** — the "cannot turn head-down" rule
+now has its threshold — and the NECK slot stalls it at −0.30 already, so there
+is no free route through the neck either. Walking at 0.3 costs 4 % of speed at
+0.20, 6.5 % at 0.30, 9 % at 0.45, 13 % at 0.60. No falls at any pose.
+
+**Discovery block** (12 seeds × 180 s, paired, `probe_ball_loss --arm`):
+
+| arm | ball in view | losses | median | > 2 s | v_low events | falls / run | possession |
+|---|---|---|---|---|---|---|---|
+| shipped | 43.2 % | 1113 | 1.40 s | 41 % | 571 | 0.00 | 19.75 |
+| `look_hold_s=2.5` | 40.6 % | 1034 | 1.43 | 41 % | 564 | 0.17 | 20.30 |
+| `track_pitch=1` | 42.0 % | 1020 | 1.48 | 42 % | 541 | 0.25 | 18.96 |
+| `track_pitch=1,track_pitch_max=0.45` | 44.0 % | 1103 | 1.38 | 42 % | 583 | 0.17 | 19.94 |
+| `head_lead_s=0.14` | 40.0 % | 1002 | 1.28 | 42 % | 538 | 0.33 | 19.57 |
+| all three (pitch 0.45) | 43.9 % | 1102 | 1.08 | **35 %** | 573 | 0.17 | 20.28 |
+
+Every view difference is inside ±4 pp (the MDE at 12 seeds) and **the
+below-the-frame losses the pitch was built for did not move** (571 → 541 →
+583). The event snapshots say why, and it is two different reasons:
+
+* In `lineup` (226 of the 571) the pitch DOES fire — 60 % of those losses
+  carry a 0.45 command and the camera is already 20° down — and the ball is
+  at **0.21 m slant with a true depression of 70°**: under the chin. That is
+  the blind radius of item 12k, reached by design as the line-up walks in,
+  and no pitch this walker can walk with reaches it.
+* In `avoid` (114), `turn` (47) and the retreat's turn phase the ball sits at
+  40–49° of depression, where 0.15–0.30 of pitch WOULD hold it — and the
+  turn-in-place rule refuses every pitch, because (bench above) both slots
+  stall the warm turn. The head cannot look down while the body turns; that
+  is the walker, not the brain.
+
+The `behind` bucket (53 % of blind frames, entered mostly through the two
+above) is a body problem: the ball is 121–141° off the nose, the head could
+reach 138°, and the clearance gate holds it on the line 43–72 % of the time
+because a duck that has just turned away from something has that something
+beside it. Only the legs get the ball back from there.
+
+**Fresh block** (24 NEW seeds, 100–123, × 180 s; the shipped rows re-run on
+them). Same instrument, the bundle registered before the read: the number to
+move was the loss duration (the discovery hint), the guard was falls.
+
+| 24 fresh seeds | ball in view | losses | median loss (per seed) | > 2 s | kicks | falls | possession |
+|---|---|---|---|---|---|---|---|
+| shipped | 41.7 % | 1975 | 1.47 s | 43 % | 1.79 | 0.12 | 19.52 |
+| `track_pitch=1,track_pitch_max=0.45,look_hold_s=2.5,head_lead_s=0.14` | 44.5 % (+2.8, p = 0.11) | 2267 | **1.10 s (−0.37 ± 0.21, p = 0.001, better on 18/24)** | **34 %** | 2.04 | 0.17 | 20.34 (p = 0.16) |
+| …plus `track_pitch_turn=0.15` | 44.1 % | 2149 | 1.14 s (−0.34 ± 0.29, p = 0.027) | 34 % | 2.79 (+1.0 ± 0.9, p = 0.034) | 0.04 | 20.18 |
+
+**The bundle does not stop the ball being lost; it makes each loss shorter.**
+Loss EVENTS went UP 15 % (1975 → 2267) while the median loss fell a quarter
+and the share over 2 s fell from 43 % to 34 % — the same shape as the discovery
+block (41 → 35 %). The below-the-frame events tell it plainly: 1072 → 1352 of
+them, median 2.49 → 1.52 s, over 2 s 56 → 40 %. The head still cannot see a
+ball under the chin, but a head that stays PITCHED AND YAWED at the remembered
+ball for 2.5 s instead of 1.0 s has it back in the frame the moment the body
+moves, instead of looking level over it. Ball-in-view +2.8 pp is not resolved
+at 24 seeds (MDE 3.5 pp) — the frequency claim is not made. Falls flat (3 v 4
+in 24 runs), kicks flat-or-up, possession +0.8 s/min at p = 0.16 (null at MDE
+6 %).
+
+**Attribution, on the same fresh seeds** (one arm at a time against the shipped
+rows above): the pitch and the hold WITHOUT the lead give median loss 1.14 s
+(−0.34 ± 0.27, p = 0.018, better on 17/24), over 2 s 34 %, falls 1 v 3,
+possession +1.0 s/min (p = 0.08) — the whole effect. The lead adds nothing the
+block can see (1.10 with it), and alone on the discovery block it pointed the
+wrong way on every ledger sign. It ships off. Alone, neither the pitch nor
+the hold moved the median on the discovery block; it is the pair — a head that
+pitches at the remembered ball AND keeps pointing there — that shortens the
+loss, which is what the event snapshots predicted.
+
+**SHIPPED:** `track_pitch=True`, `track_pitch_max=0.45`, `look_hold_s=2.5`
+(`head_lead_s` 0, `track_pitch_turn` 0). After the batteries the settle was
+excluded from the pitch (the swing's run-up belongs to `gaze_still` and
+`settle_head_level`; `tests/test_team.py` said so by failing), and the exact
+shipping code — no `MICRODUCK_CHASE` — was run once more on the same 24 fresh
+seeds: **view 44.0 %, median loss 1.14 s (−0.34 ± 0.27, p = 0.017, 17/24), 35 %
+over 2 s, kicks 2.42 (+0.6 ± 0.7, p = 0.09), falls 1 v 3, possession +0.5**.
+What ships is what was measured. ⚠ Every soccer number quoted before this item
+is on a head that returns to level 1 s after the last sighting; the A/B copy
+in `tests/test_head_track.py` (`OFF`) is the old head, bit for bit.
+
+**What is NOT fixed, and it is most of the losing.** Ball-in-view moved
++2.3 to +2.8 pp on three fresh arms and never reached significance (MDE ~4 pp
+at 24 seeds; ~60 seeds would settle a 3 pp claim). The ball is still lost 90+
+times a run, still under the chin in every line-up (item 12k's blind radius,
+reached by design), and still unreachable by the head while the body turns —
+both head slots stall the warm turn (bench above), so the `avoid` / `turn`
+losses at 40–49° of depression wait on a walker that can turn head-down (a
+GPU retrain, roadmap 4c's bead) or on the cold-turn kick being carried while
+pitched (the kicked turn is unaffected at any pose; `avoid` zeroes it near a
+duck for a reason). And `behind`, half of all blind time, is the legs' to fix:
+a search that turns toward the remembered ball rather than always left
+(`search_sided` was a null on 8 seeds of 1v1 on the old camera and shipped
+kicks — an instrument that could not have seen it).
+
+**Recorded, not built:** `_gaze` reads the tracker's SLANT range as ground
+distance (`atan2(height, range)`), under-aiming ~12° at 0.27 m; the tracking
+pitch uses `asin(height / slant)`. Fixing `_gaze` moves the shipped line-up
+gaze that `gaze_still` was measured with, so it stays as measured until
+someone A/Bs it.
+
+**Instrument note.** The probe's first comparison printed "better on N/24"
+as the count of seeds where the ARM'S VALUE WAS HIGHER, so a lower-is-better
+metric (loss duration, falls) read backwards — the −0.37 s at p = 0.001 showed
+"better on 6/24". Caught by reading the sign against the p; fixed to count
+improvements. A summary line that can be read backwards is a bug even when
+the number beside it is right.
+
+### 12af. "Give it a memory of where the ball is" — the resting-ball memory driving the search, MEASURED NULL, and the reason is the reachable set (2026-09-09)
+
+Asked from the viewer: a duck looked at the ball, walked past it, and then
+searched the wrong way, "as if it has no memory of where the ball is relative
+to itself — do we need SLAM?" It has one: the tracker keeps the ball in the
+odometry frame and turns a coasting bearing with the body (`tracker.py`), and
+`localize.py` is a goal-post particle filter. What it does NOT do is keep that
+memory past 2.5 s or let the search read it, and the two knobs that would
+(`rest_coast_s`, `search_sided`) had each been measured off alone, never
+together. So: together.
+
+**Three arms, paired seeds, knobs read back off the constructed brain.**
+`shipped`; `pair` = `rest_coast_s=30,search_sided=1` (the question as asked);
+`live` = `rest_coast_s=30,rest_predict_s=30,predict_steer=1,search_sided=1`
+(the memory actually steering the search through `pred_bearing`, which is the
+bearing to the remembered POSITION from where the duck is now — `search_sided`
+alone reads `last_bearing`, frozen at the moment of loss).
+
+`probe_ball_loss --seeds 12 --seconds 180` (2v2, ball-out 5), `runs/memsearch/loss/`:
+
+| arm | ball in view | losses | median | > 2 s | `behind` events / median | kicks | falls | goals | possession |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped | 46.0 % | 1172 | 0.92 s | 32 % | 42 / 9.05 s | 2.33 | 0.25 | 0.50 | 20.63 |
+| pair | 43.7 % | 1098 | 1.10 s | 34 % | 32 / 9.66 s | 2.17 | 0.00 | 0.67 | 20.76 |
+| live | 43.0 % | 1106 | 1.00 s | 35 % | 43 / 11.20 s | 1.92 | 0.08 | 0.42 | 20.89 |
+
+View −2.2 pp (±5.5, null) and −3.0 pp (±3.9, null); everything else NO
+RESULT at 12 seeds. **The `behind` losses — the only cause a sided search can
+act on — did not get shorter in either arm.**
+
+`eval-pitch --seeds 24 --seconds 300 --per-side 2 --ball-out-s 5`,
+`runs/memsearch/pitch-*.jsonl`, `compare_pitch.py`:
+
+| | shipped | pair | live |
+|---|---|---|---|
+| possession (MDE 4 %) | 40.86 | 40.35 null | 40.09 null |
+| goals (events) | 26 | 30 | 27 |
+| falls (events) | 4 | 4 | 4 |
+| kicks (events) | 102 | 93 | 90 |
+| own goals | 9 | 7 | 6 |
+| spread | 0.577 | 0.598 (p = 0.043, one of nine metrics) | 0.595 null |
+
+Nothing moves. **Null, and an earned one on possession and the loss table.**
+
+**Why — traced per tick, 4 seeds × 180 s an arm** (`scripts/probe_search_side.py`:
+brain state, commanded turn, TRUE ball bearing off the body, whether a track
+was alive and what it said):
+
+- **The search is 10 % of the long-loss time.** Blind stretches over 2 s, by
+  the state the brain was in *during* them (shipped): support 36 %, retreat
+  27 %, avoid 11 %, search 11 %, lineup 5 %. Support (a teammate has the
+  claim, this duck holds position), retreat (turning AWAY from the ball to
+  line up) and avoid (dodging a duck) are not looking for the ball by design.
+  A search-direction memory can act on one tenth of the blind time — the same
+  structural no-op as `board_margin` (12v): compute the reachable set first.
+- **In that tenth, the search already turned toward the true ball 76 % of the
+  time** with the always-left circle (why the fixed direction is right three
+  times in four was not traced). The memory raised it to 85–86 %. Ten points
+  of one tenth.
+- **`search_sided`'s bearing is stale**: `last_bearing` is written only while
+  `seen`, so the sided search turns toward where the ball was *at the moment
+  of loss, relative to the body then* — median 55–94° off the truth by the
+  time the search starts, right-signed 86 %.
+- **A coasting track's `bearing` is stale too**: `Tracker.update` rotates it by
+  the body's yaw and never by its translation, so after a walk the 30 s memory's
+  bearing field is 112° off (its `xy` is fine; `pred_bearing` recomputes from
+  it, which is the `live` arm). Anything that reads `Track.bearing` on a track
+  older than a second or two is reading a number that stopped meaning
+  "bearing" when the duck moved.
+- **The `live` memory was voided almost at once**: a track alive during search
+  2 % of the time against 27 % in `pair`, because `rest_predict_s` turns on
+  `Tracker.disturb` — any body within `rest_clear_m` (0.30 m) of the remembered
+  ball voids it — and in 2v2 there is nearly always a duck on the ball. Right
+  rule, no survivors.
+
+**So the answer to the viewer question.** The memory is not missing, it is
+(a) short by three clocks — `DET_MAX_AGE` 0.4 s ends "fresh", `lost_s` 2.0 s
+ends "seen", `coast_s` 2.5 s ends the track, all set when the ball had no
+rolling friction and a stale position was worth nothing — and (b) consulted
+only in `search`, which is where the duck spends a tenth of its blind time.
+The duck in the screenshot was most likely in `support` or `retreat`, states
+that do not look for the ball at all. A world model / SLAM would give the
+search a better bearing for the tenth it governs; the other nine tenths are
+role and manoeuvre decisions, and those are what to change if "it walked past
+the ball and turned the wrong way" is the complaint.
+
+**Ships off, both arms.** Recorded, not built: a `Track.bearing_from(pos, yaw)`
+that reads the bearing off `xy` so a coasting track's bearing survives a walk
+(`tracker.py`), and a support/retreat that keeps the head on the remembered
+ball — the latter is where the blind time is.
+
+### 12ag. The head on the remembered ball in support and retreat — MEASURED, SHIPS ON (2026-09-10)
+
+12af's "recorded, not built", built the next morning: `ChaseParams.head_memory_s`
+(30 s) and `head_memory_states` ("support+wait+retreat"). In those states, with no
+fresher look target, the head yaws — and under `track_pitch` pitches — toward
+the BOARD's ball (a teammate sees it now), else this duck's own last sighting
+(`Chase.memory`, odometry frame) while it is younger than `head_memory_s`. The
+head only: `seek_s` stays the walk's knob and nothing walks on this memory;
+the `yaw_clear` bumper gate applies as to every head yaw. The `Chase.memory`
+forget rule now keeps the memory for `max(seek_s, head_memory_s)`, and the
+"here with nothing seen" forget only applies to a walk (`seek_s > 0`), so the
+shipped seek path is unchanged to the tick. `tests/test_head_memory.py` locks
+the defaults, the supporter's yaw, the off path and the forget rule.
+
+**Reachable set first** (12af's lesson): blind frames by state × cause on the
+shipped brain — support 33.7 % of blind (64 % `behind`, 13 % `h_out`), retreat
+25.6 % (54 % `behind`, 20 % `v_low`), avoid 12.6 % (41 % `v_low`, 31 %
+`behind`) — and the probe's own `reach` column says 93 % of `behind` is inside
+head yaw + half the field of view. So the head can act on most of the blind
+time, which is what 12af's search-direction memory could not.
+
+**Loss probe**, `probe_ball_loss --seconds 180` 2v2, two paired blocks (seeds
+0–11 discovery, 100–111 fresh), pooled 24 seeds, `runs/memsearch/loss-head*/`:
+
+| arm | ball in view | `behind` blind frames | losses | p90 | falls / run | goals / run |
+|---|---|---|---|---|---|---|
+| shipped | 45.9 % | 52 619 (49 % of blind) | 2363 | 12.7–14.1 s | 0.12 | 0.42 |
+| `head_memory_s=30` | 50.0 % | 29 808 (29 %) | 2692 | 10.1–10.2 s | 0.08 | 0.50 |
+| …+ `avoid` | 50.7 % | 25 679 (25 %) | 2821 | 8.7–9.9 s | 0.00 | 0.58 |
+
+Ball in view **+4.1 pp ± 3.6, p = 0.027, better on 16/24** (with avoid +4.8 ± 3.1,
+p = 0.004, 19/24). Each block alone pointed the same way (8/12 and 8/12; 10/12
+and 9/12) and was null at 12 seeds: the discovery block's +3.1 pp did NOT
+inflate, the fresh block gave +5.1. The `behind` half of the blind time is
+halved. More loss EVENTS, not fewer — a head that tracks catches glimpses that
+end a loss and start another — and the median loss is 0.15 s longer for it;
+what shrinks is the tail (p90) and the total. Falls do not rise (0.12 → 0.08 →
+0.00). Per-tick trace (`scripts/probe_search_side.py --arm`): long-loss
+duck-seconds 1441 → 1148 (−20 %), search time 6 % → 3 % of the run, and the
+search that remains turns toward the true ball 88 % (was 76 %) because
+the body starts it looking the right way.
+
+**Pitch**, `eval-pitch --seeds 24 --seconds 300 --per-side 2 --ball-out-s 5`,
+`runs/memsearch/pitch-{shipped,head,head_avoid}.jsonl`:
+
+| | shipped | `head_memory_s=30` | …+ `avoid` |
+|---|---|---|---|
+| possession (MDE 4–5 %) | 40.86 | 40.22 null | 39.40 null |
+| goals (events) | 26 | 24 | 19 |
+| own goals (events) | 9 | 0 | 4 |
+| falls (events) | 4 | 4 | 5 |
+| kicks (events) | 102 | 112 | 108 |
+| back-kicks | 22 % | 21 % | 30 % (p = 0.18) |
+
+Flat on everything the battery can resolve. Own goals 9 → 0 is one block of
+nine events and is recorded, not claimed (347 seeds for a per-run claim, see
+the power table). **Ships on at 30 s in support/wait/retreat.** With `avoid`
+the view gain is a point better but goals and back-kicks trend the wrong way
+at a size that cannot resolve them; recorded, off — the next arm if anyone
+wants it is `head_memory_states=support+wait+retreat+avoid` on a fresh block.
+
+**What this does for the viewer question.** The duck that looked at the ball,
+walked past it and turned away now keeps its head on where the ball was — or
+where its teammate says it is — through the support and the retreat, which is
+where it was blind. Not a world model: one remembered point, in the frame the
+brain already had.
+
+
+### 12ah. The pirouette, priced: a heading anchor on the point-strike kick halves the turn and LOWERS whiff, but does not reach 20° (2026-09-10)
+
+12ab's ask, run as the single-change control beside the wide-box recipe
+another session built the same morning (12b's box + `face_line`, the
+`kick_{side}_wide` behaviors): the vendored point-strike recipe (`kick_right`
+exactly as `kick-right-headdown-v1` trained it, seed 0, 2M steps) plus the
+catalog heading anchor `face_home` at weight 4.0 through `--weights-json` —
+no edit to the recipe, since `BehaviorEnv` adopts a catalog term named in the
+weights — trained headless on a package copy frozen at 07:26 (the farm slot
+was the other session's). Run `kick-right-faceline-v1` under `runs/`, with
+`policy.json` carrying the exit. **Right foot only so far**; the left waits
+on the farm's cores.
+
+**Bench** (`bench_kick_headdown`, 12 seeds a pose): 0% whiff from every gaze
+pose, 1.11–1.26 m at 1.33–1.55 m/s peaking at 0.16 s, no falls, exit −2 to
+−11° by pose (sidecar −0.13 rad against the vendored right's 0.0).
+
+**Grid bench** (the other session's `grid_bench.py`: 84 cells × 3 poses × 2
+seeds, 1.2 s, right foot, one invocation): coverage of the box play produces
+71 / 92 / 92 % (vendored 73 / 70 / 80 %), sweet spot 94 / 100 / 100 %,
+|body turn| median 32 / 59 / 43° (vendored 90 / 60 / 64°), falls 8 / 11 / 8
+per 168 (vendored 4 / 2 / 5). The far rows (0.14–0.20 m ahead) light up where
+the vendored is blank. So **the anchor does not shrink coverage** — the
+"pirouette IS the coverage" reading that the scratch wide kick suggested was
+the wide recipe's own weakness (a weak sweep, 0.2–0.4 m on the spot), not the
+anchor's price. Two seeds a cell: a half-filled cell is one hit.
+
+**In play** (`probe_kick_recover`, 6 seeds × 50 episodes, both arms on the
+same seeds and the same frozen copy, both feet pinned explicitly):
+
+| right foot | vendored | + `face_home` 4.0 |
+|---|---|---|
+| swings | 102 | 42 |
+| body turn through the swing, median (q1 / q3) | **+117°** (+103 / +127) | **+33°** (+21 / +45) |
+| swings under 20° | 0 % | 17 % |
+| same sign | 98 % | 93 % |
+| carried forward | 0.12 m | 0.11 m |
+| whiff | 15 % | 12 % |
+| seen again within 2 s, whiffed / connected | 27 % / 75 % | 60 % / 73 % |
+| ended further from the ball than at the swing | 98 % | 79 % |
+
+The left foot — the unchanged vendored kick in both arms — read −97° and −95°
+and whiff 19 % and 30 %, which is the probe's whiff noise floor at n ≈ 105:
+±10 pp. The probe's whiff column is therefore unreadable and the gym is the
+whiff instrument. The selector took the right foot on 42 of 149 swings against
+102 of 206: the exit sidecar moved from 0.0 to −0.13 rad and `kickselect`'s
+fan reads it. n is small but the turn quartiles do not touch.
+
+**Kick gym** (12 seeds × 40 episodes; the vendored baseline is the other
+session's `runs/widekick/gym-vendored.jsonl` on the same seeds, brain files
+identical to the copy by sha; paired by `compare_gym.py`): **whiff 18 % → 11 %
+(−7 pp, MDE 5, p = 0.007), better on 10 / 12 seeds (sign p = 0.039)**,
+connected kicks 319 → 334, sweet spot 17.8 → 16.8 %, median travel of the
+connected 0.82 → 0.84 m. By row: 0.08–0.11 m 8 → 5 %, 0.11–0.15 m 20 → 15 %,
+0.15–0.20 m 47 → 29 %, ≥ 0.20 m 45 → 26 % — the gain is at the far balls,
+which is where the grid said the anchored foot now reaches. Diluted: only the
+right foot changed.
+
+**Verdict.** The registered "whiff must not rise" holds with room to spare: it
+fell. The registered "turn under 20°" is **not met at weight 4** — the policy
+pays the fine (`face_home_penalty` −2.9 / step at 2M against `ball_forward`
+7.5 / step) and keeps a third of the turn. Falls are the open question: 0 in
+60 bench swings, but 8–11 of 168 grid cells against 2–5, and the probe carries
+no fall signal. Caveat on all of it: one training seed per arm.
+
+**Next, in order (both wait on the farm):** the left foot at 4.0, so there is
+a pair to vendor (and `kick_exit_right` → −0.13 with it); the right foot at
+weight 12 (`ball_forward`'s ceiling), the number being the turn; grid + bench +
+gym on each, and a 2v2 ledger before anything ships.
+
+**Instrument trap, worth its own line:** a package copy resolves the vendored
+local kicks relative to its own `__file__` (`World.LOCAL_SKILLS`), finds
+nothing there and falls back to the Hub kicks silently, with
+`kick_exits()` = None. The first baseline here measured the Pollen kicks —
+turn 0°, whiff 80 % — and read like a finding until the resolved path was
+printed. Pin `MICRODUCK_SKILL_KICK_LEFT/RIGHT` and print `World.skill_path()`
+off the constructed world before every arm (AGENTS.md verification rule 0).
+
+### 12b. The kick trained on the box play produces — BUILT, MEASURED: warm-started it cuts the gym whiff 18 → 4 % on 12/12 seeds, and keeps the pirouette (2026-09-10)
+
+Jonathan, from the `/sim` page: *"they run up to kick the ball and completely
+miss it by a little bit — is there any way we can train that to be better?"*
+The record already said what the miss is (12a: the swing connects 100 % with
+the ball on the recipe's spot; radial offset 0–3 cm 0 % whiff, 3–6 cm 8 %,
+6–10 cm 20 %, 10–20 cm 61 %), so the trainable ask was this item as written:
+spawn the ball over the box play produces and let the swing that is paid be
+the one that connects anywhere in it.
+
+**Built:** `behaviors/kick.py` `kick_{left,right}_wide` — the point-strike
+recipe's five terms unchanged, plus 12ab's heading anchor (`face_line`:
+core's `_face_home_pen` against the yaw the episode began with, which is the
+yaw `_kick_dir` is latched from; weight 4.0, bounded, saturates at ~36°), the
+ball uniformly over a stage-laddered box (`MICRODUCK_KICK_BOX_AHEAD/SIDE`,
+spawn knobs only): stage 1 "finding the swing" 6 × 6 cm round the sweet spot
+(1M), stage 2 "the box play produces" 4–16 cm ahead × 1–13 cm to the side
+(2M). The box stops where a 0.5 s swing from standing can reach (arena
+`KICK_S`); the far balls stay the brain's (`kick_ahead_max`). Locked by
+`tests/test_kick_behavior.py::test_the_wide_kick_spawns_the_ball_across_the_box_and_a_stage_narrows_it`.
+Launched through the farm (`teach.sh kick_right_wide`), 3M steps in ~2.5 min
+a foot at ~19 k steps/s.
+
+**Instrument that decided it, before play:** a grid bench (the ball on 84
+cells of (ahead, side), 3 head poses, 2 seeds, the bench's protocol; 
+`scripts/grid_kick_bench.py`, also used by 12ah). It answers the
+question nobody had asked of the vendored kick: **how much of the box does the
+blind point-strike already cover?** Right foot: **73 / 70 / 80 %** (level /
+line-up gaze / neck split), 100 % of the sweet spot — a 0.14 × 0.10 m region
+— with a body turn of 60–90°. Left: 58–60 %, turn 110–129°. So the whiffs
+play sees at 6–10 cm radial (20 %) are the edge of that region, and the
+10–20 cm band (61 %) is beyond any standing swing's reach — brain territory.
+
+**Arm 1, from scratch (both feet):** a weak sweep, not a strike.
+`ball_forward` pay 3.3 / step at 3M against the vendored strike's 9.0 at 2M.
+Right (`teach-kick_right_wide-709272-s2`): sweet-spot whiff 8–17 %, travel
+0.17–0.39 m (vendored 0 %, 1.0–1.3 m), box 46 / 54 / 63 %, turn 40°. Left
+(`teach-kick_left_wide-9bca50-s2`): whiff **58 %** on the sweet spot at the
+line-up gaze with 0.00 m travel, box 40–46 %, 78 falls in 168 grid cells
+from the split pose. Settled on the bench; no gym arm spent on it. The box
+from scratch loses the strike: a random swing at a ball spread over 12 × 12 cm
+is paid a little everywhere and the optimiser settles on the nudge.
+
+**Arm 2, the chain warm-started from the vendored strike** (`initFrom
+kick-right-headdown-v1`, `startStage 1`; `teach-kick_right_wide-f40503`):
+the strike survives — stage 1 (6 × 6 box) 0 % whiff from every pose,
+0.93–1.16 m; stage 2 (full box) 0 % whiff from every pose, 0.74–0.96 m at
+1.0–1.24 m/s, exit −4..−14° (sd 5–9). Grid: box **82 / 86 / 92 %** (+9–12 pp
+on the vendored), sweet spot 100 % — **and the turn is 160–168°** (vendored
+60–90°). The left the same way (`teach-kick_left_wide-ab161c`, warm from
+`kick-left-headdown-v1`): 0 % whiff from every pose, 0.87–0.98 m, exit +1..+6°;
+grid box 62 / 83 / 99 % (vendored 58 / 60 / 58 %), turn 52 / 108 / 150°
+(vendored 129 / 111 / 110°), falls 10 / 4 / 3 per 168 (vendored 0 / 1 / 1). The anchor is bounded, so past 36° the fine is flat and the policy
+pays it to buy the far cells with a bigger pirouette (`face_line_penalty`
+−3.0 / step throughout, against `ball_forward` 4–7). In play
+(`probe_kick_recover`, 6 × 50, right pinned to f40503-s2 with its −0.20 rad
+exit sidecar, left vendored, `runs/widekick/recover-warm-right.jsonl`):
+
+| right foot, in play | vendored (12ah's baseline) | 12ah: strike + anchor | **12b: box + anchor, warm** |
+|---|---|---|---|
+| swings | 102 | 42 | 97 |
+| whiff (probe; ±10 pp at this n) | 13–15 % | 6–12 % | **5 %** |
+| body turn through the swing, median | +117° | **+33°** | 99° |
+| swings under 20° | 0 % | 17 % | 0 % |
+| ball seen again within 2 s | 71 % | **90 %** | 62 % |
+| ended further from the ball than at the swing | 98 % | 79 % | 99 % |
+
+**Verdict, in play.** On the probe (right foot, n ≈ 100) the box matches the
+anchor's whiff and gives back the turn and the re-acquisition. On the gym —
+the whiff instrument — the full warm pair (right f40503-s2, left ab161c-s2,
+both pinned, exits from their sidecars, 12 seeds × 40 episodes against
+`runs/widekick/gym-vendored.jsonl` on the same seeds, `scripts/compare_gym.py`):
+
+| kick gym, seeds 0–11 | vendored pair | **warm box pair** |
+|---|---|---|
+| swings | 388 | 391 |
+| whiff | 18 % | **4 %** (−14 pp, MDE 4, p < 0.001) |
+| better on | — | **12 / 12 seeds** (sign p < 0.001) |
+| connected kicks | 319 | **377** |
+| on the sweet spot | 17.8 % | 18.9 % |
+| median \|side\| at the swing | 0.063 m | 0.064 m |
+| median travel of the connected | 0.82 m | 0.88 m |
+| by row: 0.08–0.11 / 0.11–0.15 / 0.15–0.20 / ≥ 0.20 m | 8 / 20 / 47 / 45 % | **1 / 3 / 12 / 17 %** |
+
+Not the "better rate on fewer touches" shape: swings flat, connected up 18 %,
+travel up. The far rows collapse, which is the grid's coverage gain seen in
+play. 12ah's anchor-only control read 18 → 11 % with ONE foot changed, so the
+two are not the same experiment; the both-feet anchor pair (12ah's next arm)
+is the fair comparison, and until it runs "the box adds nothing to the
+anchor" is not a claim this morning can make — on the whiff instrument the
+box pair is the strongest kick pair measured so far. **Fresh block, seeds 100–111** (`runs/widekick/gym-{vendored,warm}-fresh.jsonl`): whiff **15 % → 4 %** (−12 pp, MDE 4, p < 0.001), better on every seed (one at parity to the percent), swings 395 → 386, connected **335 → 372**, sweet spot 16.2 → 21.0 %, median travel of the connected 0.88 → 0.89 m; rows 0.08–0.11 / 0.11–0.15 / 0.15–0.20 / ≥ 0.20 m: 1 / 5 / 16 / 12 %. The discovery block did not inflate. Pooled over both blocks (24 seeds): whiff 16.5 % → 3.6 % (129/783 against 28/777 swings), connected 654 → 749.
+
+**What it does not fix, and why it does not ship yet.** The turn: 99° in
+play (vendored 117°, the anchor-only control 33°), 150–168° on the bench —
+the anchor at 4.0 is bounded and the box pays the flat fine for the far
+cells; the post-kick re-acquisition, 62 % seen again within 2 s against the
+control's 90 % (vendored 71 %); bench falls up a little (3–10 per 168 cells
+against 0–5). One training seed per arm. So: **`policies/kick/` stays the
+vendored pair.** Before the box pair replaces it: the both-feet anchor pair
+beside it on the same seeds (the fresh block is done and replicates), an anchor weight that actually holds the heading (12ah's weight-12
+arm), and a 2v2 ledger, because the turn is a game-level cost the gym cannot
+see (12ab: the ball is behind the nose after every swing).
+
+**Two things the morning bought that outlive the null.** (1) The grid bench (`scripts/grid_kick_bench.py`; `scripts/compare_gym.py` pairs two gym files):
+coverage of the box is now a number any kick can be asked for, and it is
+where 12ah's "the anchor does not shrink coverage" was read. (2) The
+mechanism: a bounded heading penalty cannot hold a heading past its
+saturation once the pay for turning exceeds the flat fine — 12ah's weight-12
+arm is the right next question, and the number is the turn, not the whiff.
+
+**What "train it better" now means for the /sim complaint:** the miss is not
+the swing's to fix. It is 12c's open second half (re-plan the spot every tick
+inside the last 22 cm and refuse a swing at a ball the tracker has not seen
+for 0.3 s), and 12ah's anchor for the post-kick look. Neither is a retrain.
+
+#### 12b, continued: the box WITH an anchor that holds — the combined arm (2026-09-10, later the same morning)
+
+12ah's ladder found the weight at which the anchor holds the heading in play
+(`face_home` 12: turn +117° → −1° right, −97° → −7° left, 78–84 % of swings
+under 20°, gym whiff 18 → 9 % and 15 → 9 % on both blocks). The box pair
+above had the better whiff (4 %) and the worse turn (99°). So the obvious
+merge, run here on the farm: the same warm-started box chain with the recipe's
+`face_line` at **12** instead of 4 (teach weights `{"face_line": 12}`, which
+also becomes the panel's sticky slider for `kick_{side}_wide` until changed).
+
+**Right foot** (`teach-kick_right_wide-cc0590-s2`, exit −0.19 rad): bench 0 %
+whiff from every pose, 0.87–0.99 m at 1.1–1.26 m/s, falls 0–2 per 12 by pose.
+Grid: box **90 / 93 / 93 %** — the widest coverage measured (vendored
+73 / 70 / 80, box@4 82 / 86 / 92, narrow w12 69 / 67 / 77), sweet spot 100 %,
+|turn| 48 / 44 / 49° (vendored 90 / 60 / 64, box@4 160–168, narrow w12
+13 / 21 / 14), falls 6 / 4 / 8 per 168 (vendored 4 / 2 / 5). **In play**
+(`probe_kick_recover` 6 × 50, right pinned, left vendored,
+`runs/widekick/recover-w12box-right.jsonl`): n = 114, whiff 7 %, turn
+**+17° median (q1 +12, q3 +22), 66 % under 20°**, seen again within 2 s after
+83 % of connected kicks, carry 0.07 m. Between the two parents on both axes:
+the box still buys ~15° of turn over the narrow w12 (−1°), and the whiff sits
+between (narrow w12 16 % at n = 56, box@4 5 %).
+
+**Left foot at 12** (`teach-kick_left_wide-8a2421-s2`): **falls.** 0 % whiff and
+0.60–0.76 m on the bench, but the duck goes down after 6–10 of every 12 swings
+by pose, 90 of 168 grid cells at the gazing poses (vendored 0–1); training
+`ep_len` sat at 47 of 100 steps through stage 2 and said so before any bench
+did. The right at the same weight fell 0–2 per 12; the narrow w12 left (12ah)
+0 per 60. One training seed, so "the box and the 12 anchor together topple the
+left" is a one-seed statement — but a kick that falls is not a kick, so the
+rung between was run. **Left foot at 8** (`teach-kick_left_wide-aa2f53-s2`,
+exit +0.02 rad): bench 0 % whiff from every pose, 0.90–0.98 m at 1.1–1.2 m/s,
+exit +0..+5°, **no falls**; grid box 63 / 82 / 94 % (vendored 58 / 60 / 58),
+sweet spot 100 %, |turn| 27 / 58 / 91° by pose (vendored 129 / 111 / 110;
+narrow w12 7 / 9 / 5), falls 9 / 3 / 0 per 168 (vendored 0 / 1 / 1). So the
+combined PAIR is right at 12 and left at 8 — different weights a foot, which
+is itself a finding: the anchor's price in balance is not symmetric.
+
+**Pair, measured:** kick gym, both feet pinned, `scripts/compare_gym.py` three-way against
+the vendored pair and the weight-4 box pair on the same seeds
+(`runs/widekick/gym-w12box.jsonl`, `-fresh.jsonl`):
+
+| kick gym | vendored | box pair @4 | **combined (R @12, L @8)** | 12ai's narrow w12 pair |
+|---|---|---|---|---|
+| seeds 0–11: whiff | 18 % | 4 % | **9 %** (−9 pp, MDE 5, p < 0.001; better or level on 12 / 12) | 9 % (10 / 12) |
+| — connected kicks | 319 | 377 | 362 | 337 |
+| — median travel of the connected | 0.82 m | 0.88 m | **0.73 m** | — |
+| — rows 0.08–0.11 / 0.11–0.15 / 0.15–0.20 / ≥ 0.20 m | 8 / 20 / 47 / 45 % | 1 / 3 / 12 / 17 % | 5 / 14 / 12 / 35 % | — |
+| seeds 100–111: whiff | 15 % | 4 % | **7 %** (−8 pp, MDE 4, p < 0.001; better on 12 / 12) | 9 % (10 / 12) |
+| — connected kicks | 335 | 372 | 361 | 358 |
+
+Fresh block, median travel of the connected 0.88 → 0.76 m, sweet spot 16.5 %, rows 3 / 8 / 21 / 22 %. Pooled over both blocks (24 seeds): whiff vendored 16.5 % (783 swings), box @4 3.6 % (777), combined 7.9 % (785); connected 654 / 749 / 723.
+
+**Pair in play** (`probe_kick_recover` 6 × 50, both feet pinned, exits from
+the sidecars, `runs/widekick/recover-w12box-pair.jsonl`, against 12ah's vendored
+baseline on the same seeds):
+
+| in play | vendored pair | **combined pair (R @12, L @8)** |
+|---|---|---|
+| swings (left / right) | 118 / 114 | 141 / 90 |
+| whiff, all swings | 15 % | **9 %** |
+| body turn through the swing, median (q1 / q3) — left | −97° (−107 / −78) | **+8° (+5 / +13)** |
+| — right | +117° (+103 / +127) | **+15° (+11 / +20)** |
+| swings under 20° — left / right | 0 % / 0 % | **85 % / 73 %** |
+| seen again within 2 s after a CONNECTED kick — left / right | 96 % / 78 % | 92 % / 86 % |
+| …after a WHIFF (n = 20 / 15 vs 10 / 10) | 75 % / 27 % | 40 % / 20 % |
+| ended further from the ball than at the swing | 95–98 % | 89–90 % |
+
+The turn bar 12ab registered is met on both feet (medians +8° and +15°). The
+whiffed-ball re-acquisition drops on the left, as 12ai found for the narrow
+w12 pair: an un-turned duck leaves a whiffed ball inside its own blind radius
+(the vendored pirouette was putting it where the post-kick sweep looked) —
+ten whiffs a foot, so read it as a direction, and as 12ab's brain-side
+"did the ball move?" check coming due. The foot split (141 / 90) is the
+selector reading the new exit sidecars (+0.02 / −0.19), 12ai's confound.
+
+**Verdict on the combined arm:** the merge does what it was built to do — the
+heading held on both feet (+8° / +15°) AND the whiff down on both blocks
+(18 → 9 %, 15 → 7 %, every seed) — and it shows the box's whiff edge was the
+pirouette's: with the anchor at a weight that holds the heading the box pair
+lands where the narrow w12 pair already is (9 % on the same seeds), with
+slightly more coverage on the bench and slightly less travel in play
+(0.82 → 0.73 m of median carry on seeds 0–11). So "train it on the box" is
+answered: **the box is not the lever, the heading anchor is**, and the
+anchor's price is paid in balance, not in coverage — the left needs 8 where
+the right takes 12, and at 12 the left falls. The vendored pair stays the
+default. What ships next is 12ai's call: the narrow w12 pair (one change from
+the vendored recipe, no box, both feet standing) is the simpler artefact with
+the same whiff and the same heading, and its 2v2 ledger is the gate; the
+combined pair is recorded here as the arm that confirms the mechanism, with
+its files beside it: `teach-kick_right_wide-cc0590-s2`,
+`teach-kick_left_wide-aa2f53-s2`, `runs/widekick/gym-w12box*.jsonl`,
+`runs/widekick/recover-w12box-*.jsonl`. Instrument note that outlived every
+arm: **training `ep_len` is the fall alarm** — the w12 left sat at 47 of 100
+steps through its whole stage 2 while its bench read 0 % whiff; read it
+before the export, not after.
+
+**The fall column, added after 12ai's ledger read falls 4 → 9 and could not
+resolve them** (`kick_gym.py` rows now carry `fell`: the kicking duck's arena
+fall counter rose between the swing and the end of the 2 s carry window;
+`compare_gym.py` tests it). Seeds 0–11 × 40, all three pairs pinned,
+`runs/widekick/gym-falls-{vendored,w12pair,combined}.jsonl`:
+
+| fell within 2 s of the swing | vendored | narrow w12 pair (12ai) | combined pair |
+|---|---|---|---|
+| swings | 388 | 371 | 396 |
+| fell | 2 (0.5 %) | **0 (0.0 %)** | 7 (1.8 %) |
+| vs vendored | — | −0.5 pp, MDE 0.7, p 0.17 | +1.3 pp, MDE 1.5, p 0.10 |
+
+The whiffs reproduced to the swing (18 / 9 / 9 %; the gym is deterministic per
+seed). So the per-swing instrument does not see the ledger's extra falls in
+the narrow w12 pair — none in 371 swings — which points the ledger's 4 → 9 at
+walking and contest, not the kick; the combined pair is the one with a fall
+signal, unresolved at this size (~1300 swings an arm for 1 pp).
+
+
+### 12ai. The anchor's price ladder: weight 4 is paid as a fine, weight 12 holds the heading on both feet and lowers whiff (2026-09-10)
+
+12ah's control arm, taken to a pair and to a second weight — the same
+narrow point-strike recipe, the same seed 0 and 2M steps, one change per
+arm, all headless on the same frozen package copy, all measured with both
+feet pinned and `World.skill_path()` printed. Runs under `runs/`:
+`kick-left-faceline-v1` (4.0), `kick-right-faceline-w12` and
+`kick-left-faceline-w12` (12.0), each with a `policy.json` exit sidecar and
+the finding in `behavior.json`. The gym baselines are the other session's
+`runs/widekick/gym-vendored{,-fresh}.jsonl` (seeds 0–11 and 100–111, brain
+files identical by sha); its warm-started box pair (12b) is read beside.
+
+**Weight 4 is too weak.** The left foot at 4.0 did not turn less on the
+grid at all (|turn| 120 / 153 / 104° against the vendored 129 / 111 / 110°)
+while its coverage rose from 58–60 % to 76–89 % — it pays the whole fine
+and keeps the pirouette that reaches the box. In play the pair at 4.0 read
+left −52°, right +28° (7 % and 34 % of swings under 20°), and on the gym it
+is a **null**: 18 → 14 % (MDE 5, p 0.155, better 9 / 12) and on the fresh
+block 15 → 14 % (p 0.60, 7 / 12). 12ah's −7 pp was the right foot alone.
+
+**Weight 12 holds.** Bench, both feet: 0 % whiff from every gaze pose,
+1.03–1.36 m, exits within −1 … −23° with sd 3–11 (tight where the vendored
+scatter 60°), falls 1 / 60 right and 0 / 60 left. Grid: |turn| 13 / 21 / 14°
+right and 7 / 9 / 5° left (vendored 90 / 60 / 64° and 129 / 111 / 110°),
+coverage 69–77 % right (vendored 73–80 %) and 79–82 % left (vendored
+58–60 %), falls 6–7 and 5–8 per 168 (vendored 2–5 and 0–1).
+
+**In play** (`probe_kick_recover`, 6 seeds × 50 episodes, the same seeds
+for every arm):
+
+| | vendored | pair at 4.0 | **pair at 12.0** |
+|---|---|---|---|
+| right foot: turn median (q1 / q3), swings | +117° (+103 / +127), 102 | +28° (+16 / +40), 29 | **−1° (−5 / +4), 57** |
+| left foot: turn median (q1 / q3), swings | −97° (−107 / −80), 104 | −52° (−60 / −37), 151 | **−7° (−14 / +3), 67** |
+| swings under 20°, right / left | 0 % / 0 % | 34 % / 7 % | **84 % / 78 %** |
+| carried forward, right / left | 0.12 / 0.07 m | 0.11 / 0.09 | 0.05 / 0.07 |
+| whiffed ball seen again ≤ 2 s, right / left | 27 % / 75 % | 25 % / 4 % | 88 % / 0 % |
+| ended further from the ball, right / left | 98 % / 94 % | 79 % / 94 % | 79 % / 85 % |
+
+The foot counts move with the exit sidecars (0.0 / 0.26 vendored, −0.13 /
+0.003 at 4.0, −0.036 / −0.225 at 12.0): `kickselect` reads them, and the
+4.0 pair's 151 / 29 split is that, not the kicks. **12ab's registered turn
+bar is met at 12 on both feet.**
+
+**Gym** (paired on the other session's seeds and script):
+
+| whiff | vendored | pair 4.0 | **pair 12.0** | warm box pair (12b) |
+|---|---|---|---|---|
+| seeds 0–11 (388 swings base) | 18 % | 14 % null | **9 % (−9 pp, MDE 5, p 0.001, 10 / 12)** | 4 % (12 / 12) |
+| seeds 100–111 (395) | 15 % | 14 % null | **9 % (−6 pp, p 0.009, 10 / 12)** | 4 % (12 / 12) |
+| connected kicks, both blocks | 319 / 335 | 342 / 329 | 337 / 358 | 377 / 372 |
+
+So the anchor at 12 is a whiff **effect** on both blocks, and the box pair
+is a larger one; the two are different levers (the box covers where the ball
+is, the anchor stops the body leaving) and the combined arm — the box
+recipe with `face_line` at 12 — is the other session's, on the farm, under
+12b.
+
+**What is open.** (1) Falls: the grid says 5–8 per 168 against the vendored
+0–5 for both feet, at 2 seeds a cell; the bench says 0–1 in 60; the probe
+has no fall column. (2) The blind radius after a whiff: a body that no
+longer turns leaves a whiffed ball straight ahead and under the chin, and
+the left foot is seen again within 2 s on **0 %** of whiffs (vendored 75 %,
+whose pirouette put the ball where the sweep found it); the right reads
+88 %. That is 12k's blind radius meeting a kick that finally stays put, and
+the fix is the look's pitch, not the kick. (3) One training seed per arm.
+(4) **The 2v2 ledger is the ship gate** and is running as this is written
+(`eval-pitch --seeds 24 --seconds 300 --per-side 2 --ball-out-s 5`, vendored
+pair against the 12.0 pair, same copy); until it reads, nothing is vendored
+and `policies/kick/` is unchanged.
+
+**12ai, the ledger (2026-09-10, 08:16).** `eval-pitch --seeds 24 --seconds 300
+--per-side 2 --ball-out-s 5 --jobs 4`, vendored pair against the weight-12
+pair, both arms on the same frozen copy with both feet pinned and printed
+(exits 0.26 / 0.0 against −0.225 / −0.036), `scripts/compare_pitch.py`:
+
+| | vendored | pair at 12 | Δ (±MDE) | verdict |
+|---|---|---|---|---|
+| possession s/min | 40.22 | 39.18 | −1.04 (1.21, p 0.09) | null |
+| ballAdvance m/min | 1.091 | 1.177 | +0.085 (0.156) | null |
+| spread / crowd / depth | 0.564 / 0.292 / 1.304 | 0.572 / 0.312 / 1.328 | | null / null / null |
+| goals (events) | 24 | 24 | | NO RESULT (968 seeds) |
+| falls (events) | 4 | 9 | | NO RESULT (5331 seeds) |
+| own goals (events) | 0 | 6 | | unquotable (347 seeds, power table) |
+| kicks (events) | 112 | 147 | +31 % | |
+| back-kicks | 23 / 112 = 21 % | 35 / 147 = 24 % | p 0.53 | |
+
+**Flat on everything the battery can resolve**, with a third more kicks —
+the same shape 12ag's head memory and item 7's local kicks read. The two
+event counts that moved both point the way the grid's falls pointed: falls
+4 → 9 (spread over 8 seeds, none clustered) and own goals 0 → 6 — all six
+scored BY graphite, over six seeds, with both teams on the same kicks; the
+pair's exits are both to the same side (−0.225 / −0.036 against the
+vendored's 0.26 / 0.0), which is the one asymmetry between the sides worth a
+look before believing it. Neither count is a claim at 24 seeds (12ag saw 9 →
+0 → 4 own goals across arms on this pitch), but two weak signals in the same
+direction are why **the pair does not vendor on this ledger**. What would
+settle it is a per-event fall instrument: `kick_gym` rows carry no fall
+column (checked: keys are the funnel's), and the grid's 5–8 against 0–5 per
+168 is two seeds a cell. Add `fell` to the gym's row and read ~770 swings an
+arm before the next ship decision; the other session's combined pair (12b,
+continued: same whiff, turn +8 / +15°) should sit on the same ledger then.
+
+**12ai, the fall instrument (2026-09-10, 08:30).** The other session added
+`fell` and `falls_before` to every `kick_gym` swing row (the kicking duck's
+`WorldDuck.falls` rising between the swing and the end of the 2 s carry
+window) and a fall column with a two-proportion test to `compare_gym.py`,
+then ran the discovery block (seeds 0–11 × 40, all three pairs pinned;
+`runs/widekick/gym-falls-{vendored,w12pair,combined}.jsonl`). Falls inside
+the 2 s after the swing: **vendored 2 / 388 (0.5 %), narrow w12 pair
+0 / 371 (0.0 %, −0.5 pp, MDE 0.7, p 0.17), combined box pair 7 / 396
+(1.8 %, +1.3 pp, MDE 1.5, p 0.10)**; whiff reproduced to the swing
+(18 / 9 / 9 %, the gym is deterministic). So the per-swing instrument does
+not see the ledger's 4 → 9 in the narrow pair — zero falls in 371 swings —
+and those ledger falls are walking or contest falls or noise, not the
+kick's; the grid's 5–8 per 168 was the 1.2 s window on placements the brain
+never lines up (the far rows, 2 seeds a cell). The combined pair is the one
+with a fall trend. ~1300 swings an arm would resolve 1 pp.
+
+**Where 12ab ends (2026-09-10).** Every registered number for the narrow
+weight-12 pair is now read: turn under 20° in play on both feet (−1° / −7°
+median, 84 % / 78 % of swings); bench whiff 0 % from every gaze pose; gym
+whiff an effect on two seed blocks (18 → 9 %, 15 → 9 %); per-swing falls
+0 / 371; the 2v2 ledger flat on everything it resolves. What remains is a
+ship decision, not a measurement: vendoring `runs/kick-{left,right}-
+faceline-w12/policy.onnx` + `policy.json` into `policies/kick/` changes the
+lab's default kicks and every baseline built on them, so it is Jonathan's
+call; until then `policies/kick/` is the 2026-09-07 pair. Caveats that
+survive: one training seed per arm; the ledger's own goals 0 → 6 (all
+graphite) unresolved at 24 seeds; the un-turned left foot leaves a whiffed
+ball in the blind radius (12k's, not the kick's).

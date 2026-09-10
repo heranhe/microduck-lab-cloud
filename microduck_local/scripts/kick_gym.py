@@ -325,6 +325,12 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                     "neck_pitch": float(joints[C.JOINT_NAMES.index("neck_pitch")])
                     if "neck_pitch" in C.JOINT_NAMES else None,
                     "ball0": (bx, by),
+                    # THE FALL COLUMN (2026-09-10, after 12ai's ledger read falls
+                    # 4 -> 9 on 24 seeds and could not resolve them): the kicking
+                    # duck's arena fall counter at the swing, so `fell` below is
+                    # "went down between the swing and the end of the carry
+                    # window" - the swing's own fall, not the approach's.
+                    "falls_before": int(d.falls),
                     "outs_during_approach": w.ball_outs - outs0,
                     "plan_age": round(w.t - getattr(brain, "t_state", w.t), 2),
                     # The quantity `_too_far` gates on, recorded at the swing:
@@ -387,7 +393,7 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
         bx1, by1 = float(w.data.qpos[q]), float(w.data.qpos[q + 1])
         travel = math.dist(swing["ball0"], (bx1, by1))
         swing.update(swing=True, travel=travel, whiff=travel < WHIFF_M, seed=seed,
-                     arm=knobs, live=live)
+                     arm=knobs, live=live, fell=int(d.falls) > swing["falls_before"])
         swing.pop("ball0")
         rows.append(swing)
     return rows
@@ -422,6 +428,10 @@ def report(rows: list[dict]) -> None:
     print(f"\noverall whiff {100 * np.mean([r['whiff'] for r in sw]):.0f}%  "
           f"| median ahead {np.median([r['ahead'] for r in sw]):.3f} m  "
           f"side {np.median([abs(r['side']) for r in sw]):.3f} m")
+    fk = [r for r in sw if r.get("fell") is not None]      # rows written before the column exists carry no verdict
+    if fk:
+        print(f"fell inside the {SETTLE_S:g} s after the swing: {sum(r['fell'] for r in fk)} of {len(fk)} "
+              f"({100 * np.mean([r['fell'] for r in fk]):.1f}%)")
     hit = [r for r in sw if not r["whiff"]]
     miss = [r for r in sw if r["whiff"]]
 
@@ -522,9 +532,16 @@ def compare(arms: "dict[str, list[dict]]") -> None:
     base = labels[0]
     b_sw = [r for r in arms[base] if r.get("swing")]
     print("\n" + "-" * 78)
-    print(f"{'arm':<24}{'swings':>8}{'whiff':>8}{'vs base':>9}{'±MDE':>7}{'p':>8}  verdict")
+    print(f"{'arm':<24}{'swings':>8}{'whiff':>8}{'vs base':>9}{'±MDE':>7}{'p':>8}  verdict"
+          f"{'':4}{'fell':>6}{'p':>7}")
     n1, x1 = len(b_sw), sum(r["whiff"] for r in b_sw)
-    print(f"{base + ' (base)':<24}{n1:>8}{100 * x1 / max(n1, 1):>7.0f}%{'—':>9}{'—':>7}{'—':>8}")
+
+    def falls(rs):
+        fk = [r for r in rs if r.get("fell") is not None]
+        return (sum(r["fell"] for r in fk), len(fk)) if fk else (None, 0)
+    f1, m1 = falls(b_sw)
+    print(f"{base + ' (base)':<24}{n1:>8}{100 * x1 / max(n1, 1):>7.0f}%{'—':>9}{'—':>7}{'—':>8}"
+          f"{'':13}{(f'{100 * f1 / m1:.1f}%' if m1 else '—'):>6}{'—':>7}")
     thin, broken = [], []
     for lab in labels[1:]:
         sw = [r for r in arms[lab] if r.get("swing")]
@@ -539,8 +556,11 @@ def compare(arms: "dict[str, list[dict]]") -> None:
             v = verdict_prop(pv, mde)
             if v == "NO RESULT":
                 thin.append((lab, swings_for(mde, n1, n2)))
+        f2, m2 = falls(sw)
+        fp = two_proportions(f1, m1, f2, m2)[1] if (m1 and m2) else None
         print(f"{lab:<24}{n2:>8}{100 * x2 / n2:>7.0f}%{100 * d:>+8.0f}%"
-              f"{100 * mde:>6.0f}%{pv:>8.3f}  {v}")
+              f"{100 * mde:>6.0f}%{pv:>8.3f}  {v:<11}"
+              f"{(f'{100 * f2 / m2:.1f}%' if m2 else '—'):>6}{(f'{fp:.3f}' if fp is not None else '—'):>7}")
     for lab in broken:
         print(f"\n!! {lab} reproduced the baseline EPISODE FOR EPISODE. A knob that changes"
               "\n   nothing is BROKEN, not null (playbook rule 0): it never reached the code"

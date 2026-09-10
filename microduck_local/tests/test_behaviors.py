@@ -1024,7 +1024,8 @@ def test_only_the_one_sided_recipes_opt_out_of_the_mirror_prior():
     # find_ball: from a symmetric start (ball unseen, memory empty) a
     # mirror-consistent policy must output a zero yaw sweep — it cannot pick
     # a side to look first, so the exported mean would sit and stare.
-    assert asymmetric == {"one_leg", "imitate", "find_ball", "kick_left", "kick_right"}
+    assert asymmetric == {"one_leg", "imitate", "find_ball", "kick_left", "kick_right",
+                          "kick_left_wide", "kick_right_wide"}   # the box kicks name a foot too (12b)
     # spin stays mirror-safe: the direction COMMAND rides the wz slot, and
     # the mirror map negates that slot and the gyro together, so a mirrored
     # episode is just the opposite commanded direction. The rest are sagittal

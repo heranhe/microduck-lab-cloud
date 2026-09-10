@@ -105,7 +105,7 @@ def test_the_local_kicks_are_the_default_and_their_exits_reach_the_brain(monkeyp
     w = World(sc, seed=1)
     kw = brain_kwargs(sc.ducks[0], w, {})
     left = json.loads(World.skill_path("kick_left").with_suffix(".json").read_text())
-    assert kw["p"].kick_exit_right == side["exit_rad"] and kw["p"].kick_exit_left == left["exit_rad"] == 0.26   # measured in play 2026-09-08
+    assert kw["p"].kick_exit_right == side["exit_rad"] == -0.036 and kw["p"].kick_exit_left == left["exit_rad"] == -0.225   # the weight-12 pair, bench 2026-09-10
     assert w.start_skill(w.ducks[sc.ducks[0].id], "kick_right")                     # and it loads
     monkeypatch.setenv("MICRODUCK_CHASE", "kick_exit_left=0.5")                     # the command line is the caller's
     assert Chase(**brain_kwargs(sc.ducks[0], w, {})).p.kick_exit_left == 0.5    # named on the command line: the brain reads it itself
@@ -147,3 +147,43 @@ def test_a_sidecar_without_an_exit_yet_reads_as_no_exits_and_a_bad_override_rais
     from microduck_local.world import make_pitch
     with pytest.raises(FileNotFoundError, match="MICRODUCK_SKILL_KICK_LEFT"):
         World(make_pitch(), seed=1)                                # a typo here disabled the kick silently before
+
+
+def test_the_wide_kick_spawns_the_ball_across_the_box_and_a_stage_narrows_it():
+    """Roadmap 12b + 12ab: the same pay as the point-strike recipe plus the
+    heading anchor, the ball anywhere in the box play produces, and a stage's
+    knobs narrow the box per instance (the lab previews the active stage)."""
+    from microduck_local.behaviors.core import _face_home_pen
+    from microduck_local.behaviors.kick import KICK_BOX_AHEAD, KICK_BOX_SIDE, KICK_BOX_STAGE1
+
+    def spawns(env, sgn, n=40):
+        aheads, sides = [], []
+        for k in range(n):
+            env.reset(seed=30 + k)
+            _, qadr, _ = _kick_ball_ids(env)
+            aheads.append(float(env.data.qpos[qadr] - env.data.qpos[0]))
+            sides.append(sgn * float(env.data.qpos[qadr + 1] - env.data.qpos[1]))
+            assert _face_home_pen(env) == 0.0                       # the line is the one it began on
+        return aheads, sides
+
+    for side, sgn in (("right", -1.0), ("left", 1.0)):
+        b, narrow = BEHAVIORS[f"kick_{side}_wide"], BEHAVIORS[f"kick_{side}"]
+        assert b.scene == "ball" and b.reset_fn.__name__ == f"_kick_reset_{side}_wide"
+        assert [(t.key, t.weight) for t in b.terms[:-1]] == [(t.key, t.weight) for t in narrow.terms]   # the same pay...
+        assert b.terms[-1].key == "face_line" and b.terms[-1].is_penalty and b.terms[-1].fn is _face_home_pen   # ...plus the line
+        assert len(b.curriculum) == 2
+        for st in b.curriculum:                                                     # spawn knobs only, never the pay
+            assert set(st.env) == {"MICRODUCK_KICK_BOX_AHEAD", "MICRODUCK_KICK_BOX_SIDE"}
+        env = BehaviorEnv(f"kick_{side}_wide", seed=7, max_episode_s=2.0, domain_rand=False, random_yaw=False)
+        aheads, sides = spawns(env, sgn)
+        assert KICK_BOX_AHEAD[0] - 1e-6 <= min(aheads) and max(aheads) <= KICK_BOX_AHEAD[1] + 1e-6
+        assert KICK_BOX_SIDE[0] - 1e-6 <= min(sides) and max(sides) <= KICK_BOX_SIDE[1] + 1e-6
+        assert max(aheads) - min(aheads) > 0.08 and max(sides) - min(sides) > 0.08      # really spread, not +-1.5 cm
+        env = BehaviorEnv(f"kick_{side}_wide", seed=7, max_episode_s=2.0, domain_rand=False, random_yaw=False,
+                          spawn_overrides={"MICRODUCK_KICK_BOX_AHEAD": KICK_BOX_STAGE1[0],
+                                           "MICRODUCK_KICK_BOX_SIDE": KICK_BOX_STAGE1[1]})
+        aheads, sides = spawns(env, sgn)
+        assert 0.06 - 1e-6 <= min(aheads) and max(aheads) <= 0.12 + 1e-6
+        assert 0.03 - 1e-6 <= min(sides) and max(sides) <= 0.09 + 1e-6
+        assert max(aheads) - min(aheads) > 0.03 and max(sides) - min(sides) > 0.03
+
