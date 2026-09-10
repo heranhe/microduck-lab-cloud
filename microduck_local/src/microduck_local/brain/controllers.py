@@ -1706,23 +1706,53 @@ class ChaseParams:
     # the gait holds the head 0.08 rad higher than the standing 0.197
     # (DetectionFrame's note; measured in play, camera pitch 5.7 deg at the
     # median loss).
-    track_pitch: bool = False
+    #
+    # MEASURED, AND IT SHIPS ON WITH `look_hold_s` (roadmap 12ae). Alone,
+    # neither moves anything (discovery block, 12 seeds: view 44.0% against
+    # 43.2%, median loss 1.38 against 1.37 s); together they do, on the
+    # discovery block (median loss 1.37 -> 1.08 s, losses over 2 s 41 -> 35%)
+    # and on a FRESH block of 24 seeds x 180 s (median 1.47 -> 1.14 s,
+    # -0.34 +- 0.27, p = 0.018, better on 17 of 24; over 2 s 43 -> 34%;
+    # falls 3 v 1 in 24 runs; kicks flat; possession +1.0 s/min, p = 0.08).
+    # It does NOT stop the ball being lost - loss EVENTS go UP 16% - it makes
+    # each loss shorter: the head still cannot see a ball under the chin
+    # (0.21 m slant, 70 deg down, the line-up's own doing) and cannot pitch
+    # while the body turns, but a head held PITCHED AND YAWED at the
+    # remembered ball for 2.5 s instead of 1.0 s has it back in the frame the
+    # moment the body moves, where a level one looks over it. Ball-in-view
+    # +2.5 pp is unresolved at 24 seeds (MDE 4 pp). `track_pitch_max` 0.45
+    # (0.30 measured the same on the discovery block and was not carried to
+    # the fresh one). The settle is excluded from the pitch (`gaze_still`
+    # and `settle_head_level` own the swing's run-up; tests/test_team.py)
+    # after the batteries ran; the confirmation run of the shipping code is
+    # in the roadmap item.
+    track_pitch: bool = True
     track_pitch_margin: float = 0.15   # rad inside the bottom edge the predicted ball is kept
-    track_pitch_max: float = 0.30      # the deepest command the tracking pitch asks for
+    track_pitch_max: float = 0.45      # the deepest command the tracking pitch asks for
     track_pitch_turn: float = 0.0      # ...during a turn in place (bench: 0.10 is free, 0.20 stalls the turn)
     cam_level_walk: float = 0.117      # the camera's depression while WALKING, rad (standing: `cam_level`)
     # ...and the same head in TIME. `look_hold_s`: the yaw law stops following
     # the track at `predict_s` (1.0 s) while the tracker keeps it to `coast_s`
     # (2.5 s), so for 1.5 s the brain believes in a bearing the head is not
     # pointed at - 15.8% of all blind frames in the audit above sit in that
-    # gap. 0: the shipped `predict_s` horizon; else the head follows the
-    # coasting track (its bearing turns with the body, by odometry) this long
-    # after the last hit. `head_lead_s`: the head servo is a measured 7 ticks
-    # (140 ms) behind its command at gain 1.04 (the audit's cross-correlation
-    # over every duck), so aim it at the ball predicted that far ahead. 0:
-    # off, the shipped law.
-    look_hold_s: float = 0.0
+    # gap. 0: the `predict_s` horizon; else the head follows the coasting
+    # track (its bearing turns with the body, by odometry) this long after the
+    # last hit. Ships at 2.5 = `coast_s`, with `track_pitch` (above: alone it
+    # is a null, view 40.6% against 43.2%). `head_lead_s`: the head servo is a
+    # measured 7 ticks (140 ms) behind its command at gain 1.04 (the audit's
+    # cross-correlation over every duck), so aim it at the ball predicted that
+    # far ahead. MEASURED OFF: alone view 40.0% against 43.2% (null, MDE 4
+    # pp) and every ledger sign the wrong way; in the bundle it added nothing
+    # the fresh block could see (median loss 1.10 with it, 1.14 without, on
+    # the same seeds). 0: off.
+    look_hold_s: float = 2.5
     head_lead_s: float = 0.0
+    # `track_pitch_turn` = 0.15 (the benched-free head pitch during a turn in
+    # place) measured on the fresh block beside the bundle: median loss 1.14
+    # (the bundle 1.10), kicks 2.79 against 1.79 (+1.0 +- 0.9, p = 0.034, an
+    # instrument that needs ~190 seeds for a 10% change), falls 1 v 3. Not
+    # distinguishable from the bundle on anything the block can resolve;
+    # recorded as the next arm, not shipped.
     search_dip_every: float = 1.5
     search_dip_s: float = 0.6
     dip_range: float = 0.22
@@ -3300,13 +3330,15 @@ class Chase:
             # head on the line whenever something is inside `yaw_clear`.
             yaw_cmd = float(np.clip(p.head_yaw_gain * look_at, -p.head_yaw_max, p.head_yaw_max))
             pitch = 0.0
-            if p.track_pitch and look_rng is not None and head[1] == 0.0 \
+            if p.track_pitch and look_rng is not None and head[1] == 0.0 and self.state != "settle" \
                     and (not turning or p.track_pitch_turn > 0.0):
                 # ...and the PITCH that keeps that ball inside the frame, only
                 # where no gaze law has already put the head somewhere (a
                 # line-up gaze centres the ball, deeper; the look and the
-                # search dip aim at their own ranges), and never more than a
-                # turn in place can take (`track_pitch_turn`).
+                # search dip aim at their own ranges), never in the settle
+                # (the swing's run-up belongs to `gaze_still` and
+                # `settle_head_level`, both measured against the kick), and
+                # never more than a turn in place can take (`track_pitch_turn`).
                 cam_z = senses.det.cam_z if senses.det is not None and senses.det.cam_z > 0.0 else p.cam_z
                 pitch = self._track_pitch(look_rng, cam_z, walking=vx > TURN_KICK)
                 if turning:

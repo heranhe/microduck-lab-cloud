@@ -382,17 +382,20 @@ def report(s: dict) -> None:
 
 def compare(base: dict, arm: dict, rows_a: list[dict], rows_b: list[dict]) -> None:
     print(f"\n--- {arm['label']} vs {base['label']} (paired on {min(base['seeds'], arm['seeds'])} seeds) ---")
+    # (name, baseline, arm, lower is better): "better on" counts the seeds the
+    # arm IMPROVED, whichever way the metric runs.
     rows = [
-        ("ball in view (pp)", 100 * base["viewSeeds"], 100 * arm["viewSeeds"]),
-        ("median loss (s, per seed)", base["lossSeedMed"], arm["lossSeedMed"]),
-        ("kicks / run", base["kicks"].astype(float), arm["kicks"].astype(float)),
-        ("falls / run", base["falls"].astype(float), arm["falls"].astype(float)),
-        ("goals / run", base["goals"].astype(float), arm["goals"].astype(float)),
-        ("possession s/min", base["possession"], arm["possession"]),
+        ("ball in view (pp)", 100 * base["viewSeeds"], 100 * arm["viewSeeds"], False),
+        ("median loss (s, per seed)", base["lossSeedMed"], arm["lossSeedMed"], True),
+        ("kicks / run", base["kicks"].astype(float), arm["kicks"].astype(float), False),
+        ("falls / run", base["falls"].astype(float), arm["falls"].astype(float), True),
+        ("goals / run", base["goals"].astype(float), arm["goals"].astype(float), False),
+        ("possession s/min", base["possession"], arm["possession"], False),
     ]
-    for name, a, b in rows:
+    for name, a, b, lower in rows:
         m = ~(np.isnan(a) | np.isnan(b))
-        d, half, p, won = paired(a[m], b[m])
+        d, half, p, _ = paired(a[m], b[m])
+        won = int(((b[m] < a[m]) if lower else (b[m] > a[m])).sum())
         verdict = "effect" if half < abs(d) else ("null" if half <= 0.15 * abs(np.nanmean(a)) + 1e-9 else "NO RESULT")
         print(f"  {name:<28} {np.nanmean(a):>8.2f} -> {np.nanmean(b):>8.2f}   diff {d:+.3f} ± {half:.3f}  "
               f"p={p:.3f}  better on {won}/{int(m.sum())}  [{verdict}]")
