@@ -28,7 +28,7 @@ def run(seed, episodes, knobs, margin):
         for b in brains.values(): b.reset()
         t0 = w.t; states = Counter(); timeouts = 0; prev_state = brain.state; prev_t_state = brain.t_state; swung = False; prev_skill = None
         pushes0, declines0, dropped0, corners0 = brain.pushes, brain.declines, brain.unreach_dropped, brain.unreach_corners
-        n_lineups = 0; last_spot = None; min_dist = 9.0; tos = []
+        n_lineups = 0; last_spot = None; min_dist = 9.0; tos = []; ends = Counter()
         while w.t - t0 < EPISODE_S:
             od = w.odom(d) or (0.0, 0.0, 0.0)
             if brain.spot is not None:
@@ -40,6 +40,8 @@ def run(seed, episodes, knobs, margin):
             ahead = None if fr is None else float(tof_clearance_bearings(fr)[0])
             _drive(w, brains); w.step()
             states[brain.state] += 0.02
+            if prev_state in ("lineup", "settle") and brain.state not in ("lineup", "settle"):
+                ends[f"{prev_state}->{brain.state}"] += 1        # how each line-up ENDS
             if prev_state == "lineup" and brain.state == "search" and (w.t - prev_t_state) > brain.p.lineup_s - 0.05:
                 timeouts += 1
                 if last_spot is not None:
@@ -57,7 +59,7 @@ def run(seed, episodes, knobs, margin):
             if d.skill is not None and prev_skill is None and str(d.skill).startswith("kick"):
                 swung = True; break
             prev_skill = d.skill
-        out.append({"timeout_rows": tos, "swung": swung, "states": dict(states), "timeouts": timeouts, "lineups": n_lineups,
+        out.append({"ends": dict(ends), "timeout_rows": tos, "swung": swung, "states": dict(states), "timeouts": timeouts, "lineups": n_lineups,
                     "pushes": brain.pushes - pushes0, "declines": brain.declines - declines0,
                     "dropped": brain.unreach_dropped - dropped0, "corners": brain.unreach_corners - corners0,
                     "final": brain.state})
@@ -74,6 +76,9 @@ for spec in (a.arm or ["base="]):
     print(f"\n== {label} ({knobs or 'shipped'}): {n} episodes, swung {sum(r['swung'] for r in rows)}, pushes {sum(r['pushes'] for r in rows)}, declines {sum(r['declines'] for r in rows)}, lineups started {sum(r['lineups'] for r in rows)}, lineup timeouts {sum(r['timeouts'] for r in rows)}, fan drops {sum(r['dropped'] for r in rows)}, corner fans {sum(r['corners'] for r in rows)}")
     print("   share of time by state:", {k: f"{v/secs:.0%}" for k, v in tot.most_common(8)})
     print("   final state:", dict(Counter(r["final"] for r in rows).most_common(6)))
+    ends = Counter()
+    for r in rows: ends.update(r.get("ends", {}))
+    print("   how line-ups end:", dict(ends.most_common(8)))
     tos = [x for r in rows for x in r["timeout_rows"]]
     if tos:
         import statistics as _st

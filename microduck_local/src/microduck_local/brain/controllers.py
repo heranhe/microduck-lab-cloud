@@ -529,6 +529,40 @@ class ChaseParams:
     lost_s: float = 2.0
     tof_stop: float = 0.3          # walls and ducks (body-height ToF returns); the ball and the floor do not count
     side_stop: float = 0.22        # a wall this close in the side columns: no turn in place toward it
+    # THE LINE-UP'S OWN STOP (roadmap 12am, built after 12al). `tof_stop`
+    # halts every walk 0.30 m from anything body-height ahead, and that is
+    # what kills a line-up at the boards: the spot is body-reachable
+    # (`spot_reach` checked it, 0.13-0.20 m from the wall) but a servoed
+    # approach faces the wall until its last step, so the bumper fires
+    # ~0.3 m out and the duck stands 21 cm short of its spot until
+    # `lineup_s` (probe_board_states: 123 timeouts of 144 line-ups, 6 % ever
+    # within 5 cm of the spot). Here the spot geometry, not the bumper, is
+    # what keeps the body out of the wall: within `lineup_tof_within` of a
+    # kick spot the selector has passed as clear of every board by the body
+    # extent, the walk stops at `lineup_tof_stop` instead. 0 = off (the
+    # shipped bumper everywhere). Ducks are the risk - the ToF cannot tell
+    # a duck from a wall - which is why it only applies inside the window
+    # and why the 2v2 ledger's falls are its veto.
+    #
+    # SHIPS ON at 0.12 (roadmap 12am). Kick gym, the ball at a board, two
+    # seed blocks: swings 34 -> 66 and 38 -> 83, connected kicks 66 -> 122
+    # pooled (+85 %), falls 1 -> 2 and 0 -> 0; whiff there doubles, 8 ->
+    # 18 % pooled (each block unresolved), the swings it buys being worse
+    # swings than the few the bumper let through, and the connected travel
+    # at the boards drops 1.15 -> 0.79 m. Open play: whiff a null both
+    # blocks (8 -> 11, 11 -> 10 %), connected +5 %, falls 0 -> 1 and 1 -> 2
+    # in ~400 swings. Corners: nobody swings either way. 2v2 ledger (24 x
+    # 300 s): possession 40.0 -> 39.9 null, spread / crowd / depth null,
+    # goals 21 = 21, kicks 148 -> 169, falls 5 -> 3, own goals 4 = 4,
+    # back-kicks 19 -> 22 % (events, unresolved). At 0.18 half the gain
+    # (connected 66 -> 89) for the same whiff. What it does NOT fix: with
+    # the stop the duck reaches its spot (7 cm at the timeouts, 21 before)
+    # and still times out with a 66 deg heading error - at 5 cm it is
+    # outside `lineup_tol` 0.03, servos along the wall instead of turning,
+    # and the clock runs out. The square-up at a reached spot is the next
+    # lever (probe_board_states attributes every line-up's end).
+    lineup_tof_stop: float = 0.12
+    lineup_tof_within: float = 0.45
     # The shipped kicks (measured, `walker-facts`-style, on the walker): a
     # ball 0.08 m ahead of the trunk and 0.06 m to the kicking foot's side
     # flies 1.6 m; 0.10 m dead ahead barely moves; the other side, nothing.
@@ -2726,6 +2760,15 @@ class Chase:
                       by - p.kick_ahead * math.sin(h) + side * math.cos(h))
         return self.bounds[0] - abs(sx) >= margin and self.bounds[1] - abs(sy) >= margin
 
+    def _spot_body_clear(self, x: float, y: float) -> bool:
+        """Is a laid spot clear of every board by the walking body's extent
+        (`spot_reach`, or the measured 0.129 m when that is off)? What the
+        line-up's own stop (`lineup_tof_stop`) is conditioned on."""
+        if self.bounds is None:
+            return True
+        m = self.p.spot_reach if self.p.spot_reach > 0.0 else 0.129
+        return self.bounds[0] - abs(x) >= m and self.bounds[1] - abs(y) >= m
+
     def _clear_of_boards(self, x: float, y: float) -> bool:
         """Is a spot far enough off the boards to stand on? True off a pitch
         (`bounds` is None on every world that is not one) - the guard lives
@@ -3348,7 +3391,13 @@ class Chase:
                 wz = -1.0
             elif wz < 0 and right_near < p.side_stop and left_near > right_near:
                 wz = max_wz()
-        if ahead < p.tof_stop and vx > 0 and self.state != "push":
+        stop = p.tof_stop
+        if p.lineup_tof_stop > 0.0 and self.state in ("lineup", "settle") and self.spot is not None \
+                and self.spot[4] == "kick" and self.bounds is not None \
+                and math.hypot(self.spot[0] - odom[0], self.spot[1] - odom[1]) <= p.lineup_tof_within \
+                and self._spot_body_clear(self.spot[0], self.spot[1]):
+            stop = p.lineup_tof_stop                 # the spot keeps the body out of the wall (`lineup_tof_stop`)
+        if ahead < stop and vx > 0 and self.state != "push":
             # A wall or the other duck right there: no walking, no cold-turn
             # creep (measured: every remaining fall was a line-up walking
             # into a wall or a kicked turn creeping into one). Turning still

@@ -8602,9 +8602,78 @@ to the nearest board, swing or not) is the census; `scripts/
 probe_board_states.py` is the timeout trace. Counters on the brain:
 `unreach_dropped`, `unreach_corners`.
 
-**Next, if the boards are worth more touches:** a walker-reachability
+**Next, if the boards are worth more touches** — **BUILT AND SHIPPED ON (2026-09-10, 12am: `lineup_tof_stop`):** a walker-reachability
 predicate — the spot's gap to the wall against `tof_stop` along the approach
 heading — and an approach that runs along the wall in its last 0.3 m, which
 neither `_servo` nor the two-stage pre-spot does today. On the lab pitch the
 cove parks the ball 0.16–0.27 m off the wall line (item 14), so this is a
 flat-board problem more than a cove one.
+
+
+### 12am. The line-up's own stop: past the bumper the duck reaches its spot at the boards, board touches double, and the next wall is the square-up (2026-09-10)
+
+12al left the boards with a measured blocker: the spot is body-reachable
+and the walker never arrives, because `tof_stop` halts every walk 0.30 m
+from anything body-height ahead and a servoed approach faces the wall until
+its last step. Built as `ChaseParams.lineup_tof_stop` (m; 0 = off) with
+`lineup_tof_within` (0.45 m): inside that window of a KICK spot the selector
+has passed as clear of every board by the body extent (`_spot_body_clear`),
+the walk stops at the shorter distance instead. Only in `lineup` / `settle`,
+only near the spot, only for a kick spot, only when that spot is body-clear
+(`tests/test_lineup_tof_stop.py`); everywhere else the shipped bumper, to
+the bit. Ducks are the risk — the ToF cannot tell a duck from a wall — which
+is why the window, and why the 2v2 ledger's falls are the veto.
+
+**The gym** (480 episodes an arm; the base is the shipped brain, `spot_reach`
+on):
+
+| population | arm | swings | connected | whiff | fell | time to swing |
+|---|---|---|---|---|---|---|
+| at a board, seeds 0–11 | shipped | 34 | 30 | 12 % | 1 | 15.6 s |
+| | stop 0.12 | **66** | **47** | 29 % (n 66) | 2 | 11.8 s |
+| | stop 0.18 | 44 | 36 | 18 % | 0 | 12.8 s |
+| at a board, seeds 100–111 | shipped | 38 | 36 | 5 % | 0 | |
+| | stop 0.12 | **83** | **75** | 10 % (n 83) | 0 | |
+| | stop 0.18 | 59 | 53 | 10 % | 0 | |
+| open play, seeds 0–11 | shipped | 383 | 352 | 8 % | 0 | |
+| | stop 0.12 | 406 | 361 | 11 % (null, 6 / 12) | 1 | |
+| open play, seeds 100–111 | shipped | 391 | 348 | 11 % | 1 | |
+| | stop 0.12 | 412 | 372 | 10 % (null, 6 / 12) | 2 | |
+| in a corner | shipped / 0.12 | 0 / 0 | | | | |
+
+Board touches: connected kicks 66 → 122 pooled at 0.12 (+85 %), 66 → 89 at
+0.18; whiff there doubles, 8 → 18 % pooled (12 → 29 and 5 → 10, each block
+unresolved), so the swings this buys are worse swings than the few the
+bumper let through; the connected travel at the boards drops 1.15 → 0.79 m
+on the fresh block. Open play: whiff a null both blocks, connected +5 %
+pooled, falls 0 → 1 and 1 → 2 in ~400 swings. Corners: nobody swings, with
+or without.
+
+**What now ends a board line-up** (`scripts/probe_board_states.py`, which
+now attributes every line-up's end): with the stop at 0.12 the duck REACHES
+its spot — at the timeouts it stands 7 cm from it (shipped: 21 cm), within
+5 cm on 45 % (shipped 6 %) — and still times out with a **66° heading
+error**. The side stop (`side_stop` 0.22, no turn in place toward a wall in
+the side columns) is not it: at 0.10 the timeouts stay 69 of 98, at 0 they
+fall to 47 of 87 with the heading error still 38°. The endings of 87
+line-ups with both relaxed: 64 back to search (47 by the clock), 9 settles
+declined by the far gate (the ball pushed on during the oblique walk-in), 3
+swings, 2 blocked. The stuck-then-retreat rule does not fire in a line-up
+(it is avoid / blocked / yield only). What remains is the square-up itself:
+at 5 cm the duck is outside `lineup_tol` 0.03, so it servos at the spot
+along the wall instead of turning to the heading, creeps, and the clock
+runs out. **The next lever is the last three centimetres and the turn**, not
+the bumper — a line-up tolerance or a square-up rule for a spot the duck
+has already reached — and it is recorded here, not built.
+
+**2v2 ledger** (`eval-pitch --seeds 24 --seconds 300 --per-side 2
+--ball-out-s 5`, the shipped brain against the stop at 0.12,
+`compare_pitch.py`): possession 40.01 → 39.91 s/min (null, MDE 1.7),
+ballAdvance 1.19 → 1.26 (null, MDE 0.13), spread / crowd / depth null,
+goals 21 = 21, **kicks 148 → 169**, falls 5 → 3, own goals 4 = 4, back-kicks
+19 → 22 % (p 0.44 on the events). Flat on play, the veto clear.
+
+**SHIPS ON at 0.12**, with the cost on the knob: the swings it buys at the
+boards whiff twice as often as the few the bumper let through. ⚠ Every
+soccer number before this item is on a line-up the bumper stopped 0.3 m from
+every wall; `lineup_tof_stop=0` is that brain to the bit.
