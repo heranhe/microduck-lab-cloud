@@ -493,7 +493,18 @@ def _ball_sense(env, force: bool = False) -> None:
         env._ball_det_yaw, env._ball_det_pitch = yaw, pitch
         r = env._rng
         seen_det = seen
-        if seen and env.obs_noise and k["MICRODUCK_BALL_DROPOUT"] > 0.0 \
+        # NOT gated on env.obs_noise, unlike the jitter below, and the
+        # difference is the point: jitter IS observation noise (a randomizer,
+        # off in every measurement env), while dropout is a property of the
+        # DETECTOR — an NPU that misses a frame misses it whether or not the
+        # harness is randomizing anything. The knob defaults to 0.0, so it
+        # only ever fires when someone asked for it; behind `obs_noise` it
+        # ALSO silently did nothing in the two envs built to measure it
+        # (`eval-find-ball` and `render-rollout` both pin obs_noise off), so
+        # `--env MICRODUCK_BALL_DROPOUT=0.1` returned a battery byte-identical
+        # to the run without it. docs/roadmap.md section 2's dropout item was
+        # unrunnable as written until this line changed.
+        if seen and k["MICRODUCK_BALL_DROPOUT"] > 0.0 \
                 and r.uniform() < k["MICRODUCK_BALL_DROPOUT"]:
             seen_det = False
         if seen_det:

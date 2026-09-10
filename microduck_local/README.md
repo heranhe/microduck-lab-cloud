@@ -2702,6 +2702,20 @@ way this behavior should be — real camera, ball events on, 60 episodes:
 handoff**, head yaw 9.6° against the gate's 14°, **1 fall / 60** — and it holds
 up as the detector slows (90% handoff at 4 Hz).
 
+**That export is an xml-actuator brain, and one CPU minute of BAM fixes it**
+(2026-09-10, `docs/roadmap.md` section 2). Scored under the servo model the
+robot actually has (`MICRODUCK_ACTUATOR=bam uv run eval-find-ball …` — the
+battery does not pin the actuator, so this is a process-env knob), the shipped
+brain drops to **65% in frame / 75% handoff / 13 falls per 60**. A **1M-step
+fine-tune under BAM** (`teach.sh "find the ball" --from teach-find_ball-f31a4f
+--steps 1000000`, ~80 s) restores it to **74% / 98% / 1** — better under BAM
+than the shipped export ever was under xml. The same +1M under xml buys none of
+it, so this is the actuator, not the extra steps. Two knobs measured alongside
+it: a 10% detector dropout costs the BAM brain **one point** of in-frame share
+with no retraining (training on it is worse), and running the daemon's sweep
+clock at **2.5 s instead of 4.0** — no retrain, no re-export — cuts the
+wrong-side time-to-first-sight p90 from ~2.8 s to ~1.8 s on two seeds.
+
 Three separate things got it there, and conflating them would credit the wrong
 one. Most of the original gap was **under-training** — the shipped cloud export
 was not a converged instance of its own recipe, and retraining the *unchanged*

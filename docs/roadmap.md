@@ -345,9 +345,47 @@ Also still open, and probably the same root cause:
       found stays 60% and the falls go to **zero**. So most of what stage 5
       looked like it bought (and cost) was under-training. Worth running as a
       clean 0-vs-1.0 A/B on the Mac chain, where it is 14 minutes.
-- [ ] **If falls persist:** drop the weight to 0.5 before adding anything new.
-      A recipe that needs a fourth term to survive its third is usually
-      mispriced, not underspecified.
+
+      → **RUN (2026-09-10). The term buys the SEARCH and costs the AIM, and it
+      costs no falls at all — so the premise was wrong in both directions.**
+      Two 2M-step fine-tunes of `teach-find_ball-f31a4f`, same seed, same warm
+      start, under BAM, differing in one weight (`/teach` with
+      `{"weights": {"turn_to_belief": …}}`): `runs/teach-find_ball-9853f3`
+      (1.0, the recipe) and `runs/teach-find_ball-e8cc70` (0.0). 60 episodes,
+      `--events 0.33`, battery under BAM:
+
+      | | **turn 1.0** | **turn 0.0** |
+      |---|---:|---:|
+      | found | 100% | 100% |
+      | back-bucket t_first med | **0.48 s** | 1.51 s |
+      | worst t_first | **3.12 s** | 6.44 s |
+      | in frame | **75%** | 71% |
+      | centred | 66% | 64% |
+      | head yaw \| centred | 9.5° | **7.2°** |
+      | handoff | 93% | **98%** |
+      | **falls / 60** | **0** | **0** |
+
+      Events off, same order: back t_first 0.48 / 1.42 s, worst 2.96 / 5.78 s,
+      head yaw 9.6 / **5.1°**, handoff 88 / **100%**, falls **2 / 0**.
+
+      → **keep it at 1.0.** The term is doing exactly the job it was written
+      for and nothing else: turning off the pay **triples the back bucket's
+      time to first sight** (0.48 → 1.51 s) and **doubles the worst case**
+      (3.12 → 6.44 s), because a duck that is not paid to turn toward where
+      the ball went waits for the sweep to bring it round. It buys that with
+      ~2° of head yaw and ~5 points of handoff — a real trade, and the search
+      side of it is much the larger number.
+
+      **It is not the falls.** Both arms fall **zero** times in sixty with
+      events on. The one column where the term looks costly (2 falls against 0
+      with events off) is two episodes. And the wrong-side tail is untouched by
+      it — blind, balls outside the initial view, the RIGHT-side mean is
+      1.73 s at weight 1.0 and 1.80 s at 0.0, p90 2.50 / 2.47 — which places
+      that problem squarely on the sweep period (section 3), not on this term.
+- [x] **If falls persist: they do not.** Both arms of the A/B above sit at
+      **0 falls / 60** with events on, at 2M steps under BAM, so there is
+      nothing for a 0.5 weight to fix. The falls this line was written about
+      were under-training and the xml/BAM gap (section 2), in that order.
 
 ### 2. Sim2real realism (cheap, run each as a 1M-step fine-tune)
 
@@ -355,14 +393,101 @@ The whole chain trained under `actuator="xml"` with no domain randomization —
 a prototype, not a robot policy. These are the knobs that decide whether the
 behavior survives contact with reality.
 
-- [ ] **BAM servos.** `MICRODUCK_ACTUATOR=bam` fine-tune.
-      → **decide on:** side-bucket median time-to-first-sight stays under 1 s.
-      BAM's real current limit slows head yaw, and head yaw *is* the search.
-- [ ] **Detector dropout.** `MICRODUCK_BALL_DROPOUT=0.1` fine-tune, then run
-      the battery with dropout still on.
-      → **decide on:** in-frame share drops by no more than a few points. The
-      real NPU detector will miss frames; the brain should not lose the ball
-      when it does.
+**Status after 2026-09-10: all three are measured.** The actuator was the one
+that mattered and it is one CPU minute to fix; the detector knobs (dropout,
+rate, FOV) all came back "the brain already tolerates it". Domain
+randomization itself is still untouched — nothing below turns `domain_rand`
+on, so that is what is left of this section.
+
+- [x] **BAM servos — MET, and the item's own worry was the wrong one
+      (2026-09-10).** `MICRODUCK_ACTUATOR=bam`, 1M-step fine-tune of the
+      shipped chain, launched through the lab's `/teach` (the farm already
+      runs with `MICRODUCK_ACTUATOR=bam`, so the trainer inherits it):
+      `teach.sh "find the ball" --from teach-find_ball-f31a4f --steps 1000000`
+      → `runs/teach-find_ball-22f3df`.
+
+      → **decide-on MET with room:** side-bucket median time-to-first-sight
+      **0.46 s** with events on, **0.52 s** with them off, against the 1 s bar.
+      The predicted mechanism does not appear — BAM's current limit does not
+      measurably slow the sweep. What BAM *does* cost is **falls and aim**, and
+      the fine-tune buys all of it back. 60 episodes each, `--events 0.33`,
+      **battery run under BAM** (`MICRODUCK_ACTUATOR=bam uv run
+      eval-find-ball …` — the battery does NOT pin the actuator, so this is a
+      process-env knob, not `--env`):
+
+      | brain | physics | found | side t_first | in frame | centred | head yaw | handoff | falls |
+      |---|---|---:|---:|---:|---:|---:|---:|---:|
+      | shipped `f31a4f` | xml | 100% | 0.24 s | 73% | 65% | 9.2° | 88% | 5 |
+      | shipped `f31a4f` | **BAM** | 98% | 0.34 s | 65% | 55% | 13.4° | 75% | **13** |
+      | **`22f3df` (BAM ft)** | **BAM** | **100%** | 0.46 s | **74%** | **68%** | **11.0°** | **98%** | **1** |
+      | `22f3df` (BAM ft) | xml | 100% | 0.31 s | 76% | 71% | 6.9° | 100% | 0 |
+
+      Events off, same order: falls 1 / 6 / **0**, handoff 88 / 67 / **98**%,
+      in frame 89 / 80 / **88**%. Back-bucket median time-to-first-sight is the
+      other big mover — **2.10 s → 0.62 s** under BAM.
+
+      **The control that makes this a finding rather than a fine-tune.** A 1M
+      warm-start improves almost anything here, so the same fine-tune was run
+      with the *only* difference `MICRODUCK_ACTUATOR=xml`
+      (`runs/find_ball-xmlft-s0`, seed 0, same weights, same `--init-from`).
+      Scored under BAM it reads **67% in frame / 77% handoff / 10 falls** —
+      indistinguishable from the un-fine-tuned shipped export (65 / 75 / 13),
+      while under xml it is healthy (74 / 95 / 0). **The extra steps buy
+      nothing; the BAM steps buy everything.** The gap is a real sim2real gap
+      and one CPU minute closes it.
+
+      Rendered before believing it (`/tmp/rr-bam1`, 4 episodes, BAM): upright
+      throughout (`trunk_z` 0.112-0.128 against the 0.120 stand reference,
+      tilt ≤ 7°, `floor:none`), and the BODY turns — from a ball at **p+173°**
+      it is at p−8° by 2.9 s; from **p−80°** it is at p−1° by 2.2 s and holds
+      it, re-acquiring cleanly after each mid-episode ball event.
+
+      **Two things this re-baselines.** (1) The numbers in
+      `policies/find_ball/README.md` were taken 2026-09-04, before the physics
+      audit landed; the shipped export re-measured today on the same command
+      reads **88% handoff / 5 falls** where that file records 93% / 1. Every
+      comparison above is same-day, same-tree, same episodes. (2) `f31a4f`
+      trained under **xml** — confirmed by throughput, 19.2k steps/s in its own
+      log against 13.0k for the BAM fine-tune, the documented ~30% BAM cost.
+- [x] **Detector dropout — the decide-on is met WITHOUT retraining, and the
+      fine-tune is worse (2026-09-10).**
+
+      **First, the knob did not work.** `MICRODUCK_BALL_DROPOUT` was gated on
+      `env.obs_noise`, which `eval-find-ball` and `render-rollout` both pin
+      **off** — so `--env MICRODUCK_BALL_DROPOUT=0.1` returned a battery
+      byte-identical to the run without it, and this item was unrunnable as
+      written. Fixed in `behaviors/ball.py` (dropout is a property of the
+      DETECTOR, not a randomizer; jitter stays behind `obs_noise`), locked by
+      `tests/test_ball_dropout.py`. Default is still 0.0, so every number
+      already in this file stands. **This is the FOV item's lesson one section
+      up, collected: verify the knob MOVES the thing it names.**
+
+      With the knob live, 60 episodes under BAM at `--events 0.33`, **dropout
+      0.1 on at eval**:
+
+      | brain | trained with dropout | found | in frame | centred | head yaw | handoff | falls |
+      |---|---|---:|---:|---:|---:|---:|---:|
+      | shipped `f31a4f` | no | 98% | 62% | 47% | 14.2° | 70% | 14 |
+      | **`22f3df` (BAM ft)** | **no** | **100%** | **73%** | 59% | 10.4° | **93%** | **1** |
+      | `3fc94f` (BAM+dropout ft) | yes | 100% | 70% | 59% | **8.2°** | 90% | 2 |
+
+      → **decide-on MET by the un-retrained brain.** Turning a 10% dropout on
+      costs `22f3df` **one point** of in-frame share (74% → 73%) with events
+      on and **zero** with them off (88% → 88%). The brain does not lose the
+      ball when the detector misses a frame; the memory slot and the sweep
+      clock are doing exactly the job they were added for.
+
+      → **and the fine-tune is not worth shipping.** `3fc94f` (1M more steps on
+      `22f3df` with `MICRODUCK_BALL_DROPOUT=0.1` in the farm's environment)
+      does not beat its own base under dropout — 70 / 90 / 2 against 73 / 93 /
+      1 — and with dropout OFF its falls go **1 → 6**. It buys one real thing,
+      head yaw 11.0° → 8.2°, and pays for it in the columns that matter.
+
+      **What dropout DOES cost is precision, not possession:** in-frame share
+      is flat while `centred` drops 86% → 75% (events off) and the median time
+      to the kick handoff goes 2.30 s → 3.35 s. The ball stays in the picture;
+      squaring up on it takes longer. That is the number to watch if the NPU's
+      real miss rate turns out to be much worse than 10%.
 - [x] **FOV sensitivity — NOT a blocker, and the reason is worth knowing.**
       `eval-find-ball` grew the `--env KEY=VALUE` this item always assumed it
       had. Swept far wider than the item asked (40 static-ball episodes each,
@@ -905,6 +1030,24 @@ PRACTISED, not what it can read.
       → **decide on:** a second blind-trained chain reproducing in-frame ≥ 80%
       and back-bucket found ≥ 95% at `--events 0.33`.
 
+      **STILL OPEN, and three things about it changed on 2026-09-10.** (1) The
+      blind-trained chain is **no longer under `runs/`** — only `31f14b`,
+      `3c1b2e`, `72af49` and `f31a4f` survive — so the confirmation is a fresh
+      8M chain (`MICRODUCK_BALL_PRIOR_PROB=0` through the curriculum,
+      `--seed 1`), not a warm start, and the seed-0 side of it needs
+      re-running too. (2) Its seed-0 numbers were taken under xml and before
+      the physics audit; the shipped export re-measured today reads 88%
+      handoff / 5 falls where the same command recorded 93% / 1, so the whole
+      table needs re-baselining against a same-day control, not comparing to
+      the numbers above. (3) The seed question this box raises has since been
+      answered *for the neighbouring knob*: the faster-sweep item below was run
+      at two seeds, and the two same-recipe control arms differed by 74/98/1
+      against 70/88/4 (in frame / handoff / falls). **That is the size of the
+      seed noise on this recipe** — big enough to swallow the falls and handoff
+      columns whole, small enough that the blind arm's in-frame 68 → 83 would
+      still stand out. Judge a confirmation run on in-frame share and the
+      wrong-side tail, not on falls.
+
 
 **Why this section now has a mechanism, not just a hunch (measured
 2026-09-03).** "Which way should it look first?" has a fixed answer: with
@@ -934,12 +1077,74 @@ prior ON and the asymmetry REVERSES — left 2.29 s / 91% found, right 1.61 s /
 97%. If the convention were the whole story, a seeded belief should make the
 two sides symmetric, not swap them. Worth understanding before tuning either.
 
-- [ ] **Faster sweep.** `MICRODUCK_BALL_SCAN_PERIOD=2.5` (from 4.0) fine-tune.
-      → **decide on:** median time-to-first-sight on side and back, weighed
-      against falls and centred share. A faster sweep that loses the ball on
-      the way past is not faster. **Split the result by ball side** (above):
-      the number this is really moving is the 2.48 s wrong-side mean, and a
-      whole-battery median will hide it behind the 0.35 s right-side half.
+- [x] **Faster sweep — it works, it REPLICATES on a second training seed, and
+      the retrain is the small half of it (2026-09-10). RECOMMENDED, not
+      shipped: replacing `policies/find_ball/` is a human's call.**
+
+      Run at **two seeds**, because this file's own caveat is that the lab
+      pins `--seed 0`. Four 1M-step fine-tunes of `teach-find_ball-f31a4f`
+      under BAM, differing in one knob: `runs/teach-find_ball-22f3df`
+      (scan 4.0, seed 0, via `/teach`), `runs/teach-find_ball-8c4f62`
+      (scan 2.5, seed 0, via `/teach` with `MICRODUCK_BALL_SCAN_PERIOD=2.5`
+      in the farm's environment), and `runs/find_ball-scan40-s1` /
+      `runs/find_ball-scan25-s1` (the same pair headless at `--seed 1`).
+      Every battery under BAM, 60 episodes, `--events 0.33`, each arm scored
+      at the clock it trained on:
+
+      | arm | seed | in frame | centred | worst t_first | head yaw | handoff | falls |
+      |---|---|---:|---:|---:|---:|---:|---:|
+      | scan 4.0 | 0 | 74% | 68% | 4.64 s | 11.0° | 98% | 1 |
+      | scan 4.0 | 1 | 70% | 63% | 3.50 s | 13.1° | 88% | 4 |
+      | **scan 2.5** | **0** | **78%** | 70% | **2.96 s** | 13.2° | 93% | 2 |
+      | **scan 2.5** | **1** | **79%** | **72%** | 4.32 s | **9.6°** | **98%** | **0** |
+
+      And the number the item actually asked for — **split by ball side**,
+      blind episodes (`--prior 0`), balls that start outside the initial view:
+
+      | arm | seed | LEFT mean (with the convention) | **RIGHT mean** | **RIGHT p90** | RIGHT in frame |
+      |---|---|---:|---:|---:|---:|
+      | scan 4.0 | 0 | 0.26 s | 1.55 s | 2.85 s | 61% |
+      | scan 4.0 | 1 | 0.36 s | 1.88 s | 2.68 s | 55% |
+      | **scan 2.5** | **0** | 0.31 s | **1.15 s** | **1.60 s** | **70%** |
+      | **scan 2.5** | **1** | 0.23 s | **1.37 s** | **1.71 s** | **68%** |
+
+      → **decide-on met on both seeds, and the wrong side is where it lands.**
+      In-frame share goes up on both (+4, +9 points), the wrong-side mean down
+      on both (−0.40 s, −0.51 s) and the wrong-side **p90 down by a full
+      second** on both (−1.25 s, −0.97 s). Nothing is paid for it: falls go
+      1 → 2 at seed 0 and 4 → 0 at seed 1, handoff 98 → 93 and 88 → 98 — the
+      two seeds disagree about the sign of both, which is the honest reading
+      that **the falls/handoff columns swing more between seeds than between
+      arms** (compare the two scan-4.0 rows: 74/98/1 against 70/88/4, same
+      recipe, same base, different seed).
+
+      **The finding under the finding: most of it needs no training at all.**
+      The scan period is a constant the DAEMON runs, so it can be changed
+      without retraining, and the control nobody had run is the scan-4.0 brain
+      simply *evaluated* at 2.5:
+
+      | | trained 4.0, run at 4.0 | **trained 4.0, run at 2.5** | trained 2.5, run at 2.5 |
+      |---|---:|---:|---:|
+      | in frame (s0 / s1) | 74 / 70% | **76 / 76%** | 78 / 79% |
+      | RIGHT mean (s0 / s1) | 1.55 / 1.88 s | **1.30 / 1.45 s** | 1.15 / 1.37 s |
+      | RIGHT p90 (s0 / s1) | 2.85 / 2.68 s | **1.77 / 1.86 s** | 1.60 / 1.71 s |
+      | handoff (s0 / s1) | 98 / 88% | 95 / 92% | 93 / 98% |
+      | falls (s0 / s1) | 1 / 4 | 1 / 1 | 2 / 0 |
+
+      Roughly **two-thirds of the wrong-side gain and the whole p90 collapse
+      are free** — turn the daemon's clock up and the existing brain takes it.
+      The retrain adds a little on top and is within seed noise on several
+      columns. So the recommendation splits: **change the sweep period
+      wherever the daemon runs it (free, no policy change, no re-export)**, and
+      treat the retrained arm as an optional extra. If it is retrained, ship
+      `find_ball-scan25-s1` or `teach-find_ball-8c4f62`, and note the recipe's
+      `MICRODUCK_BALL_SCAN_PERIOD` default would move 4.0 → 2.5 with it so
+      training and deployment keep the same clock.
+
+      Not swept: whether 2.0 or 1.5 is better still. The wrong-side cost is
+      ~2/3 of a sweep period by construction, so it should keep falling until
+      the head cannot keep up — that is the next cheap experiment, and it is a
+      battery sweep now, not a training run.
 - [x] **Is the prior worth producing? NO — and an ORACLE prior is worse than
       none, which rules out "the prior is just too noisy".** 60 episodes each
       on the shipped brain:
