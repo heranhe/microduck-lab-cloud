@@ -3,6 +3,7 @@ gating, class pass-through, noise presets, and the capture-to-availability
 latency — on real ducks composed into one world."""
 
 import math
+from dataclasses import replace
 
 import mujoco
 import numpy as np
@@ -455,12 +456,147 @@ def test_the_camera_env_sets_the_projection_and_refuses_a_typo():
 
     from microduck_local.sensors.detector import DetectorSpec
 
-    # The default moved to the fitted module on 2026-09-09: a 116° lens is not
-    # rectilinear, so reading it as a pinhole is the WRONG model, not the plain one.
-    assert DetectorSpec().projection == "equidistant"
+    # The default is "pinhole" — a CALIBRATED reader — since 2026-09-09. It was
+    # "equidistant" for part of that day, on the argument that a 116° lens is not
+    # rectilinear so reading it as a pinhole is the wrong model. True of the LENS
+    # and beside the point for the READER: calibration is a one-off checkerboard,
+    # and modelling the robot as though nobody ran one charges it a cost it would
+    # not pay. Measured before flipping (kick_gym, 12 seeds × 40 episodes an arm):
+    # whiff 31.1% → 17.9%, MDE(80%) 8.6 pp, pinhole better on 11 of 12 seeds.
+    # `DetectorSpec.projection` carries the workings.
+    assert DetectorSpec().projection == "pinhole"
     wide = DetectorSpec.from_env("fov_h_deg=116,fov_v_deg=60,px_h=640,projection=pinhole")
     assert wide.projection == "pinhole" and wide.px_h == 640 and wide.fov_v_deg == 60.0
     assert DetectorSpec.from_env("projection=equidistant").projection == "equidistant"
     for bad in ("projection=fisheye", "projection=", "fov_h_deg=wide"):
         with pytest.raises(ValueError):
             DetectorSpec.from_env(bad)
+
+
+# ---- partial visibility and the occlusion fan (2026-09-09) -----------------
+#
+# The three gates these cover were the answer to a plain observation: the duck
+# looked down at the ball, the top of it was plainly in frame, and it still did
+# not detect it. docs/camera-hardware.md section 5b has the workings.
+
+LEGACY_GATES = dict(partial_min=0.5, occl_rays=1, seen_full=0.5)
+"""The gates every number before 2026-09-09 was measured on: a target had to
+have its CENTRE in frame and one ray to that centre had to reach it."""
+
+
+def _ball_scene(x, walls=()):
+    """One duck at the origin, one floor ball `x` ahead, and the pieces needed
+    to ask `_visible` about it directly."""
+    m, d = world([("a", (0, 0, 0))], balls=[Ball((x, 0.0))], walls=walls)
+    det = Detector(m, site="a/head_camera", targets=targets(m, balls=(0,)))
+    origin = np.ascontiguousarray(d.site_xpos[det.site_id], dtype=np.float64)
+    R = d.site_xmat[det.site_id].reshape(3, 3)
+    return m, d, det, det.targets[0], origin, R
+
+
+def _true_angles(d, det, tgt, origin, R):
+    """The target's TRUE centre in the camera frame - what the detector should
+    report, clipped or not."""
+    local = R.T @ (d.xpos[tgt.body] - origin)
+    rng = float(np.linalg.norm(d.xpos[tgt.body] - origin))
+    return (math.atan2(local[1], local[0]),
+            math.atan2(local[2], math.hypot(local[0], local[1])), rng)
+
+
+def test_a_ball_with_only_its_top_in_frame_is_still_found():
+    """THE ORIGINAL COMPLAINT. At 0.40 m the ball's centre sits about 2.4 deg
+    BELOW a 60 deg frustum's bottom edge, so the centre rule threw it away with
+    a quarter of it plainly in view - and it is 11 cm across the frame at that
+    range, so nothing about this was the size gate."""
+    m, d, det, tgt, origin, R = _ball_scene(0.40)
+    _, elev, _ = _true_angles(d, det, tgt, origin, R)
+    assert elev < -np.deg2rad(det.spec.fov_v_deg) / 2, "the centre must be OUT of frame"
+
+    seen = det._visible(d, tgt, origin, R)
+    assert seen is not None, "a quarter of the ball is in frame; it is a detection"
+    assert 0.2 < seen[4] < 0.5, seen[4]                 # ...and known to be a partial one
+
+    det.spec = replace(det.spec, **LEGACY_GATES)
+    assert det._visible(d, tgt, origin, R) is None       # the rule this replaced
+
+
+def test_the_old_centre_rule_is_exactly_a_half_visible_rule():
+    """Why this went unnoticed for so long: for a ROUND target, centre-in-frame
+    IS the 50% contour, so `partial_min` = 0.5 reproduces the old gate exactly.
+    The sim was quietly demanding a floor ball be more than half in view."""
+    half_v = np.deg2rad(DetectorSpec().fov_v_deg) / 2
+    checked = 0
+    for x in (0.36, 0.38, 0.40, 0.42, 0.44, 0.46, 0.50, 0.60):
+        m, d, det, tgt, origin, R = _ball_scene(x)
+        _, elev, _ = _true_angles(d, det, tgt, origin, R)
+        det.spec = replace(det.spec, **LEGACY_GATES)
+        assert (det._visible(d, tgt, origin, R) is not None) == (abs(elev) <= half_v), x
+        checked += 1
+    assert checked == 8
+
+
+def test_the_occlusion_fan_finds_a_ball_whose_centre_ray_is_blocked():
+    """The shipped test was ONE ray to the centre, so anything crossing a
+    target's middle deleted it however much of it was in view. A wall edge
+    0.5 cm past the line of sight blocks that ray and leaves 38% of the
+    silhouette reachable."""
+    m, d, det, tgt, origin, R = _ball_scene(
+        0.9, walls=[Wall((0.45, -0.6), (0.45, 0.005), 0.30, 0.02)])
+    p = d.xpos[tgt.body] - origin
+    rng = float(np.linalg.norm(p))
+
+    frac = det._unoccluded(d, tgt, origin, p, rng)
+    assert 0.25 < frac < 0.5, frac                       # graded, not binary
+    assert det._visible(d, tgt, origin, R) is not None
+
+    det.spec = replace(det.spec, **LEGACY_GATES)
+    assert det._unoccluded(d, tgt, origin, p, rng) == 0.0      # the centre ray alone
+    assert det._visible(d, tgt, origin, R) is None
+
+
+def test_partial_visibility_never_moves_the_reported_geometry():
+    """Partial visibility decides WHETHER a point target is seen and never what
+    you are told about it. Reporting a clipped box's migrated centre instead
+    cost `brain/tidy.py`'s elevation-ranging ~2 cm and the pick outright - see
+    the note above `width` in the detector."""
+    m, d, det, tgt, origin, R = _ball_scene(0.40)
+    bearing, elev, rng = _true_angles(d, det, tgt, origin, R)
+    seen = det._visible(d, tgt, origin, R)
+    assert seen is not None and seen[4] < 1.0, "this target must be clipped"
+    assert seen[0] == pytest.approx(bearing, abs=1e-9)
+    assert seen[1] == pytest.approx(elev, abs=1e-9)      # NOT the visible midpoint
+    assert seen[2] == pytest.approx(2.0 * math.atan(tgt.radius / rng), abs=1e-9)
+    assert seen[3] == pytest.approx(rng, abs=1e-9)
+
+
+def test_seen_full_stops_a_tall_target_being_taxed_for_its_own_height():
+    """A person's extent overflows a 60 deg frustum by design, so scaling the
+    find probability linearly by the visible fraction charges it for being
+    tall: at 1.0 m it fell to 14 detections in 20. `seen_full` gives full marks
+    from half-visible up, which is what a detector does with a torso whose head
+    is out of frame."""
+    from microduck_local.world import Person, World
+
+    for rng_m in (0.8, 1.0, 1.5):
+        sc = Scenario(name="tall", floor=(8, 8),
+                      ducks=[Duck("d0", (0.0, 0.0, 0.0), None, None, "ideal")],
+                      persons=[Person("p0", (rng_m, 0.0), 0.0, [], 0.0, 0.18, 1.6)])
+        w = World(sc)
+        det = w.ducks["d0"].detector
+        for _ in range(6):
+            w.step()
+        # `ideal` noise, so a p_find of 1.0 is 20 of 20 with no dice at all.
+        found = sum(any(x.cls == "person" for x in det.capture(w.data, w.t).detections)
+                    for _ in range(20))
+        assert found == 20, (rng_m, found)
+
+        # ...and the multiplier itself, rather than a second binomial draw:
+        # counting detections under the linear penalty would be a ~0.79^20
+        # coin that only happens to be deterministic because the RNG is
+        # seeded, and would flip on any change to how draws are consumed.
+        tgt = next(t for t in det.targets if t.cls == "person")
+        origin = np.ascontiguousarray(w.data.site_xpos[det.site_id], dtype=np.float64)
+        R = w.data.site_xmat[det.site_id].reshape(3, 3)
+        frac = det._visible(w.data, tgt, origin, R)[4]
+        assert frac < 1.0, (rng_m, frac)                  # a linear penalty WOULD bite
+        assert min(frac / det.spec.seen_full, 1.0) == 1.0  # `seen_full` spares it

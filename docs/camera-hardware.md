@@ -605,14 +605,212 @@ than the 4× scaling assumed here.
    give the box-centre and box-width scatter directly, and that is the
    half of the 640 px benefit this repo currently cannot see.
 
+## 5b. The two gates that were costing more than the lens — MEASURED, FIXED (2026-09-09)
+
+Both are modelling shortcuts in `sensors/detector.py`, not properties of any
+camera, and both made the sim blinder than the hardware. They came out of one
+question: *the duck looked down at the ball, the top of it was plainly in
+frame, and it still did not see it — why?*
+
+### 5b.1 The lens was modelled UNCALIBRATED, and that is a GAIN, not an edge artefact
+
+§6 below describes `projection="equidistant"` as an error that is "zero on
+axis, zero at the calibrated edge, and worst in between: 9.7°". True, and it
+buries the lede. `seen_angle` is `atan(θ·tan(θmax)/θmax)`, so its slope at
+θ = 0 is `tan(58°)/58°rad` = **1.581**. Near-axis bearings are not slightly
+wrong, they are inflated 58%: a ball truly 7° off the nose is reported at 11°.
+
+Measured in play (2 seeds × 60 s of 2v2, 9148 ticks with the ball visible):
+
+| | median | p90 | max |
+|---|---|---|---|
+| \|true bearing\| | 7.2° | 27.0° | 58.0° |
+| bearing error | **3.81°** | 8.08° | 9.69° |
+
+**55% of ticks past the chase brain's tightest aim tolerance (3.4°)**, 18%
+past its loosest. That is the aim budget, spent on the lens.
+
+`a9a4829` had made `equidistant` the DEFAULT — silently contradicting §6's
+"it defaults to `pinhole`, so nothing measured before it shifted", which had
+been true and was not any more. Every number between that commit and this
+one is on an uncalibrated reader.
+
+**Flipped back, and the flip is measured** (`scripts/kick_gym.py`, 12 seeds ×
+40 episodes an arm, everything else at the fitted 116°×60° / 640 px):
+
+| arm | swings | whiff | on the sweet spot | median \|side\| |
+|---|---|---|---|---|
+| **pinhole (calibrated)** | 390 | **17.9%** | **18.5%** | **0.063 m** |
+| equidistant (uncalibrated) | 402 | 31.1% | 9.5% | 0.081 m |
+
+whiff −13.1 pp against an MDE(80%) of 8.6 pp — **powered**, p < 1e-4, and
+pinhole wins on **11 of 12 seeds** (sign test p = 0.0063).
+
+The argument for the flip is not that the lens is rectilinear. It is not.
+It is that **calibration is a one-off checkerboard**, and modelling the robot
+as though nobody ever ran one charges it a cost it would not pay. The
+uncalibrated arm is kept, as an arm:
+`MICRODUCK_CAMERA="projection=equidistant"`. It is what §5.3 should be
+measured against the day someone has real distortion coefficients — and note
+neither arm is exact, since a calibrated fisheye keeps a residual this model
+has no term for.
+
+### 5b.2 Partial visibility: the centre rule, the single occlusion ray
+
+`_visible` required a target's **centre** inside the frustum and tested
+occlusion with **one ray to that centre**. Both are stricter than a real
+detector, which finds truncated and partly-hidden boxes routinely — its
+training data is full of them.
+
+A census over 72012 duck-ticks of 2v2, each tick assigned to the FIRST gate
+that rejected the ball (a partition; cross-checked against the real
+`_visible`, 0 disagreements):
+
+| gate | share of ticks | any part visible | ≥25% visible |
+|---|---|---|---|
+| behind the camera | 36.3% | — | — |
+| **vertical frustum** | 12.1% | 27% | 14% |
+| **horizontal frustum** | 10.9% | 17% | 7% |
+| **occluded** | 4.8% | 56% | 25% |
+| size gate | 10.4% | — | mean p_find 0.64 |
+| seen | 25.5% | | |
+
+A quarter of "occluded" ticks had a quarter or more of the ball's silhouette
+plainly reachable. **All of it is duck-on-duck**: self-occlusion by the
+viewer's own body fired on **6 ticks in 72012**, so `brain/controllers.py`'s
+"nothing on the duck occludes it" is measured and correct.
+
+Also worth recording, because it explains why this was invisible: for a round
+target **the centre rule IS a 50%-visibility rule** — centre-in-frame is
+exactly the 50% contour, and the two agree to the tick. The sim was quietly
+demanding a floor ball be more than half in view.
+
+**What it cost the head.** Nearest floor ball reported, by pose (ground
+distance trunk→ball, standing; the size gate passes at 1.00 throughout this
+band, so nothing here is about pixels):
+
+| pose | camera | centre rule | any part | ≥25% in frame |
+|---|---|---|---|---|
+| level | 11° | 0.310 | 0.260 | 0.285 |
+| head 0.6 (the shipped gaze clamp) | 37° | 0.155 | 0.115 | 0.135 |
+| head 0.9 | 52° | 0.105 | 0.070 | 0.085 |
+| head 1.25 | 67° | 0.060 | 0.030 | 0.040 |
+
+**Fixed** with `partial_min` (0.25), `occl_rays` (13) and `occl_min` (0.25).
+Scored on the SAME trajectory both ways — one run, `Detector.spec` swapped
+per tick, so nothing diverged — the ball is geometrically visible on
+**35.0% → 39.3%** of duck-ticks, **+12% relative**.
+
+### 5b.2a Half a mechanism is worse than none: what a truncated box reports
+
+The first cut modelled truncation faithfully — a clipped box is narrower and
+its centre migrates toward the frame — and that was a mistake, twice over.
+
+A real consumer **knows** a box is truncated: it touches the frame edge, and
+every detector API says so. This model has no truncation flag, so a clipped
+`width` and a migrated centre hand the brain confidently WRONG numbers that
+nothing downstream can discount. Measured, both times on
+`test_tidy_picks_a_toy_behind_the_basket_without_touching_it`:
+
+- **width.** `range_est` is `radius / tan(width/2)`, so a narrowed box reads
+  as further away. The tidy brain's median `range_est` to the basket went
+  **0.346 → 0.467 m**.
+- **elevation.** A clipped box's centre sits ~**3°** above the target's for a
+  basket 80% in frame, and `brain/tidy.py::_locate` ranges floor objects BY
+  elevation — about 2 cm of error at that range. The duck routed on it and
+  **never picked the toy at all**, at every `seen_full` below 1.0.
+
+So for a POINT target, partial visibility now decides **whether** it is seen
+and never what you are told about where it is or how big it is — its reported
+elevation may therefore sit *outside* the frustum, which is the honest answer
+to "where is it" for a thing half below the frame.
+
+A TALL target still reports the midpoint of its visible part — that branch
+predates this and is right on its own terms: what you can see of a person at
+0.5 m is its legs. The gap is not small and the docstring now spells it out,
+because it is a trap for anything that ranges by elevation: at 0.5 m a 1.6 m
+person's true centre elevation is **+53.6°** and the detector reports
+**+0.6°**. `brain/tidy.py::_locate` is sound on floor objects and would be
+badly wrong on a person.
+
+One consequence of that reposition, found in review: the horizontal gate was
+scoring a tall target on its *body-centre* range while `width` came from the
+repositioned one — a person at 0.5 m read frac_h 0.733 against a true 0.683.
+Both are now taken at the reported point.
+
+The sim is therefore optimistic by exactly one thing, and the honest fix is
+**both** halves — a truncation flag on `Detection` plus consumers that respect
+it, `_locate` falling back to width-ranging when the box is cut. Recorded, not
+built. Modelling an error without its mitigation is not the conservative half;
+it is wrong in a way no real system is.
+
+### 5b.3 The trap in scaling find-probability by the visible fraction
+
+The first cut scaled `p_find` linearly by the visible fraction. That looked
+conservative and was not: a **tall** target's extent overflows a 60° frustum
+by design, so a person was charged for its own height. Measured, 1.6 m
+person, ideal noise, 20 captures a range:
+
+| range | 0.4 | 0.6 | 0.8 | 1.0 | 1.5 | 2.0 | 3.0 |
+|---|---|---|---|---|---|---|---|
+| visible fraction | 1.000 | 0.897 | 0.789 | 0.725 | 0.727 | 0.854 | 1.000 |
+| found (of 20) | 20 | 17 | 16 | **14** | **14** | 16 | 20 |
+
+A person at conversational range losing a quarter of its detections is a
+regression in the follow brains and is not what a detector does — a torso
+with the head out of frame is a plain detection. `seen_full` (0.5) gives full
+marks from half-visible up, which restores 20/20 at every range above while
+still costing a ball clipped to a quarter of itself half its chances.
+**`seen_full` is the one number here nobody has measured**; it is a knob so
+that a battery can settle it.
+
+### 5b.4 The combined effect, and what it retired
+
+`scripts/kick_gym.py`, 12 seeds × 40 episodes an arm, old defaults against
+new:
+
+| arm | swings | whiff | sweet spot | median \|side\| | connected |
+|---|---|---|---|---|---|
+| old gates | 399 | 31.8% | 9.5% | 0.083 m | 272 |
+| **new gates** | 369 | **16.0%** | **17.3%** | **0.067 m** | **310** |
+
+whiff −15.8 pp against an MDE(80%) of 8.7 pp and sweet spot +7.8 pp against
+6.9 — **both powered**, p < 1e-5 and p = 0.0014, better on **11 of 12 seeds**
+(sign test p = 0.0063). Read it against AGENTS.md rule 6 before believing it: the swing
+count fell 8% and **connected kicks still went UP, 272 → 310**, so this is not
+the "better rate, fewer touches" shape that killed `two_stage` and
+`refresh_min`.
+
+It also retired a strict `xfail`:
+`test_tidy_picks_a_toy_behind_the_basket_without_touching_it` had been a
+known regression since the lens re-baseline. Isolated on that test, at the
+fitted lens: old baseline fails, `partial_min`/`occl_rays` alone fails,
+**`projection=pinhole` alone passes**. So it is the calibrated reader that
+retires this one — the bearing gain was what pushed the duck onto the rim —
+and the partial-visibility work neither fixes nor breaks it. Its assertions
+were never relaxed.
+
+Cost: the fan is 13 rays where there was 1, so a capture goes 0.233 → 0.693 ms
+(+0.46 ms × 12000 captures ≈ **+5.5 s per 300 s 2v2 run**).
+
+**Everything measured before 2026-09-09 is on the old gates**, and the arm
+that restores them is
+`MICRODUCK_CAMERA="projection=equidistant,partial_min=0.5,occl_rays=1,seen_full=0.5"`
+— exact for the gates and for `p_find`, and exact for `width` except on a
+target straddling the left or right frame edge, which the old code dropped
+rather than narrowed.
+
 ## 6. What the sim now models, and what it still does not
 
 `DetectorSpec.projection` (added 2026-09) models the bearing error a
 pinhole-calibrated reader makes on an equidistant lens — the error is
 systematic, zero on axis, zero at the calibrated edge, and worst in
 between: **9.7° at 116° against 1.2° at 62°**, which is past the chase
-brain's 3.4–6.9° aim tolerance. It defaults to `pinhole`, so nothing
-measured before it shifted.
+brain's 3.4–6.9° aim tolerance. It defaults to `pinhole` — it was flipped to
+`equidistant` by `a9a4829` and flipped back the same day, for the reasons and
+the numbers in §5b.1, which also correct the "worst in between" framing above:
+near-axis bearings are inflated by a factor of 1.581, so the error is a GAIN
+and not an edge artefact.
 
 One thing that came out of building it: **the size gate was already
 equidistant-shaped.** `px_per_rad` is uniform across the field, which is

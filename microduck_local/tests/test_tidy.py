@@ -219,19 +219,22 @@ def test_tidy_rim_toys_are_staged_from_the_outside_and_routed_round_the_basket()
 
 
 @pytest.mark.skipif(not (POLICIES_DIR / "alpha_ground_pick.onnx").exists(), reason="upstream policies not checked out")
-@pytest.mark.xfail(
-    strict=True,
-    reason="REGRESSION on the camera the robot actually has (2026-09-09). This passed for as "
-           "long as the sim modelled a 62°x48° lens; on the fitted 116°x60° module — the "
-           "default since that date — the duck still notes the basket, routes round it and "
-           "picks the toy, but comes within 0.151 m of the rim against a 0.19 m guard and "
-           "falls twice. Verified to be the camera and nothing else: passes under "
-           "MICRODUCK_CAMERA=fov_h_deg=62,fov_v_deg=48,px_h=320,projection=pinhole. The "
-           "docstring names the mechanism — 'every fall in 8 traced runs was an approach at "
-           "the rim' — and a wider lens sees the rim earlier and from further out, which is "
-           "the input the staging logic keys on. STRICT: when the routing is fixed this "
-           "passes unexpectedly and the mark must come off. Do not relax the assertions; "
-           "they are what the brain should do.")
+# The strict xfail that stood here from 2026-09-09 is GONE, as its own reason
+# instructed: it passes again. It was a real regression — on the fitted 116°x60°
+# lens the duck came within 0.151 m of the rim against a 0.19 m guard and fell
+# twice — and what retired it was the detector work of the same day: a
+# CALIBRATED reader (`projection`), partial visibility at the frustum edge
+# (`partial_min`) and an occlusion fan instead of one centre ray (`occl_rays`).
+#
+# Isolated on this test, every arm at the fitted lens: old baseline FAILS,
+# `partial_min=0.25,occl_rays=13` alone FAILS, `projection=pinhole` alone
+# PASSES. So it is the CALIBRATED READER that retires this one - the bearing
+# gain was what pushed the duck onto the rim - and the partial-visibility work
+# neither fixes nor breaks it. The assertions were never relaxed.
+#
+# (An earlier draft of this comment said it took all three. That was measured
+# before `seen_full` and before the reported geometry was corrected back to the
+# target's true centre, and it no longer holds - re-measured 2026-09-09.)
 def test_tidy_picks_a_toy_behind_the_basket_without_touching_it():
     """End to end: a toy 0.23 m past the basket, seen from the spawn with
     the basket in between. The brain notes the basket while scanning,

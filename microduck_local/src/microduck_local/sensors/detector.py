@@ -190,13 +190,103 @@ class DetectorSpec:
     # is NOT what a pinhole lens does (a pinhole frame resolves more finely
     # toward its edges). So this field changes the BEARING only; the width
     # thresholds were always modelling the wide-lens case.
-    # Equidistant, because the fitted lens is not rectilinear: solving a pinhole
-    # focal length from each axis of 116/60/142.2 deg gives 1.65 / 2.57 / 1.04 mm
-    # — they disagree, so no pinhole model describes it. Under r = f*theta they
-    # agree to ~10% (2.61 / 2.84 / 2.44 mm, near the quoted 2.9 mm EFL).
-    # Still missing: a distortion model, so the periphery's usable bearing
-    # accuracy is overstated. docs/camera-hardware.md section 2 has the gap.
-    projection: str = "equidistant"
+    # "pinhole" MODELS A CALIBRATED READER, and that is the baseline because
+    # calibration is a one-off checkerboard, not a running cost — no one ships
+    # a wide lens uncalibrated. "equidistant" is the ablation that asks what it
+    # costs if you do.
+    #
+    # This default was "equidistant" from a9a4829 to 2026-09-09 and the flip is
+    # MEASURED, because the docstring above undersells the error badly. It reads
+    # as an edge-of-frame artefact; it is a GAIN. `seen_angle` is
+    # atan(theta*tan(tmax)/tmax), and at tmax = 58 deg the near-axis slope is
+    # tan(58 deg)/58 deg = **1.581** — a ball truly 7 deg off the nose is
+    # reported at 11 deg, and EVERY bearing is inflated ~58%. Measured in play
+    # (2 seeds x 60 s of 2v2, 9148 ticks with the ball visible): median bearing
+    # error 3.81 deg, p90 8.08 deg, and 55% of ticks past the chase brain's
+    # tightest aim tolerance (3.4 deg).
+    #
+    # What it costs, on `scripts/kick_gym.py`, 12 seeds x 40 episodes an arm:
+    #
+    #     arm                     swings   whiff   sweet spot   median |side|
+    #     pinhole (calibrated)      390    17.9%      18.5%        0.063 m
+    #     equidistant               402    31.1%       9.5%        0.081 m
+    #
+    # whiff -13.1 pp against an MDE(80%) of 8.6 pp — POWERED, p < 1e-4, and
+    # pinhole is better on 11 of 12 seeds (sign test p = 0.0063). The side
+    # offset IS the kick error, and it falls 0.081 -> 0.063 m.
+    #
+    # NEITHER ARM IS EXACT. A real calibrated fisheye keeps a residual
+    # distortion error (sub-pixel RMS on a good fit) that this model has no
+    # term for, so "pinhole" is the IDEALISED calibrated reader, not a promise.
+    # docs/camera-hardware.md section 2 has the gap.
+    projection: str = "pinhole"
+    # PARTIAL VISIBILITY: the fraction of a target's angular extent that must
+    # sit inside the frustum for it to be reported.
+    #
+    # 0.5 IS THE OLD CENTRE RULE. For a round target, centre-in-frame *is* the
+    # 50% contour — measured, the two agree to the tick — so every number taken
+    # before 2026-09-09 is a `partial_min` of 0.5 on the horizontal axis and on
+    # the vertical axis of a point target. (Tall targets were looser still:
+    # ANY vertical overlap counted. In practice a person's extent is so large
+    # that it never falls under 0.25, so this is a no-op for them.)
+    #
+    # 0.25 models a detector that finds a truncated box, which a real YOLO does
+    # — its training data is full of objects clipped by the frame edge. What the
+    # centre rule was throwing away, over 72012 duck-ticks of 2v2: the vertical
+    # gate rejected 12.1% of ticks, of which 27% had SOME of the ball in frame
+    # and 14% had a quarter or more; the horizontal gate rejected 10.9%, of
+    # which 17% and 7%.
+    #
+    # The cost is honest and worth stating: a box clipped at the LEFT or RIGHT
+    # edge is narrower, so `width` shrinks and `range_est` (radius / tan(w/2))
+    # inflates. That error is real on hardware and did not exist here before,
+    # because the target was simply dropped. A ball clipped at the BOTTOM — the
+    # common case, and the one that motivated this — keeps its full horizontal
+    # width, so its ranging is untouched.
+    partial_min: float = 0.25
+    # Rays cast across the target's silhouette for the occlusion test.
+    #
+    # 1 IS THE OLD TEST: a single ray to the centre, which drops a target the
+    # moment anything crosses its middle however much of it is plainly in view.
+    # Over the same 72012 duck-ticks the occlusion gate rejected 4.8% of them,
+    # and 25% of those had a QUARTER OR MORE of the ball's silhouette reachable.
+    # All of it is duck-on-duck: self-occlusion by the viewer's own body fired
+    # on 6 ticks in 72012, so the "nothing on the duck occludes it" note in
+    # brain/controllers.py is measured and correct.
+    #
+    # MODELLING LIMIT: the fan is a disc of `Target.radius`, which is what that
+    # field is for ("a radius that stands in for its silhouette"). For a TALL
+    # target it therefore samples the waist and not the legs, so a person
+    # occluded across the middle is under-reported. Nothing in the worlds this
+    # repo runs occludes a person that way; recorded, not built.
+    occl_rays: int = 13
+    # ...and the fraction of those rays that must reach the target. At
+    # `occl_rays` = 1 the fraction is 0 or 1 and any value in (0, 1] reproduces
+    # the old test exactly.
+    occl_min: float = 0.25
+    # The visible fraction at which a target is AS EASY to find as a whole one.
+    # `capture` scales the find probability by `visible / seen_full`, capped at
+    # 1, so above this a partly-hidden target costs nothing and below it the
+    # penalty ramps to zero at invisible.
+    #
+    # WHY IT IS NOT 1.0 (i.e. why the penalty is not just linear in the visible
+    # fraction). Linear looked like the conservative choice and it is not: it
+    # silently taxes TALL targets, whose extent overflows a 60 deg frustum by
+    # design. Measured on a 1.6 m person, ideal noise, 20 captures a range:
+    #
+    #     range     0.4    0.6    0.8    1.0    1.5    2.0    3.0
+    #     visible  1.000  0.897  0.789  0.725  0.727  0.854  1.000
+    #     found     20     17     16     14     14     16     20
+    #
+    # A person at conversational range losing a quarter of its detections is a
+    # regression in the follow brains, and it is not what a detector does: a
+    # torso with the head out of frame is a plain detection. 0.5 makes that a
+    # no-op (0.725 / 0.5 caps at 1) while still costing a ball clipped to a
+    # quarter of itself half its chances.
+    #
+    # THE ONE NUMBER HERE NOBODY HAS MEASURED. It is a knob so a battery can
+    # settle it; 1.0 restores the linear penalty this shipped with for an hour.
+    seen_full: float = 0.5
 
     @staticmethod
     def from_env(spec: str | None = None) -> "DetectorSpec":
@@ -250,13 +340,25 @@ class DetectorSpec:
 
         Identity under "pinhole". Under "equidistant" the reader infers
         `atan(theta * tan(theta_max) / theta_max)`: right on axis, right at
-        the edge it calibrated on, pushed outward in between."""
+        the edge it calibrated on, pushed outward in between - and, since
+        2026-09-09, EXTRAPOLATED past that edge rather than clipped to it,
+        because a partly-visible point target reports a true centre that can
+        sit outside the frame. Clipping it there put the centre back on the
+        frame edge; the comment below has the measurement."""
         if self.projection != "equidistant":
             return float(true_rad)
         tmax = np.deg2rad(fov_deg) / 2
         if tmax <= 1e-9:
             return float(true_rad)
-        t = float(np.clip(true_rad, -tmax, tmax))
+        # NOT clipped to +/-tmax. It used to be, harmlessly, because every
+        # angle reaching here was inside the frustum. Since 2026-09-09 a
+        # partly-visible point target reports its TRUE centre, which can sit
+        # just outside - and clipping snapped that centre back onto the frame
+        # edge, quietly restoring on this arm the very box-centre migration
+        # the partial-visibility work removed (a ball at -32.41 deg came back
+        # as exactly -30.00 deg). The map is continuous and bounded past its
+        # edge, so extrapolating is both defined and monotonic.
+        t = float(true_rad)
         return float(np.sign(t) * np.arctan(abs(t) * np.tan(tmax) / tmax))
 
     @property
@@ -436,29 +538,127 @@ class Detector:
         self._geomgroup[4] = 0
 
     # -- geometry ----------------------------------------------------------
+    @staticmethod
+    def _clip_arc(lo: float, hi: float, half_fov: float) -> tuple[float, float]:
+        """(visible fraction, midpoint of the visible part) for the arc
+        [lo, hi] clipped to +/-`half_fov`.
+
+        The midpoint is what a clipped BOX's centre would be. ONLY the
+        tall-target branch of `_visible` uses it; the point-target path
+        discards it and reports the true centre on purpose, because a migrated
+        centre that no consumer can tell is migrated is worse than none (see
+        the note above `width`). Do not wire it into a new class without
+        reading that.
+
+        The fraction is over `min(span, 2*half_fov)` and NOT over the span,
+        because the question is how much of what COULD be in frame is - a
+        target bigger than the frame fills it, and a thing filling the frame is
+        the easiest detection there is, not the hardest. Over the span alone a
+        person at arm's length would score worse the closer it came."""
+        a, b = max(lo, -half_fov), min(hi, half_fov)
+        if a > b:
+            return 0.0, 0.5 * (lo + hi)
+        denom = min(hi - lo, 2.0 * half_fov)
+        frac = 1.0 if denom <= 1e-12 else min((b - a) / denom, 1.0)
+        return frac, 0.5 * (a + b)
+
+    def _unoccluded(self, data: mujoco.MjData, tgt: Target, origin: np.ndarray,
+                    p: np.ndarray, rng: float) -> float:
+        """Fraction of `spec.occl_rays` cast across the target's silhouette
+        that reach it. `occl_rays` = 1 is one ray to the centre, which is the
+        test this detector shipped with; see `DetectorSpec.occl_rays`."""
+        n = max(int(self.spec.occl_rays), 1)
+        tgt_root = int(self.model.body_rootid[tgt.body]) if tgt.body >= 0 else -1
+        d = p / rng
+        # Any two axes spanning the plane normal to the line of sight. `d` is
+        # parallel to world up only when looking straight down, hence the
+        # fallback rather than a normalise of a zero vector.
+        e1 = np.cross(d, np.array([0.0, 0.0, 1.0]))
+        n1 = float(np.linalg.norm(e1))
+        e1 = np.array([0.0, 1.0, 0.0]) if n1 < 1e-9 else e1 / n1
+        e2 = np.cross(d, e1)
+        pts = [p]
+        for i in range(n - 1):
+            a = 2.0 * np.pi * i / (n - 1)
+            # Two rings, so the fan samples the middle of the disc as well as
+            # its rim: a rim-only fan calls a target with a clear centre and a
+            # blocked edge more occluded than it is.
+            r = tgt.radius * (0.55 if i % 2 else 0.9)
+            pts.append(p + r * (float(np.cos(a)) * e1 + float(np.sin(a)) * e2))
+        geomid = np.zeros(1, dtype=np.int32)
+        reached = 0
+        for q in pts:
+            qn = float(np.linalg.norm(q))
+            if qn < 1e-9:
+                reached += 1   # a sample AT the lens: nothing can be in front of it
+                continue
+            vec = np.ascontiguousarray(q / qn, dtype=np.float64)
+            dist = mujoco.mj_ray(self.model, data, origin, vec, self._geomgroup, 1,
+                                 self.mount_body, geomid)
+            if dist >= 0 and geomid[0] >= 0:
+                hit_root = int(self.model.body_rootid[self.model.geom_bodyid[geomid[0]]])
+                if hit_root != tgt_root and dist < qn - tgt.radius:
+                    continue
+            reached += 1
+        return reached / len(pts)
+
     def _visible(self, data: mujoco.MjData, tgt: Target,
                  origin: np.ndarray, R: np.ndarray,
-                 R_frustum: np.ndarray | None = None) -> tuple[float, float, float, float] | None:
-        """(bearing, elevation, width, range) if inside the frustum and not
-        occluded, else None.
+                 R_frustum: np.ndarray | None = None) -> tuple[float, float, float, float, float] | None:
+        """(bearing, elevation, width, range, visibility) if enough of the
+        target is inside the frustum and unoccluded, else None.
+
+        `visibility` is the part of the silhouette the frustum and the
+        occluders left, on BOTH axes and after occlusion, and `capture` scales
+        the find probability by it. Nothing is double-counted, because it is
+        the ONLY channel partial visibility has - but WHAT IS REPORTED DIFFERS
+        BY BRANCH, and the difference is the whole design (see the note above
+        `width`):
+
+        * a POINT target (`height` 0: ball, basket, toy, post, duck) reports
+          its TRUE bearing, elevation and width however much is cut off. Its
+          elevation may therefore lie OUTSIDE the frustum, which is the honest
+          answer to "where is it" for a thing half below the frame.
+        * a TALL target (`height` > 0: person) reports the midpoint of its
+          VISIBLE extent, and `width` at that point's range. That is not the
+          body's centre and is not meant to be - what you can see of a person
+          at 0.5 m is its legs - and the gap is large: at 0.5 m the true centre
+          elevation is +53.6 deg and this reports +0.6 deg. It predates the
+          partial-visibility work and the follow brains are tuned on it.
+
+        `brain/tidy.py::_locate` ranges floor objects BY elevation, so it is
+        sound on the first kind and would be badly wrong on the second.
 
         `R` is the frame the detection is REPORTED in (the head camera's).
         `R_frustum`, when given, is the frame the frustum test is made in -
         the second, pitched-down camera of `bottom_pitch_deg` - so a target
         that lens can see comes back with the head's bearing and elevation,
         which is what every consumer already expects."""
+        s = self.spec
         p = (np.asarray(tgt.pos, dtype=np.float64) if tgt.pos is not None else data.xpos[tgt.body]) - origin
         rng = float(np.linalg.norm(p))
-        if rng < 1e-6 or rng > self.spec.max_range_m:
+        if rng < 1e-6 or rng > s.max_range_m:
             return None
         Rf = R if R_frustum is None else R_frustum
         local = Rf.T @ p                   # frustum camera frame: x fwd, y left, z up
         if local[0] <= 0:
             return None
+        half_h = np.deg2rad(s.fov_h_deg) / 2
+        half_v = np.deg2rad(s.fov_v_deg) / 2
+        # Half the angular width of the silhouette. `atan`, NOT the sphere's
+        # true `asin(r/d)`, so that this is the same angle `width` below is
+        # built from: `frac_h` scales that width, and `range_est` inverts it as
+        # `radius / tan(width/2)`, so a gate measured on a different angle
+        # would disagree with the box it is gating. The two part company only
+        # inside about three radii (0.10 m for a ball), where `atan` is the
+        # smaller - so the error is toward finding the target LESS often.
+        alpha = float(np.arctan(tgt.radius / rng))
         bearing = float(np.arctan2(local[1], local[0]))
-        if abs(bearing) > np.deg2rad(self.spec.fov_h_deg) / 2:
+        # NOTE the clipped midpoint is DISCARDED for a point target and the
+        # true centre reported instead - see the long note above `width`.
+        frac_h, _ = self._clip_arc(bearing - alpha, bearing + alpha, half_h)
+        if frac_h < s.partial_min:
             return None
-        half_v = np.deg2rad(self.spec.fov_v_deg) / 2
         if tgt.height > 0:
             # The part of a tall target inside the frustum: its top and bottom
             # in world z, through the camera's tilt, clipped to the frustum.
@@ -468,39 +668,88 @@ class Detector:
             e_lo = float(np.arctan2(lo[2], horiz))
             e_hi = float(np.arctan2(hi[2], horiz))
             e_lo, e_hi = min(e_lo, e_hi), max(e_lo, e_hi)
-            a, b = max(e_lo, -half_v), min(e_hi, half_v)
-            if a > b:
+            frac_v, elev = self._clip_arc(e_lo, e_hi, half_v)
+            if frac_v < s.partial_min:
                 return None
-            elev = 0.5 * (a + b)
-            # Range and the occlusion ray go to the point actually reported.
+            # Range and the occlusion rays go to the point actually reported.
             p = Rf @ np.array([local[0], local[1], horiz * np.tan(elev)])
             rng = float(np.linalg.norm(p))
+            # The horizontal extent belongs to the point actually REPORTED, not
+            # to the body centre the gate above used - `p` has just moved and
+            # `width` below is built from the new range. Re-gate on it, or a
+            # tall target near the frame edge is scored on a box it does not
+            # have (measured: a person at 0.5 m, frac_h 0.733 against a true
+            # 0.683). `bearing` is unchanged by the reposition, which keeps
+            # `local[0]` and `local[1]`, so only `alpha` moves.
+            alpha = float(np.arctan(tgt.radius / rng))
+            frac_h, _ = self._clip_arc(bearing - alpha, bearing + alpha, half_h)
+            if frac_h < s.partial_min:
+                return None
         else:
             elev = float(np.arctan2(local[2], np.hypot(local[0], local[1])))
-            if abs(elev) > half_v:
+            frac_v, _ = self._clip_arc(elev - alpha, elev + alpha, half_v)
+            if frac_v < s.partial_min:
                 return None
         if R_frustum is not None:
             # Seen by the second lens: report it where the HEAD would put it.
+            # The clipped angles above are in the SECOND lens's frame and do
+            # not transfer, so this is the centre direction, as it always was.
             rep = R.T @ p
             bearing = float(np.arctan2(rep[1], rep[0]))
             elev = float(np.arctan2(rep[2], np.hypot(rep[0], rep[1])))
-        # Occlusion: the first thing along the line of sight must be the
-        # target itself (or nothing closer than its front face).
-        geomid = np.zeros(1, dtype=np.int32)
-        dist = mujoco.mj_ray(self.model, data, origin, p / rng, self._geomgroup, 1,
-                             self.mount_body, geomid)
-        if dist >= 0 and geomid[0] >= 0:
-            hit_root = int(self.model.body_rootid[self.model.geom_bodyid[geomid[0]]])
-            tgt_root = int(self.model.body_rootid[tgt.body]) if tgt.body >= 0 else -1
-            if hit_root != tgt_root and dist < rng - tgt.radius:
-                return None
+        frac_occl = self._unoccluded(data, tgt, origin, p, rng)
+        if frac_occl < s.occl_min:
+            return None
+        # THE TRUE ANGULAR SIZE AND CENTRE, DELIBERATELY NOT THE CLIPPED BOX'S.
+        #
+        # This applies to `bearing` and `elev` above as well as to `width`:
+        # for a POINT target, partial visibility decides WHETHER it is seen,
+        # never what you are told about where it is or how big it is. (A TALL
+        # target still reports the midpoint of its visible part - that branch
+        # predates this and is right on its own terms: what you can see of a
+        # person at 0.4 m is its legs, and their centre is metres from the
+        # body's.)
+        #
+        # A box clipped at the left or right edge really is narrower on
+        # hardware, and reporting that was the first cut here. It is wrong to
+        # model half of a mechanism: a real consumer KNOWS a box is truncated
+        # (it touches the frame edge, and every detector API says so) and
+        # distrusts its dimensions accordingly. This detector has no
+        # truncation flag, so a clipped `width` hands the brain a confidently
+        # WRONG `range_est` - `radius / tan(width/2)` - that nothing
+        # downstream can discount.
+        #
+        # MEASURED, and it is not a small effect: with clipped widths the tidy
+        # brain's median `range_est` to the basket went 0.346 -> 0.467 m, it
+        # routed on the bad range and never picked the toy at all
+        # (tests/test_tidy.py::test_tidy_picks_a_toy_behind_the_basket...).
+        # Nothing else moved: a ball clipped at the BOTTOM, which is the case
+        # this whole change exists for, has `frac_h` = 1 and never went
+        # through here.
+        #
+        # The elevation is the same story and was measured the same way. A
+        # clipped box's centre sits ~3 deg above the target's for a basket
+        # 80% in frame, `brain/tidy.py::_locate` ranges floor objects BY
+        # elevation, and reporting the migrated centre put its estimate ~2 cm
+        # out and cost it the pick outright - the same test, at every value of
+        # `seen_full` below 1.0.
+        #
+        # So the sim is optimistic by exactly one thing - it does not migrate
+        # the centre or narrow the box of a truncated target - and the honest
+        # fix is BOTH halves: a truncation flag on `Detection` (every real
+        # detector API has one) and consumers that respect it, `_locate`
+        # falling back to width-ranging when the box is cut. Modelling the
+        # error without the mitigation is not the conservative half, it is
+        # just wrong in a way no real system is. Recorded, not built;
+        # docs/camera-hardware.md section 6.
         width = 2.0 * float(np.arctan(tgt.radius / rng))
         # The frustum tests above used the TRUE angles - what the lens can
         # physically see. What the brain receives is what a reader infers
         # from the box: the same under a pinhole model, pushed outward under
         # a wide one.
-        return (self.spec.seen_angle(bearing, self.spec.fov_h_deg),
-                self.spec.seen_angle(elev, self.spec.fov_v_deg), width, rng)
+        return (s.seen_angle(bearing, s.fov_h_deg),
+                s.seen_angle(elev, s.fov_v_deg), width, rng,
+                frac_h * frac_v * frac_occl)
 
     def _color(self, tgt: "Target", range_est: float) -> str | None:
         """What the colour classifier says about this box: the truth inside
@@ -537,9 +786,16 @@ class Detector:
                 vis = self._visible(data, tgt, origin, R, R_frustum=R2)
             if vis is None:
                 continue
-            bearing, elev, width, rng = vis
+            bearing, elev, width, rng, seen_frac = vis
             g = self.rng_land if tgt.cls == "post" else self.rng
             p_find = float(np.clip((width - s.w_none) / (s.w_full - s.w_none), 0.0, 1.0))
+            # A partly-hidden target is harder to find. `seen_frac` is the
+            # ONLY channel partial visibility has - the reported geometry is
+            # the target's true geometry however much is cut off - so nothing
+            # is charged twice and nothing is charged on one axis only. Full
+            # marks from `seen_full` up (a half-visible thing is a plain
+            # detection), then a ramp to zero. See `DetectorSpec.seen_full`.
+            p_find *= min(seen_frac / s.seen_full, 1.0) if s.seen_full > 0 else 1.0
             p_find *= 1.0 - nz.miss_p
             if g.random() > p_find:
                 continue
