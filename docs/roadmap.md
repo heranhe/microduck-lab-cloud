@@ -2859,6 +2859,13 @@ has a much better opponent than it did this morning. Do the approach first
 as `Chase` does would be worth measuring; this one is not"), and only then
 this.
 
+      *Gate re-checked 2026-09-10:* still closed, and 12as (follow-ups B–E) is
+      the reason in numbers — a learned approach to the ball, with the far
+      state sampled in every run, appeared in one training seed of two and
+      its falls flipped sign between seeds. A learned role brain would
+      inherit exactly that lottery. The approach stays a walker/curriculum
+      problem before it is a role problem.
+
 - [ ] `StrikerEnv` with the role as an observation (a one-hot in the
       contract's reserved slots, plus the board's teammate poses in the
       body frame — the same eight-float pattern the striker's goal geometry
@@ -3896,7 +3903,11 @@ this stack has none of them.
       item 7's correction. Nothing more to build here; the ablation stays
       as the tool that settles "is it the sensor?" in one run.
 - [ ] **A.2 In-walk kicks — kick inside the gait instead of stop, settle,
-      swing.** B-Human's `WalkKickEngine` defines every kick as a set of
+      swing.** *(2026-09-10: the first step toward this exists — 12as's
+      sensed kick decides on the live sighting through the head command
+      slots and, at a 0.60 m range slot, walks to a ball 0.35 m away in one
+      training seed of two; it is still a standing skill entered from the
+      line-up, not a kick inside the gait, and nothing ships.)* B-Human's `WalkKickEngine` defines every kick as a set of
       relative ball positions converted into **walk step sizes**: a pre-step
       that does not touch the ball, then a kick step, interpolated inside one
       gait cycle, with `maxXDeviation`/`maxYDeviation` bounds that refuse a
