@@ -8527,7 +8527,7 @@ longer turns leaves a whiffed ball straight ahead and under the chin, and
 the left foot is seen again within 2 s on **0 %** of whiffs (vendored 75 %,
 whose pirouette put the ball where the sweep found it); the right reads
 88 %. That is 12k's blind radius meeting a kick that finally stays put, and
-the fix is the look's pitch, not the kick. (3) One training seed per arm.
+the fix is the look's pitch, not the kick. (3) One training seed per arm — **measured, 12aq: seed 1 does NOT reproduce, keep the seed-0 pair; the own-goal side was a coin.**
 (4) **The 2v2 ledger is the ship gate** and is running as this is written
 (`eval-pitch --seeds 24 --seconds 300 --per-side 2 --ball-out-s 5`, vendored
 pair against the 12.0 pair, same copy); until it reads, nothing is vendored
@@ -9066,3 +9066,84 @@ swing is no fresher (1.43 → 1.42 s). A deeper walking gaze sees a ball that
 leaves the frame under the chin either way (12k). Ships off, with the
 numbers; the law is written correctly beside it for whoever needs the
 depression for something else.
+
+
+### 12aq. The kick pair at a second seed, and the own-goal side (2026-09-10)
+
+12ai's two open items, both registered before the runs: (3) one training
+seed per arm, and the ledger's own goals 0 → 6, all six by graphite.
+Measured by a parallel agent, reviewed and reproduced from its row files
+(`runs/kickseed1/`).
+
+**Item 1: the second training seed.** The shipped recipe exactly — the
+point-strike `kick_{left,right}` plus the catalog anchor `face_home` at
+12.0 through `--weights-json`, 2M steps, 32 envs, headless (the farm's
+`/teach` slot was another agent's) — with `--seed 1`. Runs
+`kick-{left,right}-faceline-w12-s1` under `runs/`, each with a
+`policy.json` exit sidecar; `log_std` stayed at 0.58 / 0.60 (no
+bang-bang). Every arm was measured with both feet pinned and
+`World.skill_path()` / `World.kick_exits()` printed and asserted; the
+shipped pair was re-measured in the same session as the control and
+reproduces 12ai's grid to the cell.
+
+**Bench** (`bench_kick_headdown`, 12 seeds × 5 gaze poses): the registered
+bar — 0 % whiff from every pose — is **met on both feet**, travel 1.0–1.25 m,
+0 falls / 60. But the exit angles are a per-run accident, not the recipe's:
+seed 0 drew −0.225 / −0.036 (left / right), seed 1 drew +0.005 / −0.138.
+
+**Grid** (84 cells × 3 poses × 2 seeds): s1 right 75 / 68 / 55 % of the box
+(shipped 69 / 67 / 77), turn 8 / 8 / 8°; s1 left 60 / 60 / 73 % (shipped
+82 / 79 / 82), turn 6 / 17 / 27°; falls 3–11 per 168 either way.
+
+**Gym** (`kick_gym`, 40 × 12, both feet pinned, paired against the shipped
+pair measured in the same session):
+
+| | shipped | s1 | Δ (±MDE) | p | seeds better | verdict |
+|---|---|---|---|---|---|---|
+| whiff, seeds 0–11 | 10 % | **18 %** | +8 (5) | 0.001 | 2 / 12 | **effect, worse** |
+| whiff, seeds 100–111 | 8 % | **16 %** | +9 (4) | 0.000 | 1 / 12 | **effect, worse** |
+| connected kicks | 371 / 374 | 326 / 345 | | | | |
+| connected travel, median | 1.02 / 1.00 m | 0.90 / 0.83 m | | | | |
+| fell in the carry window | 2 / 414, 0 / 405 | 0 / 400, 1 / 413 | | | | null |
+
+The whiff is the 0.11–0.15 m row (13 → 27 %, 7 → 30 %) and the row behind
+it: seed 1's strike is shorter, not wilder.
+
+**In play** (`probe_kick_recover`, 6 × 50, same seeds): right turn +0° →
+**+18°** median, swings under 20° 93 → **57 %**; left −13 → −12°, 84 → 90 %;
+probe whiff 8 → 16 % overall.
+
+**Verdict.** Seed 1 does not reproduce seed 0: the turn bar holds on the
+median only and whiff fails on both blocks, worse on 21 of 24 paired seeds.
+`policies/kick/` is unchanged; keep the seed-0 pair and read 12ai's numbers
+as one draw from a wide distribution. The recipe at 2M steps reliably makes
+a kick that never whiffs on the bench and never pirouettes, and unreliably
+one that reaches the ball where the brain leaves it. If the pair is ever
+retrained, bench + grid are not enough to accept it: **the gym block is the
+gate**, and it costs minutes.
+
+**Item 2: the own-goal side.** 12ai's rows read back: the six graphite own
+goals sit on six seeds, every one into the +x mouth, and on four of them
+`kickGoals` is 0 and `bumpGoals` ≥ 1 — **walked in, not kicked in**, which
+no exit angle causes. A fresh block on the shipped pair (`eval-pitch
+--seeds 24 --seed0 200 --seconds 300 --per-side 2 --ball-out-s 5`,
+`runs/kickseed1/pitch-ship-200.jsonl`): own goals **cream 3 / graphite 1**,
+goals 18 (11 kicked / 7 bumped), kicks 173 (50 back), falls 2. Pooled over
+48 seeds: cream 3 / graphite 7, binomial p 0.34; the two blocks differ at
+p 0.033 — a seed draw, and 12ai's 6 / 6 was a 1-in-32 coin.
+
+**And the exit-sign mechanism has no reachable set.** `make_pitch` spawns
+graphite as the exact 180° rotation of cream about the origin and the walls
+are invariant under it; a rotation preserves handedness, so a kick that
+bends to the duck's right bends to the duck's right on both teams in their
+own frames. Producing a per-team bias would need a reflection this pitch
+does not have. Nothing to fix: no mirrored exits, no `kick_exit_*` change.
+
+**What stands, and it is the real number:** the own-goal RATE. As a share
+of goal events, the old pair put in 0 of 24 and the shipped pair 6 of 24
+then 4 of 18 — **10 of 42 (24 %)** over 48 seeds, Fisher p 0.010 against
+0 / 24. Caveats: the fresh block has no paired old-pair arm on its seeds,
+and the tree has moved since 12ai's ledger. The measurement that settles it
+is the old pair on seeds 200–223 on today's tree, one paired `eval-pitch`
+block. The ledger's falls are noise, as the per-swing instrument said:
+4 → 9 on seeds 0–23 and 2 on 200–223.
