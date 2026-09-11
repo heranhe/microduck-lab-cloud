@@ -449,3 +449,47 @@ def test_the_far_recipe_spawns_the_same_worlds_as_the_first_one():
             a.reset(seed=950 + k)
             b.reset(seed=950 + k)
             assert np.allclose(a.data.qpos, b.data.qpos)
+
+
+def test_the_distillation_sees_what_the_recipe_sees_and_shows_the_teacher_zeros():
+    """`scripts/distil_kick.py` (12as follow-up (2), route b) rests on two
+    facts about this recipe, and both are silent when they break.
+
+    The first is WHERE the ball rides. The script blanks `SENSED_SLOTS` to
+    build the BLIND teacher's view of the same step; if that slice ever
+    stopped being the slice `_lm_sense` writes, the teacher would be fed the
+    ball and the student's targets would come from a policy reading an
+    observation no vendored kick was ever trained on — and the clone would
+    still fit, and the fit's MSE would still look fine.
+
+    The second is that the collection is SENSED at all. The whole point of
+    cloning inside this env rather than the blind one is the `VecNormalize`
+    statistics: fitted on a blind rollout the four slots are constant, their
+    variance is ~0, and a warm start from it reproduces the exact defect
+    ("the strike's VecNormalize was fitted with those four slots carrying
+    keep-alive noise") that made a warm start impossible in the first place.
+    So the collected slots must actually MOVE.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from distil_kick import SENSED_SLOTS, collect  # noqa: PLC0415
+
+    env = _env("left")
+    obs, _ = env.reset(seed=5)
+    assert np.allclose(obs[SENSED_SLOTS], env.head_cmd)      # the slice IS the slots
+    assert obs.shape[0] == C.OBS_DIM and SENSED_SLOTS == slice(51, 55)
+
+    teacher = Path(__file__).resolve().parents[1] / "policies" / "kick" / "kick_left.onnx"
+    if not teacher.exists():                                  # a checkout without the local export
+        pytest.skip(f"no teacher at {teacher}")
+    ob, act, ret, seen = collect("kick_left_sensed", str(teacher), 12, seed=3)
+    assert len(ob) == len(act) == len(ret) > 200
+    assert act.shape[1] == 14 and ob.shape[1] == C.OBS_DIM
+    # The slots carry a ball that is somewhere, seen sometimes, and fading:
+    # every one of the four has to have real spread or the normalizer is the
+    # degenerate one this route exists to avoid.
+    assert 0.02 < seen < 0.98                                 # the detector reports, and not always
+    for k in range(51, 55):
+        assert ob[:, k].std() > 0.05, (k, ob[:, k].std())
