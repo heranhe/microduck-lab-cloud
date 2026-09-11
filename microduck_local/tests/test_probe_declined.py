@@ -31,10 +31,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 probe = pytest.importorskip("probe_declined_swings")
 
-# The exits of the two arms 12au compares: the shipped left sidecar and the
-# in-play correction. Named here so a test failure says which pair it ran.
-SHIPPED = (-0.225, -0.036)
-CORRECTED = (0.209, -0.036)
+# The exits of the two arms 12au compared: the pair the SIDECARS carry today
+# (read, not pinned — the owner set the left to its in-play +0.209 on
+# 2026-09-11, which is when a pinned constant went red) and the pre-correction
+# bench pair as the counterfactual. Named so a test failure says which it ran.
+import json as _json
+from pathlib import Path as _Path
+_KICKS = _Path(__file__).resolve().parents[1] / "policies" / "kick"
+SHIPPED = tuple(_json.loads((_KICKS / f"kick_{f}.json").read_text())["exit_rad"] for f in ("left", "right"))
+CORRECTED = (-0.225, -0.036)   # the bench pair the shipped sidecar carried before 9ca8d9d
 
 EPISODE_KEYS = {"kind", "ep", "seed", "swings", "declines", "pushes", "t_first_swing",
                 "place", "place_board", "selects", "select_none", "select_pinned",
