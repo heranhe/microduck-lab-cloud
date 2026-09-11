@@ -5597,6 +5597,277 @@ this stack has none of them.
         uv run --no-sync python <scratch>/kickchoice3/spread.py $SNAP   # the within-line-up spread
         uv run --no-sync python <scratch>/kickchoice3/clamp.py  $SNAP   # picks changed by clamping `range`
 
+      **FOLLOW-UP (2) THEN (1), RUN — THE 3 076-SWING REFIT PAYS ON THE PITCH:
+      +0.160 m A KICK AT 120 SEEDS, AND THE GATE STILL FAILS ON ITS SECOND
+      COLUMN (2026-09-11).** E.2's follow-up ordered (2) before (1): double the
+      pitch dataset, refit, re-run the box probe and the gym sanity, and only
+      then spend the registered ~118 seeds an arm. Done in that order. The
+      premise of (2) did not survive, the model got better anyway, and the
+      ledger's primary went from NO RESULT to a resolved effect 2.8x the size
+      it was sized for.
+
+      **The dataset, doubled.** `collect --pitch` on seeds **260-331** (72
+      seeds x 1 200 s = 86 400 sim-s, disjoint from 200-259 and from the
+      ledger's 0-119): 23 432 line-ups, 556 770 ranking calls, **1 698
+      labelled swings** (947 exploring, 92 cut by the referee, 36 unlatched),
+      **0.0197 labelled swings a sim-second** — the 0.0191 the last pass
+      measured, reproduced on independent seeds. 57 min wall at `--jobs 12`
+      (~11 CPU-hours), against the ~5 CPU-hours the item budgeted: the
+      estimate was low by 2x. Pooled with `data-pitch-b0.jsonl`: **3 076
+      labelled swings over 132 seeds**, written to a SECOND file so the
+      1 378-swing artefact stays readable.
+
+      **(2)'s premise is REFUTED: the ridge had already plateaued.** The item
+      said the held-out R2 "was still climbing (+0.418 at 275, +0.463 at
+      1 378)". On one fixed held-out quarter of the pooled 3 076 (769 test,
+      2 307 train pool), fitting the ridge on the first k of the train pool:
+
+      | train swings | 206 | 275 | 413 | 550 | 800 | 1 034 | 1 378 | 1 800 | 2 307 |
+      |---|---|---|---|---|---|---|---|---|---|
+      | ridge, advance | +0.400 | +0.436 | +0.448 | +0.452 | +0.458 | +0.459 | +0.460 | +0.464 | **+0.464** |
+      | ridge, back-line | +0.225 | +0.259 | +0.293 | +0.302 | +0.309 | +0.310 | +0.309 | +0.309 | +0.315 |
+      | MLP, advance | −0.756 | −0.648 | −0.315 | +0.144 | +0.328 | +0.367 | +0.428 | +0.442 | **+0.472** |
+
+      The ridge is flat from ~800 training swings: **doubling the dataset
+      bought +0.005 of R2.** What looked like a climb was the last two points
+      of a curve that had already levelled. The honest reading of the earlier
+      "+0.418 → +0.463" is that it was measured on two different held-out
+      sets, not on one curve. **The news is the other row:** the MLP, which
+      was −0.38 at 206 swings and lost to the ridge at 1 378, **overtakes it
+      at ~2 200 (+0.472 v +0.463)** — the first time a nonlinear head has won
+      on this arena. It was NOT taken, and the reason is the box rule below.
+
+      **The fit.** `--kind ridge`, registered before the fit for the same
+      reason as last time. 3 076 swings, held-out R2 advance **+0.464**,
+      back-line **+0.315**; `lam_back` swept to **0.5** (it was 0.0 on 1 378).
+      → `runs/kickchoice/model-pitch-b1.json`.
+
+      **The box probe, and the corrected acceptance test.** 41 133 pitch
+      candidate rows (3 seeds x 120 s):
+
+      | feature | gym fit | 1 378 pitch fit | **3 076 pitch fit** | |
+      |---|---|---|---|---|
+      | `ball_board` | 31.0 % | 2.4 % | **0.7 %** | in |
+      | `goal_off` | 7.1 % | 5.4 % | **9.6 %** | in |
+      | every other live column | ≤ 3.4 % | ≤ 2.4 % | **≤ 1.5 %** | in |
+      | `range` | 47.4 % | 69.3 % | **44.0 %** | raw FAIL |
+
+      More data widened `range`'s training box (0.147-0.424 → 0.145-0.474) and
+      cut the raw failure from 69.3 % to 44.0 %, but the probe still exits
+      FAIL — and, as follow-up (1) established, that FAIL is not evidence
+      against a ridge. Re-measured on this model over **1 682 real ranking
+      calls** (24 634 candidate rows): `range` has **exactly zero spread
+      across the candidates of a line-up in 100 % of calls** (so do
+      `ball_ax`, `ball_ay`, `ball_board`, `pot` and every dead column), and
+
+      | clamped into the training box | picks changed |
+      |---|---|
+      | `range` alone | **0 / 1 682 = 0.0 %** |
+      | EVERY feature at once | 1 / 1 682 = 0.1 % |
+
+      So on the reading the item registered — *every feature that CAN change
+      the ranking is inside its box* — this model passes at **9.6 % worst**,
+      with the raw `range` FAIL reported beside it. And that is why the
+      MLP was left on the shelf despite winning the R2 race: an MLP reads
+      `range` through its interactions, which is exactly the route by which
+      E.2's gym MLP let an out-of-box column rewrite 26.8 % of its pitch
+      picks.
+
+      **Gym sanity — it transfers, and it transfers LESS than the small
+      model did.** Fresh seeds 100-111, 12 x 150 episodes, in the arena this
+      model was not fitted in:
+
+      | gym 100-111 | shipped | `model-pitch-b1` | Δ ± MDE | p | verdict |
+      |---|---|---|---|---|---|
+      | swings of 1 800 | 1 507 | 1 550 | more, not fewer | | |
+      | advance a swing (m) | +0.550 | **+0.637** | **+0.088 ± 0.047** | <1e-3 | effect |
+      | `back` | 20.7 % | **12.1 %** | −8.6 ± 2.6 | <1e-3 | effect |
+      | back-LINE | 7.6 % | **2.2 %** | −5.4 ± 1.7 | <1e-3 | effect |
+      | whiff | 8.0 % | 6.7 % | −1.3 ± 1.9 | 0.162 | null |
+      | travel (m) | +0.867 | +0.838 | −0.030 ± 0.038 | 0.129 | null |
+      | fell in the window (VETO) | 0.5 % | 0.2 % | −0.3 ± 0.4 | 0.119 | null |
+
+      **The 1 378-swing model scored +0.143 here; this one scores +0.088.**
+      Twice the data made the GYM number worse and the aim column better
+      (back-line 3.3 → 2.2 %). The gate was "the gym sanity holds or
+      improves": it holds — still an effect, still the right sign, on more
+      swings, veto quiet — while the headline shrank 38 %. Registered and
+      run on that reading.
+
+      **THE PREDICTION, registered at 02:45 off that MEAN, before a single
+      arm-B row existed** (scratch `REGISTERED.md`). Carry PER KICK: shipped
+      **+0.2784 m over 822 kick events** at 120 seeds (6.85 kicks a run),
+      predicted **+0.366 m (+0.088)** at full transfer, expected half-width
+      **±0.057** at ~820 events an arm — 1.5x the predicted effect. And the
+      NO RESULT was called in advance with its mechanism: **the one measured
+      gym→pitch transfer fraction for this ranking is 41 %** (+0.143 gym →
+      +0.058 pitch), and 41 % of +0.088 is +0.036 = 0.63x the half-width, so
+      a null was the EXPECTED outcome unless the transfer beat its own
+      precedent. Gate unchanged: carry per kick AND ballAdvance pay, falls
+      flat.
+
+      **THE LEDGER.** 120 paired seeds (0-119), 2v2 x 300 s, `--ball-out-s 5`,
+      both arms on ONE frozen snapshot (`snap-20260911-013416`, HEAD d66bc8c
+      CLEAN — and `src/` plus every script used is still byte-identical to the
+      tree at 85c10c6, so unlike E.2's run **a clean checkout does reproduce
+      these rows**). Arm B differs only by `MICRODUCK_CHASE=
+      "kick_select_learned=<abs>/runs/kickchoice/model-pitch-b1.json"`. The
+      preflight read the knob off all four CONSTRUCTED brains per arm and
+      loaded the `Chooser` (ridge, 3 076 rows, seeds 200-331); reachable set
+      1 111 ranking calls over 120 s of seed 0; `kick_exits (−0.225, −0.036)`
+      printed off the built World, so the vendored kicks and not the Hub's.
+      **The shipped arm was EXTENDED, not re-run:** `pitch-ship-2.jsonl` is
+      `pitch-ship-1.jsonl` resumed to 120 seeds, and its first 48 rows are
+      identical field for field (checked), so the two ledgers nest.
+
+      | 120 seeds, 2v2 x 300 s | ship | `model-pitch-b1` | Δ ± MDE (MDE %) | p | verdict |
+      |---|---|---|---|---|---|
+      | **carry PER KICK (primary)** | +0.278 m / 822 | **+0.438 m / 701** | **+0.160 ± 0.056 (20 %)** | **<1e-4** | **EFFECT** |
+      | kickCarry m/run | 1.907 | **2.561** | **+0.654 ± 0.432 (23 %)** | **0.003** | **effect** (totals 228.8 → **307.3 m**) |
+      | advance per kick | 0.190 | **0.247** | **+0.057 ± 0.026 (14 %)** | **<1e-4** | **effect** |
+      | **ballAdvance m/min (gate)** | 1.164 | 1.242 | +0.078 ± 0.090 (8 %) | 0.090 | **null — DOES NOT PAY** |
+      | ballProgress m/min | 0.432 | 0.622 | +0.190 ± 0.127 (30 %) | 0.004 | **UNQUOTABLE by rule** |
+      | kicks | 822 | 701 | −1.008 ± 0.545 (8 %) | **0.0004** | **effect, FEWER** |
+      | `kicksBack`, of kicks | 251/822 = 30.5 % | **127/701 = 18.1 %** | **−12.4 pp** | **<1e-4** | **effect** |
+      | `kicksBackLine`, of lines | 141/515 = 27.4 % | **40/400 = 10.0 %** | **−17.4 pp** | **<1e-4** | **effect** |
+      | possession s/min | 40.26 | 40.64 | +0.38 ± 0.71 (2 %) | 0.289 | null |
+      | goals | 108 | 117 | +0.075 ± 0.257 (29 %) | 0.564 | NO RESULT |
+      | own goals | 28 | 21 | −0.058 ± 0.120 (51 %) | 0.338 | NO RESULT |
+      | falls (VETO) | 23 | 19 | −0.033 ± 0.115 (60 %) | 0.566 | NO RESULT, favourable sign |
+      | spread / crowd / depth / ballOwnHalf | flat | flat | 1-5 % | 0.27-1.0 | null |
+
+      Per-seed signs: carry per kick **84 up / 36 down** (sign p <1e-3),
+      kickCarry 73 / 47 (p 0.022), ballAdvance 66 / 54 (p 0.315), kicks
+      35 / 68 / 17 (p 0.001), possession 60 / 60, goals 40 / 41 / 39, own
+      goals 17 / 19 / 84, falls 13 / 18 / 89.
+
+      | prediction | carry per kick | per run | against this battery |
+      |---|---|---|---|
+      | the gym's **mean** (registered) | +0.088 | +0.60 | **EXCLUDED — BELOW** the interval [+0.104, +0.216] |
+      | **observed** | **+0.160 ± 0.056** | +0.654 ± 0.432 | **1.8x the registered size** |
+
+      **The registered size is refuted in the FAVOURABLE direction, and that
+      is a finding about the gym, not about the model.** E.2's gym
+      over-promised by 5x (+0.282 gym, +0.003 pitch). Here the gym
+      UNDER-promised by 1.8x. The difference is which arena the model was
+      fitted in: for a PITCH-fitted ranking the gym is the foreign arena, so
+      its number is a lower bound, not a forecast. **A gym A/B is not a
+      forecast of the pitch in either direction; it is only a sanity check
+      that the ranking is not broken.**
+
+      **The rival explanation, killed on the rows.** Kicks fell 15 % (822 →
+      701), which is exactly the shape of "it declines the marginal kicks and
+      the survivors look better". It is not that: the **total** carry ROSE
+      **+78.4 m on 121 FEWER kicks**, and pure selection cannot raise a
+      total. Sharper: if the arm had simply dropped the 121 worst of the
+      shipped arm's 822, its mean would be +0.4281 — **the observed mean is
+      +0.4383, better than the best-case selection story.** And the whole
+      distribution moved, not a tail: median +0.136 → +0.309, q10 −0.366 →
+      −0.024, and the share of kicks that leave the ball nearer the kicker's
+      own goal 2 s later **33.5 % → 19.3 %**.
+
+      **VERDICT: `kick_select_learned` SHIPS OFF — on one column, and for the
+      first time only on one.** The gate registered in advance was carry per
+      kick AND ballAdvance paying with falls flat. Carry per kick pays
+      emphatically (+0.160 ± 0.056, p <1e-4, 84/36 seeds). Falls are flat and
+      the sign is favourable. **ballAdvance does not pay** (+0.078 ± 0.090,
+      p 0.090, 66/54 seeds) and the gate is a conjunction, so the answer is
+      OFF. The honest caveat on that column: the carry gain implies
+      +0.131 m/min of extra forward ball motion, and +0.131 sits INSIDE
+      ballAdvance's observed interval [−0.012, +0.168] — so ballAdvance
+      neither confirms nor excludes the mechanism at this power; it is short
+      of power, not measured off. Goals 108 → 117 at p 0.564 with a 29 % MDE
+      is the coin 12aq, 12au and E.2 have now caught four times and must NOT
+      be quoted in the case.
+
+      **And the registered price was paid for the wrong model.** At 48 seeds
+      the SAME two arms read +0.145 ± 0.093, p 0.0024 — **this effect never
+      needed 118 seeds.** The ~118-seed price was correctly computed for the
+      1 378-swing model's +0.058; the refit's effect is 2.8x that, and a
+      third of the battery would have caught it. The lesson is not that the
+      power calculation was wrong but that **a power price is a property of
+      the arm, so re-derive it after every refit instead of inheriting it.**
+
+      **Recommendation to the owner.** Leave `kick_select_learned` at "" —
+      the gate is a conjunction and it failed. But this is no longer the
+      same recommendation as E.2's: every carry column is a resolved effect
+      in the right direction, the aim column resolves on 915 lines, and
+      nothing is broken (possession, shape, goals, own goals and falls all
+      flat or favourable). Three things are worth keeping. **(a)** More data
+      is spent: the ridge's R2 plateaued at ~800 swings and the 3 076-swing
+      refit's whole gain over the 1 378-swing one showed up on the PITCH
+      (+0.058 → +0.160) while its GYM number fell — so judge a refit on the
+      arena you will deploy in, and stop buying swings for this head.
+      **(b)** The `range` column is confirmed dead for ranking on real
+      evidence, not argument: zero within-line-up spread in 1 682 of 1 682
+      calls. **(c)** The MLP now wins the R2 race at 3 000 swings and is
+      still the wrong choice while `range` is an input — which makes
+      follow-up (3) concrete: **drop the line-up-constant columns from
+      `FEATURES` entirely and refit an MLP on what varies across candidates.**
+      That is a model that cannot extrapolate on `range` by construction and
+      can use the interactions the ridge cannot.
+
+      → **What settles it next:** (1) the gate's remaining column is cheap.
+      To resolve the OBSERVED ballAdvance +0.078 m/min needs
+      (0.090/0.078)^2 x 120 = **~161 seeds an arm — 41 more paired seeds,
+      about 25 minutes at `--jobs 14`**, both row files being resumable with
+      the same `--out`. It MUST be registered fresh before it is run: the
+      size being chased came out of this battery, so extending this one and
+      re-reading it is peeking, not power. (2) If ballAdvance then pays, the
+      gate is met and the knob ships on; if it comes back a resolved null,
+      the reading is that a better kick does not move a 2v2 match's ball
+      further in 300 s, which is a fact about the benchmark worth having
+      before D.2's supporter position is attempted. (3) The feature-set
+      surgery in (c) above is the first design change this item has had that
+      is motivated by a measurement rather than by a hunch, and the box
+      probe plus the clamp test are already the acceptance test for it.
+
+      Reviewer's re-read of the rows: carry per kick 0.278 → 0.438 m over
+      822 → 701 kicks (totals 228.8 → 307.3 m), kickCarry +0.654 ± 0.432,
+      ballAdvance +0.078 ± 0.090, back-line 141/515 → 40/400, falls 23 → 19,
+      own goals 28 → 21; the shipped arm's first 48 rows are identical to
+      `pitch-ship-1.jsonl` field for field, and its 48-seed carry per kick
+      reads 0.291 m over 316 kicks, reproducing E.2's baseline exactly.
+      Run against commit d66bc8c (tree clean); `src/` unchanged at 85c10c6.
+      Row files (gitignored): `runs/kickchoice/data-pitch-b1.jsonl` (seeds
+      260-331), `model-pitch-b1.json`, `gymq-{shipped,pitchmodel1}-b100.jsonl`,
+      `pitch-ship-2.jsonl` (the 120-seed shipped arm, extending
+      `pitch-ship-1.jsonl`) and `pitch-pitchmodel-1.jsonl`.
+      Commands:
+        uv run python scripts/kick_choice_data.py collect --pitch --seeds 12 --seed0 260 \
+            --seconds 1200 --explore 0.6 --jobs 12 --out runs/kickchoice/data-pitch-b1.jsonl
+            # repeated for --seed0 272 284 296 308 320, appending
+        uv run python scripts/kick_choice_data.py fit runs/kickchoice/data-pitch-b0.jsonl \
+            runs/kickchoice/data-pitch-b1.jsonl --kind ridge \
+            --out runs/kickchoice/model-pitch-b1.json
+        uv run python <scratch>/kickchoice4/r2curve.py runs/kickchoice/data-pitch-b{0,1}.jsonl   # the R2 curve
+        uv run python scripts/probe_model_box.py --model runs/kickchoice/model-pitch-b1.json \
+            --data runs/kickchoice/data-pitch-b0.jsonl runs/kickchoice/data-pitch-b1.jsonl \
+            --seeds 3 --seed0 100 --seconds 120 --jobs 3
+        uv run python <scratch>/kickchoice4/clamp.py --model runs/kickchoice/model-pitch-b1.json \
+            --data runs/kickchoice/data-pitch-b{0,1}.jsonl --seeds 2 --seed0 100 --seconds 120
+        M=$PWD/runs/kickchoice/model-pitch-b1.json
+        for A in 'shipped=' "pitchmodel1=kick_select_learned=$M"; do \
+          uv run python scripts/kick_gym.py --seeds 12 --seed0 100 --episodes 150 --jobs 12 \
+            --arm "$A" --out runs/kickchoice/gymq-${A%%=*}-b100.jsonl; done
+        uv run python scripts/kick_choice_data.py report shipped=... pitchmodel1=...
+        SNAP=<scratch>/kickchoice4/snap-20260911-013416   # rsync src+scripts+tests; ln -s the upstreams AND policies/
+        export PYTHONPATH=$SNAP/microduck_local/src MICRODUCK_RL_DIR=<abs>/microduck_rl
+        [MICRODUCK_CHASE="kick_select_learned=$M"] uv run --no-sync python \
+            <scratch>/kickchoice4/preflight.py --expect {"",$M} --seconds 120 --seed 0
+        cp runs/kickchoice/pitch-ship-1.jsonl runs/kickchoice/pitch-ship-2.jsonl   # extend, do not re-run
+        [MICRODUCK_CHASE="kick_select_learned=$M"] uv run --no-sync python -m microduck_local.eval_pitch \
+            --seeds 120 --seed0 0 --seconds 300 --per-side 2 --ball-out-s 5 --jobs 14 \
+            --tag {ship,pitchmodel1} --out runs/kickchoice/pitch-{ship-2,pitchmodel-1}.jsonl
+        uv run --no-sync python scripts/compare_pitch.py runs/kickchoice/pitch-ship-2.jsonl \
+            runs/kickchoice/pitch-pitchmodel-1.jsonl --label ship pitchmodel1
+
+      Reviewer's re-read of `pitch-ship-2.jsonl` vs `pitch-pitchmodel-1.jsonl`
+      (120 seeds each): carry per kick +0.160 ± 0.056 (p < 1e-4), kickCarry
+      +0.654 ± 0.432, ballAdvance +0.078 ± 0.090 (null), kicks 822 → 701,
+      back-line 141/515 → 40/400, falls 23 → 19; the shipped arm's first 48
+      rows are identical to the 48-seed file. The tables reproduce.
+
 - [ ] **E.3 Learning from recordings.** SoccerDiffusion (2025) learns joint
       trajectories from RoboCup gameplay logs (vision + proprioception +
       game state) and runs on hardware after distillation, with "high-level
