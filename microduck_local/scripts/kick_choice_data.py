@@ -97,10 +97,19 @@ class Recorder:
         return choose
 
 
-def collect(seed: int, episodes: int, spread: float, explore: float, knobs: str = "") -> list[dict]:
+def collect(seed: int, episodes: int, spread: float, explore: float, knobs: str = "",
+            opponents: int = 0) -> list[dict]:
     """One seed of line-ups, in `kick_gym`'s own gym and with its own
     placement, timing and outcome definitions (imported, never re-typed, so
-    the dataset and the A/B it is judged by score the same event)."""
+    the dataset and the A/B it is judged by score the same event).
+
+    `opponents` is `kick_gym`'s own flag, passed straight through to
+    `gym_scenario`: with one, another body contests the same ball, so
+    `avoid` / `yield` / `blocked` are live and — with
+    `kick_select_opps=1` in `--arm` — `p_block` is a real column instead of
+    the identically-zero one the unopposed dataset has. Everything else about
+    the episode is unchanged, including the fact that the opponent is spawned
+    once and not replaced between episodes, exactly as `kick_gym.run` does."""
     if knobs:
         os.environ["MICRODUCK_CHASE"] = knobs
     else:
@@ -108,7 +117,7 @@ def collect(seed: int, episodes: int, spread: float, explore: float, knobs: str 
     from microduck_local.brain import REGISTRY
     from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
     from microduck_local.world.arena import World
-    sc = G.gym_scenario()
+    sc = G.gym_scenario(opponents=opponents)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
     w = World(sc, infer_for={x.id: infer for x in sc.ducks}, seed=seed)
     bk = __import__("microduck_local.brain.team", fromlist=["brain_kwargs"]).brain_kwargs
@@ -159,7 +168,7 @@ def collect(seed: int, episodes: int, spread: float, explore: float, knobs: str 
                 break
             prev_skill = d.skill
         if swing is None or latched is None:
-            rows.append({"seed": seed, "ep": ep, "swing": False,
+            rows.append({"seed": seed, "ep": ep, "swing": False, "opponents": opponents,
                          **({} if latched is None else latched)})
             continue
         ts = w.t
@@ -173,7 +182,7 @@ def collect(seed: int, episodes: int, spread: float, explore: float, knobs: str 
         travel = math.dist(swing["ball0"], (bx1, by1))
         advance = bx1 - swing["ball0"][0]             # +x is the attacked mouth in this gym
         e_play = None if b_exit is None else G.exit_angle(swing["ball0"], b_exit, swing["swing_yaw"])
-        rows.append({"seed": seed, "ep": ep, "swing": True, **latched, **swing,
+        rows.append({"seed": seed, "ep": ep, "swing": True, "opponents": opponents, **latched, **swing,
                      "travel": round(travel, 4), "advance": round(advance, 4),
                      "whiff": travel < G.WHIFF_M, "back": bool(advance < 0.0),
                      "fell": int(d.falls) > swing["falls_before"],
@@ -232,6 +241,11 @@ def main() -> None:
     c.add_argument("--explore", type=float, default=0.6,
                    help="share of episodes that pick a RANDOM safe candidate instead of the roll-out's")
     c.add_argument("--arm", default="", help="a MICRODUCK_CHASE string applied in the worker")
+    c.add_argument("--opponents", type=int, default=0,
+                   help="`kick_gym`'s own flag: contesting bodies in the gym (0 = the clean single-duck "
+                        "gym every dataset before 2026-09-10 was collected in). With 1, pair it with "
+                        "--arm 'kick_select_opps=1' so the selector actually sees them and `p_block` "
+                        "stops being an identically-zero column.")
     c.add_argument("--jobs", type=int, default=1)
     c.add_argument("--out", required=True)
 
@@ -251,7 +265,8 @@ def main() -> None:
 
     if a.cmd == "collect":
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-        args = [(s, a.episodes, a.spread, a.explore, a.arm) for s in range(a.seed0, a.seed0 + a.seeds)]
+        args = [(s, a.episodes, a.spread, a.explore, a.arm, a.opponents)
+                for s in range(a.seed0, a.seed0 + a.seeds)]
         rows: list[dict] = []
         if a.jobs > 1 and len(args) > 1:
             with ProcessPoolExecutor(a.jobs) as ex:
@@ -265,7 +280,8 @@ def main() -> None:
                 fh.write(json.dumps(r) + "\n")
         sw = [r for r in rows if r.get("swing")]
         cands = [len(r["cands"]) for r in rows if r.get("cands")]
-        print(f"{len(rows)} line-ups, {len(sw)} swings, "
+        print(f"{a.opponents} opponent(s), arm {a.arm!r}; "
+              f"{len(rows)} line-ups, {len(sw)} swings, "
               f"{sum(r.get('explored', False) for r in sw)} of them exploring; "
               f"median candidate set {int(np.median(cands)) if cands else 0}; "
               f"whiff {100 * sum(r['whiff'] for r in sw) / max(len(sw), 1):.0f}%; -> {a.out}")
