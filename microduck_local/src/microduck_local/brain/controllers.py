@@ -2232,6 +2232,38 @@ class ChaseParams:
     # `contesting` is computed). Needs `use_color`, since turning this on
     # against a TEAMMATE is how two of ours shoulder each other. 0 = off.
     contest_margin: float = 0.0
+    # THE DUEL (roadmap C.4, second half; B-Human's Zweikampf). `contesting`
+    # above is the case where THIS duck is nearer the ball. This is the other
+    # one - the opponent is nearer - and it is not the same question. The
+    # three answers already measured (`lineup_keepout`, `opp_keepout`,
+    # `contest_margin`) all asked "do I turn away from that body", and all
+    # three were null; the population probe that followed them
+    # (scripts/probe_contest.py) said why: the contest rule can act on 0.07%
+    # of duck-ticks, so no whole-match metric could have moved.
+    #
+    # `scripts/probe_duel.py` takes the same measurement for THIS case first,
+    # on the shipped brain. The situation - an opponent inside `duel_near` of
+    # the ball, nearer to it than this duck, this duck going for the ball -
+    # is 9.35% of duck-ticks by the world's own geometry and **7.44% as the
+    # brain can actually see it** (2v2, 4 seeds x 120 s), a hundred times the
+    # contest rule's population. And it is where the ball is lost: over the
+    # next 2 s the other side holds the ball 47-65% of the time against this
+    # duck's team's 12-27%, where in the same states with no opponent nearer
+    # it is 60% ours to 6% theirs. What the duck does today is flinch
+    # (`retreat` 6.2% of ticks, `avoid` 4.7%) or line up on a ball it will
+    # not get (2.0%).
+    #
+    # So this is a POSITIONING rule, which is the one kind the three nulls
+    # leave open. A shield - a body between the opponent and the ball - is
+    # not available when the opponent is the nearer of the two; what is left
+    # is the BLOCK: stand `duel` metres goal-side of the ball on the line to
+    # our OWN goal, facing the ball, so the opponent's next touch has to come
+    # through this duck. The value is the standoff in metres; 0 = off (the
+    # shipped chain, to the bit). It never fires for a supporter (the role
+    # branch is ahead of it, so a post is never abandoned) nor in `settle`
+    # (that is a swing about to happen), and `avoid` still owns a touch.
+    duel: float = 0.0
+    duel_near: float = 0.35        # an opponent this close to the ball is contesting it (probe_duel's number)
     # The ToF sees the ball at the feet (tof_floor_ball): inside `tof_ball_m`
     # with the head dipped, a floor blob feeds the tracker as a ball sighting
     # when the camera has none - the level camera loses a floor ball inside
@@ -2650,6 +2682,9 @@ class Chase:
         self._field_prev: tuple[float, float] | None = None  # the field's last spot (support_field hysteresis)
         self._kickoff_wait = False                           # standing off the other side's kickoff (kickoff_wait)
         self.post: tuple[float, float] | None = None         # where a supporter is holding, for probes and tests
+        self.contesting = False                              # the contest fired this tick (contest_margin)
+        self.dueling = False                                 # the duel fired this tick (duel)
+        self.duel_spot: tuple[float, float] | None = None    # ...and where it is standing, for probes and tests
         self._sup_poses: list[tuple[float, float, float]] = []   # (t, x, y) while supporting: the freeze window (support_unstick_s)
         self._bump_t = -1e9                                  # last contact
         self._bump_t0 = -1e9                                 # onset of the current contact episode
@@ -3196,6 +3231,32 @@ class Chase:
             self.contesting = mine + p.contest_margin < theirs
         if self.contesting and duck_rb is not None and duck_rb[0] >= p.duck_touch:
             near_duck = False                      # hold the line; `avoid` still owns a touch
+        # THE DUEL (`duel`, roadmap C.4's second half): the OTHER side of the
+        # same geometry - an opponent inside `duel_near` of the ball and
+        # NEARER to it than this duck. Read off `_opponents`, which is the
+        # honest sense with the colour vote off (a duck track the board does
+        # not own), and off the ball this duck can actually see: the
+        # reachable set is what the brain perceives, not what the world
+        # knows (probe_duel: 7.44% against the world's 9.35%). Computed
+        # here, acted on in the elif chain below.
+        self.dueling = False
+        self.duel_spot: tuple[float, float] | None = None
+        if p.duel > 0.0 and seen and ball is not None and ball.xy is not None:
+            bxy = self._ball_xy(odom, ball)
+            mine = math.hypot(bxy[0] - odom[0], bxy[1] - odom[1])
+            theirs = min((math.hypot(bxy[0] - ox, bxy[1] - oy)
+                          for ox, oy in self._opponents(t)), default=math.inf)
+            if theirs <= p.duel_near and theirs < mine:
+                gx, gy = self._own_goal(odom)
+                u = math.atan2(gy - bxy[1], gx - bxy[0])       # from the ball toward OUR goal
+                sx, sy = bxy[0] + p.duel * math.cos(u), bxy[1] + p.duel * math.sin(u)
+                if self.bounds is not None:                     # never a spot in the boards
+                    m = p.support_margin
+                    sx = float(np.clip(sx, -self.bounds[0] + m, self.bounds[0] - m))
+                    sy = float(np.clip(sy, -self.bounds[1] + m, self.bounds[1] - m))
+                self.dueling, self.duel_spot = True, (sx, sy)
+        if self.dueling and duck_rb is not None and duck_rb[0] >= p.duck_touch:
+            near_duck = False                      # walking to the block spot is not a flinch; `avoid` still owns a touch
         clearly_nearer = (other is not None and other.age(t) <= p.lost_s and other.range < p.yield_range
                           and ball is not None and other.range < p.yield_ratio * ball.range
                           and abs(_wrap(other.bearing - ball.bearing)) < 0.8)
@@ -3309,6 +3370,24 @@ class Chase:
             if p.support_gaze and fresh and ball is not None and ball.range < p.head_range \
                     and abs(ball.bearing) < p.gaze_bearing_max:
                 gaze_at = ball.range                        # a supporter that looks at the ball (support_gaze)
+        elif self.dueling and self.state != "settle":
+            # Stand `duel` metres goal-side of the ball, facing it. Not a
+            # line-up: the servo faces where it WALKS, and only on arrival
+            # does the duck square up on the ball, so the body ends between
+            # the ball and our goal with the camera on it — and no square-up
+            # ever happens next to the ball, which is what turns a line-up
+            # into a shove (the `block` branch above, same reasoning).
+            self.spot = None
+            vx, wz, ddist, _ = self._servo(odom, self.duel_spot, cold, p.intercept_tol)
+            if ddist <= p.intercept_tol:
+                bb = _wrap(math.atan2(self._ball_xy(odom, ball)[1] - odom[1],
+                                      self._ball_xy(odom, ball)[0] - odom[0]) - odom[2])
+                vx, wz = (0.0, 0.0) if abs(bb) < 0.3 else turn(bb, cold)[::2]
+                if wz != 0.0 and self._beside(t):
+                    vx, wz = 0.0, 0.0              # a body beside us: never a turn in place
+            if fresh and ball.range < p.head_range and abs(ball.bearing) < p.gaze_bearing_max:
+                gaze_at = ball.range
+            self.state = "duel"
         elif yielding and self.state not in ("settle",):
             vx, wz = 0.0, 0.0
             self.spot = None
