@@ -22,6 +22,7 @@ Locked here:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -35,10 +36,8 @@ probe = pytest.importorskip("probe_declined_swings")
 # (read, not pinned — the owner set the left to its in-play +0.209 on
 # 2026-09-11, which is when a pinned constant went red) and the pre-correction
 # bench pair as the counterfactual. Named so a test failure says which it ran.
-import json as _json
-from pathlib import Path as _Path
-_KICKS = _Path(__file__).resolve().parents[1] / "policies" / "kick"
-SHIPPED = tuple(_json.loads((_KICKS / f"kick_{f}.json").read_text())["exit_rad"] for f in ("left", "right"))
+_KICKS = Path(__file__).resolve().parents[1] / "policies" / "kick"
+SHIPPED = tuple(json.loads((_KICKS / f"kick_{f}.json").read_text())["exit_rad"] for f in ("left", "right"))
 CORRECTED = (-0.225, -0.036)   # the bench pair the shipped sidecar carried before 9ca8d9d
 
 EPISODE_KEYS = {"kind", "ep", "seed", "swings", "declines", "pushes", "t_first_swing",
