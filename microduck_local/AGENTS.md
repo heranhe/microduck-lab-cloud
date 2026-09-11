@@ -850,6 +850,24 @@ every other. A permanently-red CI is the cry-wolf failure at the level of the
 whole project, so when the goldens go stale again, re-record them the same
 morning, not "before someone pushes".
 
+**The golden bits are a property of the HOST, not of the CPU model string
+(2026-09-10, commit 7c7ddc4).** GitHub's hosted ubuntu runners report one
+model string ("AMD EPYC 9V74 80-Core Processor") from more than one host, and
+those hosts do not agree to the last bit: a commit whose whole diff was 38
+lines of `docs/roadmap.md` failed all 11 golden assertions minutes after the
+identical tree passed them, by 1-2 ulp on `qpos` and up to 5.6e-13 relative
+on the reward sums an episode accumulates. So the exact comparison
+(`float.hex` and the rollout digest) runs only where the lab can pin the
+hardware — `BIT_EXACT_PLATFORMS` in `tests/golden_store.py`, today Apple
+Silicon — and everywhere else the same rollout is compared by tolerance:
+1e-9 when the machine reports the recorder's CPU model, 1e-7 when it does
+not. That is still a physics regression test: perturbing one BAM constant by
+1e-9 relative fails it, against the 5th-digit move a model re-export makes.
+`MICRODUCK_GOLDEN_BITS=1` forces the exact comparison on (the record-goldens
+workflow uses it on its own re-run, the one place on Linux where the bits are
+verifiable), `=0` forces it off. Each Linux CI job prints `lscpu` so the next
+disagreement says which host it landed on.
+
 Still true: run `pytest tests/` — the whole suite, ~6 minutes — before anything
 you would be embarrassed to have broken. Subsets are not a substitute; they
 were green throughout the five commits above, and CI takes 25 minutes to tell
