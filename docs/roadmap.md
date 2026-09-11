@@ -12715,6 +12715,251 @@ slot ticks `runs/sensedplay/slots-J-{landright,landleft,portright,portleft}.json
         --episodes 40 --seeds 12 --seed0 0 --jobs 3 --out runs/sensedplay/gym-J-landleft-b0.jsonl
     uv run python scripts/compare_gym.py ship=... port-left=... land-left=...
 
+**Follow-up K: the shallow half of the gaze window, cut — the RIGHT foot becomes
+the best sensed kick ever measured in play, the left foot's dive survives the
+cut, and the brain half of the prescription measures OFF (2026-09-11).**
+
+Follow-up J's prescribed next cut, both halves of it: train the tip on head
++0.60..+1.20 only (the deep half, where a landscape frame can hold the box),
+and have the brain guarantee that pitch at the handover. Identical to J in
+every other respect — same rung-2 warm starts, seed 0, `face_line` 12.0, 32
+envs, full 4-16 × 1-13 cm box, `MICRODUCK_BALL_HFOV_DEG=116 VFOV_DEG=60`
+exported for the stage (the recipe still ships portrait and still waits on the
+photograph). Tip stage only, 2M steps a foot, warm-started from
+`lastmetre-land-{right,left}-rung2`. `log_std` flat at 0.581-0.593 over both
+chains, no ratchet. Runs `lastmetre-land-{right,left}-v2` (group `lastmetre`).
+Under three minutes a foot on this Mac.
+
+**The reachable set first: the cut nearly doubles the trained sighting.** The
+recipe's own projection (`lastmetre._lm_sense`, `seen` at spawn), ball swept
+over the box, gaze drawn uniformly from the window, 600 draws a cell, landscape
+116 × 60 (half-angles 58 × 30°):
+
+| tip gaze window (offsets on HOME: neck / head / \|yaw\|) | box | right | left |
+|---|---|---|---|
+| J's tip (−0.60,0.0 / **+0.10**,+1.20 / 0) | full | 42.3 % | 41.8 % |
+| **K's tip (−0.60,0.0 / +0.60,+1.20 / 0)** | full | **70.2 %** | **70.0 %** |
+| " | 6 × 6 | 69.0 % | 68.8 % |
+| " | strike spot | 71.5 % | 71.2 % |
+| J's tip | 6 × 6 | 39.3 % | 39.2 % |
+
+**…and the reachable set of the BRAIN's handover, which is the reason the cut
+alone cannot be the whole fix.** The head pitch at the swing over the 818
+shipped swings of J's own blocks (`head_pitch`, as an offset on HOME 0.3491,
+`runs/sensedplay/gym-J-ship-b{0,100}.jsonl`):
+
+| shipped handover, head off HOME | p10 | median | p90 | ≥ +0.60 |
+|---|---|---|---|---|
+| kick_left (450 swings) | +0.030 | +0.539 | +0.588 | 4.0 % |
+| kick_right (368) | +0.208 | +0.554 | +0.581 | 2.4 % |
+| both (818) | +0.034 | **+0.548** | +0.586 | **3.3 %** |
+
+(neck: median −0.097, p10 −0.171 — J's quoted +0.55 / −0.10 and p10 +0.03 /
+−0.17 reproduce exactly.) **The p90 is not an accident: `ChaseParams.head_down`
+= 0.6 is the cap on the gaze command, so the shipped brain cannot hand over
+inside the K window at all** — its ceiling IS the window's floor. And at that
+pose the landscape frame is empty: the same projection at a single pinned gaze
+gives **0.0 % of the box in frame at the handover median (+0.55 / −0.10), 0.0 %
+at the p10, 3.3 % at the p90**, and only 24.7 % at +0.70, 53.5 % at +0.90,
+85.8 % at +1.10. The sighting the tip is trained on begins at about +0.65.
+
+**The brain knob: one exists, it cannot guarantee the pitch, and it measures
+worse.** In `settle` the tracking pitch is explicitly excluded
+(`_head_pose`/`track_pitch` are gated `self.state != "settle"`), so the
+handover pose comes from the line-up gaze law clipped at `head_down` — unless
+`settle_gaze_neck` / `settle_head_down` are set, both of which ship at 0.0
+(measured in 12ak against the VENDORED kick: whiff 9 → 13 %). `settle_head_down`
+lifts that clip in the settle only and is settable from the command line. What
+it delivers, measured on one block with the vendored kicks (393-457 swings an
+arm, head off HOME):
+
+| arm (`MICRODUCK_CHASE`) | head med L / R | ≥ +0.60 L / R | p10 |
+|---|---|---|---|
+| shipped | +0.54 / +0.55 | 3 % / 3 % | +0.03 |
+| `settle_head_down=1.2` | **+0.72 / +0.77** | **55 % / 78 %** | +0.02 |
+| `gaze_slant=1` | +0.54 / +0.55 | 3 % / 1 % | +0.03 |
+| `gaze_slant=1,settle_head_down=1.2` | +0.69 / +1.04 | 52 % / 72 % | +0.03 |
+| `settle_gaze_neck=0.5,settle_head_down=1.2` | +0.56 / +0.58 | 38 % / 43 % | +0.03 |
+
+So a shipped knob moves the MEDIAN handover into the window but **cannot pin
+it**: the p10 stays at +0.02 in every arm, because the settle gaze only fires
+when there is a belief to aim at (`gaze_at is not None`), and a quarter of
+swings have none. The one-line knob that WOULD guarantee it is a FLOOR rather
+than a cap — a `settle_head_min` applied unconditionally in the settle branch,
+`head = self._head_pose(max(cmd, p.settle_head_min), …)` — which is not built
+here; `settle_head_down=1.2` is measured instead, as the arm the shipped tree
+can actually run.
+
+*Instrument trap, recorded because three arms read byte-identical before it was
+caught:* **`kick_gym.py` POPS `MICRODUCK_CHASE` unless `--arm` is given.** An
+exported knob string measures the shipped path and `is_identical` says
+BROKEN — correctly, about the harness rather than the knob. Arms must be passed
+as `--arm 'label=knob=value'`. (`runs/sensedplay/gym-K-trap-envwiped-b0.jsonl`
+is that probe, kept: it is the shipped arm under a knob that never arrived.)
+
+**The bench, landscape env, 2 seeds a cell** (`grid_kick_bench_sensed.py`; falls
+per 180; poses at 12 seeds). The shipped rows reproduce J and 12as to the point:
+
+| arm | box (level / line-up / neck-split) | sweet | falls /180 | \|turn\| | pose whiff | pose falls /60 | pose travel |
+|---|---|---|---|---|---|---|---|
+| shipped `kick_right.onnx` | 69 / 67 / 77 % | 100 % | 7/6/6 | 13/21/14° | 0 % | 1 | 1.09-1.32 m |
+| `lastmetre-land-right-v1` (J) | 71 / 98 / 96 % | 100 % | **25**/9/2 | 12/24/24° | 0 % | 9 | 0.57-1.11 m |
+| **`lastmetre-land-right-v2`** | **98 / 99 / 93 %** | 100 % | **6/5/5** | **16/17/19°** | **0 %** | **3** | 0.78-1.09 m |
+| the same policy, BLINDFOLDED | 36 / 42 / 37 % | 61/100/83 % | 92/0/0 | 20/9/3° | — | — | — |
+| shipped `kick_left.onnx` | 82 / 79 / 82 % | 100 % | 5/5/8 | 7/9/5° | 0 % | 0 | 1.01-1.21 m |
+| `lastmetre-land-left-v1` (J) | 94 / 94 / 94 % | 100 % | 20/8/8 | 15/13/18° | 0 % | 7 | 0.68-1.17 m |
+| **`lastmetre-land-left-v2`** | 79 / 93 / 98 % | 78/100/100 % | **91/34/48** | 17/14/14° | **25 %** at level | 7 | 0.23-1.34 m |
+| the same policy, BLINDFOLDED | 42 / 76 / 73 % | 72/100/100 % | 100/9/46 | 17/6/14° | — | — | — |
+
+**The right foot's level-row falls, which were J's whole bill, are gone: 25 → 6
+per 180, and the 20° turn bar is met at all three grid poses (16/17/19°) — the
+first sensed arm on this page to do that.** The left foot went the other way:
+91 falls per 180 at the level row against J's 20, and 34/48 at the two PINNED
+DEEP poses against J's 8/8. Cutting the shallow half did not make the left tip
+safe at depth; it made it worse everywhere.
+
+**In play, the test that matters** (`kick_gym.py --episodes 40 --seeds 12
+--jobs 6`, blocks seed0 0 and 100, 24 seeds pooled; one foot pinned through
+`MICRODUCK_SKILL_KICK_{LEFT,RIGHT}` to a scratch copy beside `{"sensed": true,
+"exit_rad": <calibrated>}`, the other vendored; `World.skill_path` /
+`skill_sensed` / `kick_exits()` and the duck's own `detector.spec` (116 × 60 @
+10 Hz) asserted off the CONSTRUCTED World first). The shipped blocks were
+CHECKED, not assumed: `gym-J-ship-b0` re-ran `outcome_key`-identical on today's
+tree (the last code commit predates it), so J's shipped rows are reused and
+re-measured as the `ship` arm of the new files. Exits calibrated one block at
+0.0 a foot: **right +0.0375, left +0.0726**.
+
+| kick_left | swings | whiff | vs ship | ±MDE | p | verdict | travel | adv | back line | fell | ±MDE | p |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| shipped (base) | 450 | 7.6 % | — | — | — | — | 1.03 m | 0.83 m | 4.9 % | 0.4 % | — | — |
+| `…-land-left-v1` (J) | 464 | 5.2 % | −2.4 | 3.2 | 0.140 | null | 0.87 m | 0.73 m | 1.5 % | 8.8 % | 2.7 | 0.000 |
+| **`…-land-left-v2`** | 480 | 7.1 % | −0.5 | 3.3 | 0.782 | null | 0.79 m | 0.68 m | 0.6 % | **5.6 %** | 2.2 | **0.000** |
+| shipped + knob | 420 | 9.5 % | +2.0 | 3.7 | 0.298 | null | 0.89 m | 0.66 m | 4.8 % | 1.2 % | 1.2 | 0.218 |
+| **v2 + knob** | 467 | 9.9 % | +2.3 | 3.7 | 0.218 | null | 0.81 m | 0.55 m | 1.5 % | **45.4 %** | 5.5 | **0.000** |
+
+| kick_right | swings | whiff | vs ship | ±MDE | p | verdict | travel | adv | back line | fell |
+|---|---|---|---|---|---|---|---|---|---|---|
+| shipped (base) | 368 | 9.5 % | — | — | — | — | 0.87 m | 0.56 m | 0.8 % | 0.0 % |
+| `…-land-right-v1` (J) | 369 | 4.9 % | −4.6 | 3.7 | 0.015 | effect | 0.89 m | 0.80 m | 0.0 % | 0.0 % |
+| **`…-land-right-v2`** | 353 | **2.3 %** | **−7.2** | 3.5 | **0.000** | **effect** | **0.96 m** | **0.86 m** | 0.0 % | **0.0 %** |
+| shipped + knob | 366 | 9.0 % | −0.5 | 4.2 | 0.817 | null | 0.65 m | 0.35 m | 0.3 % | 0.0 % |
+| v2 + knob | 339 | 6.8 % | −2.7 | 4.0 | 0.187 | null | 0.80 m | 0.73 m | 0.0 % | 0.3 % |
+
+The contrasts, whiff and the falls veto together:
+
+| contrast | shift | ±MDE | p | verdict |
+|---|---|---|---|---|
+| RIGHT whiff, vendored → K tip | 9.5 → **2.3 %** | 3.5 | 0.000 | **effect** |
+| RIGHT whiff, J tip → K tip | 4.9 → 2.3 % | 2.7 | 0.060 | null |
+| RIGHT whiff, K tip → K tip + knob | 2.3 → 6.8 % | 3.1 | 0.004 | **effect (worse)** |
+| RIGHT falls, vendored → K tip | 0.0 → 0.0 % (0 of 353) | — | 1.000 | NO RESULT |
+| LEFT whiff, vendored → K tip | 7.6 → 7.1 % | 3.3 | 0.782 | null |
+| LEFT whiff, J tip → K tip | 5.2 → 7.1 % | 3.1 | 0.222 | null |
+| LEFT **falls**, vendored → K tip | 0.4 → **5.6 %** | 2.2 | 0.000 | **effect** |
+| LEFT falls, J tip → K tip | 8.8 → 5.6 % | 3.3 | 0.056 | null (unresolved) |
+| LEFT falls, K tip → K tip + knob | 5.6 → **45.4 %** | 5.5 | 0.000 | **effect (worse)** |
+| LEFT falls, vendored → vendored + knob | 0.4 → 1.2 % | 1.2 | 0.218 | null |
+
+Both blocks agree on every row (left K tip whiff 9.1 / 5.1 %, falls 5.3 / 5.9 %;
+right K tip 1.7 / 2.9 %, falls 0 / 0; v2+knob left falls 44.0 / 46.6 %), and the
+non-pinned foot is flat in each arm (right foot under the left-pinned arm 8.7 %
+against the vendored 9.5 %; left foot under the right-pinned arm 7.2 % against
+7.6 %).
+
+**J's diagnosis is REFUTED where it can be tested cleanly.** "A policy that
+never sees a level spawn cannot learn the dive" predicted that the left foot's
+falls would go with it. They did not: the dive reproduces from a PINNED DEEP
+spawn. `render-rollout`, landscape FOV, gaze pinned at neck −0.10 / head +0.75
+(the brain's own handover, in the middle of the trained window), left v2, seed
+40: 1 of 4 episodes terminates at 0.54 s with trunk pitch running +1 → +25 →
++48 → **+73°**, `head_z` 0.242 → 0.085 m, and `seen` going 1 → 0 as it goes
+down — it dives out of its own frame. The pinned bench rows say the same
+(34 and 48 falls per 180 at the two deep poses, against J's 8 and 8). In play
+the falls also sit at the deep end of the handover census (left v2: 7.0 % at
+head +0.60..0.90 against 0.7 % below +0.20) — read that one as corroboration
+only, since `head_pitch` is recorded one control step after the skill takes the
+body, so a policy that is about to dive has already begun pitching its head.
+(The same caveat explains why the sensed arms' handover census reads +0.63-0.67
+against the vendored +0.55: part of that is the tip's own first action.)
+
+**Verdict: half the prescription is right, and it belongs to the right foot.**
+Cutting the shallow half of the tip window is exactly the reachable-set move it
+claimed to be (42 → 70 % of the box in frame at spawn), and on the right foot it
+converts: **whiff 2.3 % against the vendored 9.5 % (p 0.000), zero falls in 353
+swings, connected travel 0.96 m, advance 0.56 → 0.86 m, backward lines 0.0 %,
+the bench's level-row falls 25 → 6 and the 20° turn bar met at all three grid
+poses** — every stated bar, and the best sensed arm this line has produced. It
+is nevertheless a NULL against J's own tip (4.9 %, p 0.060): the cut is not
+*proven* better in play, only not worse and much safer on the bench. On the left
+foot the cut fails: the falls halve but stay an effect against the vendored kick
+(0.4 → 5.6 %, p 0.000), travel misses the 0.9 m bar at 0.79 m, whiff is a null,
+and the bench gets worse in every row. **And the brain half of the prescription
+measures OFF**: `settle_head_down=1.2` — the only shipped knob that moves the
+handover pitch into the trained window — costs the right foot its win
+(2.3 → 6.8 %, p 0.004) and turns the left foot's dive into a rout
+(5.6 → 45.4 %, p 0.000), while still not pinning the pitch (p10 +0.02). Making
+the brain hand over at the pose the policy trained on is not the missing
+guarantee; on this pair it is the accelerant.
+
+**Recommendation: promote nothing** — `policies/kick/` stays the vendored w12
+pair; that is the owner's call and the case is stated, not taken. The case FOR
+the right foot is the strongest this line has had: 2.3 % against 9.5 % on 353
+swings across two agreeing blocks (1.7 % and 2.9 %), no falls, +0.30 m of advance a kick, the turn
+bar finally met. The case against shipping it today is three things, all of them
+honest: it is **one training seed** (12as's standing caveat — the second seed a
+foot is the next thing to run, and it is under three minutes each), it is a null
+against the policy J already measured, and **blindfolded it collapses** (box
+36/42/37 %, 92 falls per 180 at the level row) — it is a kick that is only as
+good as the detector on the robot, which is a sim2real bet the 10 Hz / 116 × 60
+model has not yet been checked against hardware. The left foot must not ship at
+5.6 % falls, and the lever for it is not the gaze window: two windows, two
+ladders and a brain knob have now all left the dive in place.
+
+Reviewer's re-read of the six row files: left v2 7.1 % whiff / 5.6 % falls,
+left v2 + knob 9.9 / 45.4 %, right v2 2.3 / 0.0 %, right v2 + knob 6.8 / 0.3 %,
+shipped 7.6 / 0.4 % and 9.5 / 0.0 % — the tables reproduce.
+Runs: `lastmetre-land-{right,left}-v2` (group `lastmetre`, tip stage only, 2M,
+`--init-from runs/lastmetre-land-{right,left}-rung2`).
+Rows: `runs/sensedplay/gym-K-{ship,v2left,v2right}-b{0,100}.jsonl` (each file
+carries both the un-knobbed arm and `settle_head_down=1.2`), calibration
+`runs/sensedplay/gym-K-v2{left,right}-cal-b0.jsonl`, and the instrument-trap
+probe `runs/sensedplay/gym-K-trap-envwiped-b0.jsonl`.
+
+    # the tip, one foot (~2.5 min a foot on this Mac)
+    export MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60   # the robot's camera
+    MICRODUCK_KICK_BOX_AHEAD=0.04,0.16 MICRODUCK_KICK_BOX_SIDE=0.01,0.13 \
+    MICRODUCK_LM_GAZE_NECK=-0.60,0.0 MICRODUCK_LM_GAZE_HEAD=0.60,1.20 MICRODUCK_LM_GAZE_YAW=0.0,0.0 \
+      uv run train-behavior kick_right_sensed --run-name lastmetre-land-right-v2 --envs 32 \
+      --steps 2000000 --seed 0 --weights-json '{"face_line": 12.0}' --group lastmetre \
+      --init-from runs/lastmetre-land-right-rung2 --title … --description …
+
+    # the reachable set of a gaze WINDOW (recipe projection, no policy)
+    MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60 \
+      uv run python <scratch>/window.py --foot right --n 600 \
+        Jtip:full:-0.60,0.0:0.10,1.20:0.0,0.0  Ktip:full:-0.60,0.0:0.60,1.20:0.0,0.0
+
+    # the bench, with the bench's env at landscape TOO
+    MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60 \
+      uv run python scripts/grid_kick_bench_sensed.py --foot right --seeds 2 \
+        v2=runs/lastmetre-land-right-v2/policy.onnx \
+        v2-BLIND:kick_right=runs/lastmetre-land-right-v2/policy.onnx \
+        v1=runs/lastmetre-land-right-v1/policy.onnx shipped=policies/kick/kick_right.onnx
+    # …and the same with --mode poses --seeds 12
+
+    # one gym block, BOTH arms (the knob MUST go through --arm: kick_gym pops
+    # MICRODUCK_CHASE otherwise and measures the shipped path)
+    MICRODUCK_SKILL_KICK_RIGHT=<scratch>/skills/v2right/kick_right.onnx \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 0 --jobs 6 \
+        --arm 'v2=' --arm 'knob=settle_head_down=1.2' \
+        --out runs/sensedplay/gym-K-v2right-b0.jsonl        # repeat with --seed0 100
+
+    # the dive, pinned at the brain's own handover pose
+    MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60 \
+      uv run render-rollout --policy runs/lastmetre-land-left-v2/policy.onnx \
+        --behavior kick_left_sensed --seed 40 --episodes 4 --camera three-quarter \
+        --env MICRODUCK_LM_GAZE_NECK=-0.10,-0.10 --env MICRODUCK_LM_GAZE_HEAD=0.75,0.75 \
+        --env MICRODUCK_LM_GAZE_YAW=0.0,0.0 --out /tmp/rr-left-deep
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
