@@ -11913,10 +11913,378 @@ and `gym-ship25-b{0,100}.jsonl` (25 Hz) for the 48-seed table. **Nothing
 committed: no source file, no default, no preset, no policy.**
 
 → **What settles it next:** not this knob. The two questions it leaves are
-(1) **what the sim's own 10 Hz is buying against the robot's 2 Hz** — the arm
+(1) **[answered below, same night]** what the sim's own 10 Hz is buying against the robot's 2 Hz — the arm
 nobody has run, and the one that runs in the honest direction: `MICRODUCK_CAMERA=
 "rate_hz=2.0"` on the same four blocks, with `track_age` and `seen` read beside
 whiff, because if 2 Hz is also a null then the detector rate is simply not a
 lever on this task at any setting and the whole line closes; and (2) the last
 12as mismatch still standing, **the tracker's ~5.5 cm placement error**
 (`Tracker._place`), which G's verdict B already named as the only one left.
+
+**FOLLOW-UP (1), RUN: what the sim's 10 Hz buys against the robot's 2 Hz — it
+buys the whole kick. 10 Hz IS a flattering default (2026-09-10).**
+
+12av closed by naming the arm nobody had run, in the honest direction. Run, on
+the same four blocks plus the 5 Hz rung, plus a paired ledger and the loss
+probe. **The answer is the opposite of the 25 Hz null: the detector rate is a
+very large lever on this task, and the whole lab's kick-quality story is
+measured at 5x the rate the robot can sustain.**
+
+**A. The reachable set, before any compute.** Asserted on the CONSTRUCTED
+`World` — the gym's (`gym_scenario()` → `World(...)`) and the pitch's
+(`make_pitch(per_side=2)`, all four ducks), not on `from_env` alone:
+
+| `MICRODUCK_CAMERA` | `spec.rate_hz` | `detector.period` | fov | `px_h` | projection |
+|---|---|---|---|---|---|
+| `rate_hz=10.0` (default) | 10.0 | 0.1000 s (10.00 Hz) | 116x60 | 640 | pinhole |
+| `rate_hz=5.0` | 5.0 | 0.2000 s (5.00 Hz) | 116x60 | 640 | pinhole |
+| `rate_hz=2.0` (the robot) | 2.0 | **0.5000 s (2.00 Hz)** | 116x60 | 640 | pinhole |
+
+**And the reachable-set fact that turns out to be the whole mechanism: at 2 Hz
+the detector period is LONGER than the brain's own freshness gate.**
+`Chase.DET_MAX_AGE` is **0.4 s**; the 2 Hz period is **0.5 s**. Replaying
+`Detector.sample`'s own arrival schedule with the datasheet latency
+(0.026 s + |N(0, 0.02)|) over 600 s at dt 0.02, with a ball visible in EVERY
+frame and never missed:
+
+| rate | period | gate | ceiling on ticks with a FRESH detection |
+|---|---|---|---|
+| 10 Hz | 0.10 s | 0.4 s | **100.0 %** |
+| 5 Hz | 0.20 s | 0.4 s | **100.0 %** |
+| 2 Hz | 0.50 s | 0.4 s | **82.9 %** |
+
+So 2 Hz is not "the same brain with less data" — it is the first rung where the
+sensor cadence alone blinds the brain on a sixth of its ticks. Every constant
+downstream of `DET_MAX_AGE` was fitted above that threshold. This is why the
+ladder below is so sharply non-linear, and it is a property of the CODE, not of
+the experiment.
+
+*The tree is inert and the arms diverge.* `runs/detrate/gym-ship10-b200.jsonl`
+re-run on the frozen snapshot reproduces bit for bit (`kick_gym.is_identical`
+True, 480 rows, 399 swings, 24 whiffs), so 12av's and 12as-G's existing 10 Hz
+rows are reused rather than re-run. Against them the 2 Hz arm shares **zero**
+`(seed, ep, ahead, side)` swing tuples on all four blocks.
+
+**B. At the swing — and unlike 25 Hz, everything moves** (medians over the
+48-seed pool, both feet; the 5 Hz column is the 24-seed b0+b100 pair):
+
+| at the swing | 10 Hz | 5 Hz (24 sd) | 2 Hz |
+|---|---|---|---|
+| `plan_age` | 0.44 s | 0.44 s | 0.44 s |
+| `track_age` | 1.44 s | 1.58 s | **1.86 s** |
+| `track_sigma` | 0.155 | 0.096 | **0.062** (see caveat) |
+| `track_hits` | 45 | 21 | **8** |
+| `spot_age` | 0.04 s | 0.04 s | 0.04 s |
+| `pred_sigma` | 0.053 | 0.051 | 0.054 |
+| swings carrying a prediction at all | 13.0 % | 7.9 % | **2.3 %** |
+| time to first swing | 8.12 s | 10.04 s | 9.52 s |
+| **swing rate** (episodes that swung) | 84.4 % | 88.3 % | **88.9 %** |
+| ball AHEAD of the foot, med | 0.104 m | — | **0.150 m** |
+| ball \|SIDE\| of the foot, med | 0.054 m | — | **0.069 m** |
+| foot-to-ball distance, med | 0.120 m | — | **0.179 m** |
+| on the sweet spot | 22.5 % | — | **5.6 %** |
+
+**`track_age` moves here where it refused to move at 25 Hz, and the duck does
+not stop swinging — it swings MORE (84.4 → 88.9 %) and 6 cm further from the
+ball.** That is the whole mechanism, and it is [[kick-error-is-ball-side-offset]]'s
+law read through the rate: the swings that whiff are the ones with the ball
+further ahead and further to the side (2 Hz whiffs sit at 0.227 m from the
+foot, its connects at 0.141 m). **The kick itself is untouched** — swings that
+DO land on the sweet spot still connect at both rates (whiff there 1 % → 2 %);
+there are simply a quarter as many of them (364 → 96 swings).
+
+*It is the trigger's latency, not the track's precision.* Binned by
+`track_hits`, the 2 Hz arm is still 5x worse at MATCHED hit counts (hits 15-40:
+whiff 7.1 % at 10 Hz against 36.0 % at 2 Hz), so this is not "fewer samples to
+average". The ball is at rest (`ball_speed` med 0.013); what is stale is the
+duck's own arrival at the spot, and the +4.6 cm of extra `ahead` is about one
+extra detector period of walking.
+
+*Caveat on `track_sigma`:* it reads LOWER at 2 Hz (0.155 → 0.062) while the
+actual foot-to-ball error rises 6 cm. On 8 hits the tracker sees less
+disagreement to inflate its own variance with, so at this rate the reported
+sigma is **anti-correlated with the truth**. Do not use it as a confidence
+signal in a gate at low rates.
+
+**C. The gym, four blocks (48 seeds, 0-11 / 100-111 / 200-211 / 300-311),
+shipped pair at defaults, per foot.** `kick_gym --episodes 40 --seeds 12
+--jobs 3`, nothing but `MICRODUCK_CAMERA` changed:
+
+| pooled, 48 seeds | swings | whiff | shift | MDE | p | seeds better | conn travel | advance med | backward LINE | fell |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **LEFT** 10 Hz | 867 | 7.3 % | — | — | — | — | 1.13 m | 0.740 m | 6.1 % (47/775) | 5/867 (0.58 %) |
+| **LEFT** 2 Hz | 921 | **49.2 %** | **+41.9** | 4.2 | **0.000** | **0/48** | 0.60 m | 0.043 m | 11.2 % (44/394) | 7/921 (0.76 %) |
+| **RIGHT** 10 Hz | 754 | 7.6 % | — | — | — | — | 0.81 m | 0.349 m | 0.8 % (4/513) | 0/754 |
+| **RIGHT** 2 Hz | 785 | **46.9 %** | **+39.3** | 4.5 | **0.000** | **0/48** | 0.20 m | 0.077 m | 1.6 % (4/258) | 0/785 |
+| **pair** 10 Hz | 1621 | 7.4 % | — | — | — | — | 1.00 m | 0.531 m | 4.0 % (51/1288) | 5/1621 (0.31 %) |
+| **pair** 2 Hz | 1706 | **48.1 %** | **+40.7** | **3.1** | **0.000** | **0/48** | 0.37 m | 0.056 m | 7.4 % (48/652) | 7/1706 (0.41 %) |
+
+Backward LINE, pair: +3.4 pp, MDE 2.1, p 0.001 (left +5.1, MDE 3.2, p 0.002).
+**The veto is clean:** fell-in-window 0.31 → 0.41 % (5 → 7 swings, MDE 0.41,
+p 0.624), and the right foot never fell at either rate. `compare_gym`'s own
+verdict on the pooled pair: **effect**, worse on 48 seeds, better on 0.
+
+**It reproduces on every block** — this is not 12av's block-dependent coin:
+
+| block | 10 Hz swings / whiff | 2 Hz swings / whiff | shift |
+|---|---|---|---|
+| b0 (0-11) | 414 / 10.4 % | 425 / 48.0 % | +37.6 |
+| b100 | 405 / 7.7 % | 436 / 46.8 % | +39.1 |
+| b200 | 399 / 6.0 % | 428 / 50.7 % | +44.7 |
+| b300 | 403 / 5.5 % | 417 / 47.0 % | +41.5 |
+
+**The 5 Hz rung, two blocks (24 seeds, 0-11 + 100-111)** — the rung
+`camera-hardware.md` §4 says the 640 px recommendation needs:
+
+| 24 seeds | swings | whiff | shift | MDE | p | seeds better | conn travel | advance med | backward LINE | fell |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **LEFT** 10 Hz | 433 | 8.5 % | — | — | — | — | 1.13 m | 0.723 m | 6.8 % (26/385) | 2/433 |
+| **LEFT** 5 Hz | 466 | 17.0 % | **+8.4** | 4.4 | **0.000** | 4/23 | 0.83 m | 0.194 m | 7.5 % (27/358) | 3/466 |
+| **LEFT** 2 Hz | 449 | 48.8 % | **+40.2** | 6.0 | **0.000** | 0/24 | 0.62 m | 0.045 m | 11.1 % (22/199) | 4/449 |
+| **RIGHT** 10 Hz | 386 | 9.6 % | — | — | — | — | 0.74 m | 0.239 m | 1.2 % (3/252) | 0/386 |
+| **RIGHT** 5 Hz | 382 | 12.6 % | +3.0 | 4.4 | 0.188 | 11/24 | 0.64 m | 0.181 m | 0.4 % (1/225) | 0/382 |
+| **RIGHT** 2 Hz | 412 | 45.9 % | **+36.3** | 6.3 | **0.000** | 0/24 | 0.20 m | 0.077 m | 2.9 % (4/137) | 0/412 |
+| **pair** 10 Hz | 819 | 9.0 % | — | — | — | — | 1.00 m | 0.456 m | 4.6 % (29/637) | 2/819 (0.24 %) |
+| **pair** 5 Hz | 848 | 15.0 % | **+5.9** | 3.1 | **0.000** | 5/24 | 0.75 m | 0.185 m | 4.8 % (28/583) | 3/848 (0.35 %) |
+| **pair** 2 Hz | 861 | 47.4 % | **+38.4** | 4.3 | **0.000** | 0/24 | 0.34 m | 0.058 m | 7.7 % (26/336) | 4/861 (0.46 %) |
+
+Falls flat at both rungs (5 Hz +0.11 pp, MDE 0.53, p 0.683; 2 Hz +0.22 pp,
+MDE 0.57, p 0.449). **The ladder is sharply non-linear — 10 → 5 costs 5.9 pp,
+5 → 2 costs another 32.4 pp** — which is exactly where the `DET_MAX_AGE`
+threshold in A sits. 5 Hz costs a real but modest 6 pp of whiff and half the
+connected travel; **2 Hz is a different regime, not a further step.**
+
+**D. The pitch, paired, 24 seeds x 300 s of 2v2** (`eval-pitch --seeds 24
+--seed0 0 --seconds 300 --per-side 2 --ball-out-s 5`, one frozen PYTHONPATH
+snapshot of `src/`, both arms). **The headline ledger is FLAT and the kick
+column is not:**
+
+| 24 seeds, 2v2 x 300 s | 10 Hz | 2 Hz | Δ ± MDE (MDE %) | p | verdict |
+|---|---|---|---|---|---|
+| possession s/min | 40.61 | 39.94 | −0.67 ± 1.77 (4 %) | 0.441 | **null** |
+| ballAdvance m/min | 1.239 | 1.274 | +0.035 ± 0.184 (15 %) | 0.697 | **null** |
+| ballProgress m/min | 0.540 | 0.548 | — | — | unquotable |
+| spread / crowd / depth / ballOwnHalf | flat | flat | MDE 0–11 % | 0.15–1.0 | null |
+| goals | 26 | 26 | +0.00 ± 0.60 /run (55 %) | 1.000 | NO RESULT (730 seeds) |
+| falls | 5 | 4 | −0.04 ± 0.23 (111 %) | 0.714 | NO RESULT (2983 seeds) |
+| own goals | 5 | 10 | +0.21 ± 0.30 (146 %) | 0.170 | NO RESULT |
+| kicks (= SWINGS) | 157 | 186 | +1.21 ± 1.36 /run (21 %) | 0.079 | NO RESULT |
+| **kicks with a line** | **109** | **71** | **−1.58 ± 1.15 (25 %)** | **0.009** | **effect** |
+| **…as a share of kicks** | **69.4 %** | **38.2 %** | **−31.3 pp, MDE 10.6** | **<1e-5** | **effect** |
+| `kickCarry` per kick (pooled) | 0.280 m | 0.193 m | totals 44.0 m/157 → 35.8 m/186 | 0.173 paired | NO RESULT |
+| `kicksBack`, of kicks | 47/157 = 29.9 % | 59/186 = 31.7 % | +1.8 pp | 0.722 | not resolved |
+| `kicksBackLine`, of lines | 31/109 = 28.4 % | 16/71 = 22.5 % | −5.9 pp | 0.378 | not resolved |
+
+**Read the kick columns carefully — the naive read is backwards on two of
+them.** `kicks` counts every SWING (`Metrics._note_kick` stamps the tick the
+kick skill takes the body), so it RISES at 2 Hz for the same reason the gym's
+swing rate rises, not because the duck is playing better. And
+`kicksBackLine` falling 31 → 16 is the **denominator collapsing**: as a
+proportion of lines it does not move (28.4 → 22.5 %, p 0.378). **Do not quote
+"back-line halved" off this block.**
+
+*The cross-population check that makes the pitch and the gym one measurement:*
+the share of touches that move the ball at least 0.05 m in 0.5 s falls
+**79.5 % → 38.2 % in the gym** and **69.4 % → 38.2 % on the pitch** — the same
+quantity, two populations, landing on the same number at 2 Hz.
+
+**So the ledger's own registered primaries cannot see this and never could.**
+Possession is a true null at 4 % MDE; goals and falls are unreachable at 24
+seeds ([[read-the-mde-not-the-p]]). A 40 pp collapse in kick quality passes
+through a 2v2 match as **nothing measurable in possession or goals**, because
+the ball is dead 85 % of a run ([[soccer-dead-ball-budget]]) and the duck
+compensates by swinging 18 % more often. **The match is not sensitive to the
+kick; that is a fact about the benchmark, not a reprieve for the rate.**
+
+**E. The loss probe — and an instrument that BREAKS at 2 Hz.**
+`probe_ball_loss.py --seeds 12 --seconds 180 --per-side 2 --ball-out-s 5`:
+
+| 12 seeds x 180 s, 2v2 | 10 Hz | 2 Hz | Δ ± MDE | p | verdict |
+|---|---|---|---|---|---|
+| **ball in view (% of ticks)** | **52.6** | **34.2** | **−18.32 ± 5.68** | **0.000** | **effect**, better on 1/12 |
+| …against its own ceiling (A) | 52.6 / 100 % | 34.2 / **82.9 %** | 52.6 % → **41.3 %** of ceiling | — | still an effect |
+| blind FRAMES | 57.5 % | 58.3 % | +0.8 pp | — | flat |
+| loss events > 2 s | 471 | 595 | +26 % | — | |
+| blind seconds inside those | 3351 s | 4152 s | +24 % (38.8 % → 48.1 % of duck-time) | — | |
+| loss events > 1 s | 716 | 918 | +28 % | — | |
+| possession s/min | 20.66 | 19.10 | −1.56 ± 1.71 | 0.071 | null |
+| kicks / run | 3.92 | 5.08 | +1.17 ± 1.46 | 0.105 | NO RESULT |
+| falls / run | 0.08 | 0.08 | 0.00 ± 0.27 | 1.000 | NO RESULT |
+| ~~median loss (s)~~ | ~~1.02~~ | ~~0.10~~ | ~~12/12~~ | ~~0.000~~ | **ARTIFACT — do not quote** |
+| ~~loss events~~ | ~~1441~~ | ~~7159~~ | — | — | **ARTIFACT — do not quote** |
+
+**The artifact, named so nobody quotes it as a win.** `probe_ball_loss` opens a
+loss event when `w.t - last_ball_t > Chase.DET_MAX_AGE`. At 2 Hz that fires
+**0.4 s after every single frame** and closes 0.1 s later at the next one, so
+the probe manufactures ~5 sub-period events a second per duck. That is the
+entire "median loss 1.02 → 0.10 s, better on 12/12 seeds" — it is the freshness
+gap of A being counted as a loss, and it reads as a 12/12 IMPROVEMENT while the
+duck is strictly blinder. **On this instrument, at rates below 2.5 Hz, read
+only `viewFrac` (against its ceiling) and the >1 s / >2 s long-loss
+totals.** 12af / 12ar / 12ae's numbers are unaffected: they were all at 10 Hz,
+where the ceiling is 100 % and no event is manufactured.
+
+**What the rate does NOT change: where the ball goes.** The blind-frame cause
+mix is nearly identical (v_low 38 → 33 %, behind 27 → 31 %, h_out 16 → 15 %,
+occluded 11 → 12 %, small 6 → 8 %), and blind-frame share is flat at 57.5 →
+58.3 %. **A slower detector does not put the ball anywhere new; it takes longer
+to notice where the ball already was.** That is the same statement as
+[[ball-loss-audit-head-is-not-the-lever]] made about the head, from the other
+side.
+
+**F. The line-up, on an independent population** (`probe_board_states.py
+--episodes 20 --seeds 2`, ball at the boards — 12am's endings census).
+**The state machine is UNCHANGED and the arrival is destroyed:**
+
+| 40 episodes, ball at the boards | 10 Hz | 2 Hz |
+|---|---|---|
+| line-ups started / timeouts | 87 / 56 | 83 / 60 |
+| how they end | search 69, kick 5, chase 4, blocked 2 | search 63, kick 6, chase 2, blocked 3 |
+| swung | 5 | 6 |
+| time in `lineup` | 38 % | 36 % |
+| **dist to the spot at timeout, med** | **5 cm** | **24 cm** |
+| **closest during that line-up, med** | **3 cm** | **22 cm** |
+| **ever within 5 cm of the spot** | **61 %** | **40 %** |
+| \|heading err\| at timeout, med | 69° | 68° |
+
+The duck lines up just as often, times out just as often, and holds its heading
+just as well — **it simply never arrives**. Same mechanism as B, third
+population.
+
+**G. The CPU cost — the honest direction is also the cheap one.** `eval-pitch
+--seeds 2 --seed0 900 --seconds 60 --per-side 2 --ball-out-s 5 --jobs 2`, the
+protocol 12av priced 25 Hz on:
+
+| rate | wall | vs 10 Hz |
+|---|---|---|
+| 10 Hz | 16.52 s | — |
+| 5 Hz | 13.86 s | **−16 %** |
+| 2 Hz | 12.72 s | **−23 %** |
+
+(12av measured 25 Hz at **+30 %** on the same command. So the span from the
+robot's rate to the withdrawn 25 Hz arm is ~1.7x of simulator CPU, and the lab
+currently sits in the expensive half of it.)
+
+**VERDICT: yes, 10 Hz flatters the brain, and by more than any camera knob
+measured in this roadmap.** Against the robot's documented, thermally-bound
+2 Hz the shipped kick pair loses **41 pp of whiff** (7.4 → 48.1 %, MDE 3.1,
+worse on 48/48 seeds), **63 % of its connected travel** (1.00 → 0.37 m), **89 %
+of its per-swing advance** (0.531 → 0.056 m) and **half of its touches that
+move the ball at all** (69.4 → 38.2 % on the pitch, 79.5 → 38.2 % in the gym) —
+with the fall veto clean in both directions. **Every per-swing kick number in
+Track 4, 12a–12av inclusive, is measured at 5x the rate the robot can
+sustain.** The 25 Hz lead was withdrawn for being unreachable hardware; the
+10 Hz DEFAULT is unreachable hardware too, and unlike 25 Hz it is load-bearing.
+
+**But the ledger is a null and that is also a finding.** Possession, ballAdvance,
+shape, goals and falls do not move at all (possession null at 4 % MDE). A
+40 pp collapse in kick quality is invisible to the match benchmark, because the
+duck answers it by swinging 18 % more often into a ball that is dead most of
+the run. **`eval-pitch` is not an instrument for perception quality at any
+seed count** — the column that carries it is the kick-with-a-line share, which
+resolves at 24 seeds where `kickCarry` (56 % MDE) and goals (730 seeds) do not.
+
+**RECOMMENDATION TO THE OWNER (theirs to take; nothing changed here).**
+
+1. **Keep 10 Hz as the lab default, and put the gap on record** — do NOT move
+   the default to 2 Hz. Two reasons, both measured above. (a) It would
+   invalidate every soccer and tidy number on disk in one step, for no new
+   capability. (b) **2 Hz is not the same brain measured honestly — it is a
+   brain outside its own design envelope.** `Chase.DET_MAX_AGE` (0.4 s) is
+   shorter than the 2 Hz period (0.5 s), so at 2 Hz the shipped brain is
+   structurally stale a sixth of the time and `probe_ball_loss` breaks
+   outright. A 2 Hz default would be measuring a mis-specified controller, not
+   the hardware.
+2. **Stop quoting the sim's kick numbers as the robot's.** One line in
+   `docs/camera-hardware.md` §4 — whose "nine times the headroom" derivation is
+   the wrong budget (§4 reasons from the sensor's 90 fps; the binding
+   constraint is the NPU under a thermal ceiling) — and one in
+   `detector.py` beside `rate_hz: float = 10.0`, saying the shipped robot runs
+   2 Hz and what that costs (this table). This is exactly
+   [[soccer-camera-is-the-ceiling]]'s lesson: the last camera number that lived
+   only in a default was wrong in eight places and stated in none.
+3. **Add the two named ablations, never as defaults.** `ROBOT = DetectorSpec(
+   rate_hz=2.0)` and `FIVE = DetectorSpec(rate_hz=5.0)`, module level in
+   `microduck_local/tests/test_detector.py` beside **`NARROW_REF` at line 33** —
+   that file is the only place in the repo that names a spec rather than
+   inheriting it, and `detector.py` has no preset registry to put them in.
+   (`tests/test_detector.py:108` already names `rate_hz=10.0` explicitly in the
+   latency test, which is the pattern.)
+4. **If the lab is ever to run at the robot's rate, the BRAIN moves first, not
+   the spec.** `Chase.DET_MAX_AGE` would have to be at least one detector
+   period (and `probe_ball_loss`'s event rule with it), and the line-up's
+   arrival test would have to stop assuming a 10 Hz belief. That is a design
+   change worth its own item, not a knob.
+5. **5 Hz is affordable and is the rung the camera recommendation needs.** It
+   costs +5.9 pp of pair whiff (MDE 3.1, p 0.000) and 25 % of connected travel,
+   with falls flat, and it saves 16 % CPU — and §4 already argues the 640 px
+   inference input the current `DetectorSpec` assumes **only fits at 5 Hz**.
+   If the sim's default is ever moved toward the hardware, 5 Hz is the honest
+   step that the brain's own constants survive; 2 Hz is not.
+
+    # the readback, before any compute (gym AND pitch, on the CONSTRUCTED World)
+    MICRODUCK_CAMERA="rate_hz=2.0" uv run python - <<'PY'
+    import sys; sys.path.insert(0, "scripts")
+    import kick_gym, numpy as np
+    from microduck_local.world.arena import World
+    from microduck_local.world.scenario import make_pitch
+    from microduck_local.brain.controllers import Chase
+    for sc in (kick_gym.gym_scenario(), make_pitch(per_side=2)):
+        w = World(sc, infer_for={d.id: (lambda o: np.zeros(14, "float32")) for d in sc.ducks}, seed=0)
+        for i, d in sorted(w.ducks.items()):
+            print(i, d.detector.spec.rate_hz, f"{d.detector.period:.4f}s")   # -> 2.0 0.5000s
+    print("DET_MAX_AGE", Chase.DET_MAX_AGE)                                  # -> 0.4  (< the period!)
+    PY
+
+    # the gym: 2 Hz on all four blocks, 5 Hz on two (the 10 Hz rows already exist)
+    MICRODUCK_CAMERA="rate_hz=2.0" uv run python scripts/kick_gym.py --episodes 40 \
+      --seeds 12 --seed0 {0,100,200,300} --jobs 3 --out runs/detrate/gym-ship2-b{0,100,200,300}.jsonl
+    MICRODUCK_CAMERA="rate_hz=5.0" uv run python scripts/kick_gym.py --episodes 40 \
+      --seeds 12 --seed0 {0,100} --jobs 3 --out runs/detrate/gym-ship5-b{0,100}.jsonl
+    uv run python scripts/compare_gym.py ship10=<pooled 10Hz> ship2=<pooled 2Hz>   # + the per-foot scratch read
+
+    # the ledger, paired, one frozen snapshot
+    MICRODUCK_CAMERA="rate_hz={10.0,2.0}" uv run --no-sync python -m microduck_local.eval_pitch \
+      --seeds 24 --seed0 0 --seconds 300 --per-side 2 --ball-out-s 5 --jobs 3 \
+      --out runs/detrate/pitch-rate{10,2}-0.jsonl --tag rate{10,2}
+    uv run python scripts/compare_pitch.py runs/detrate/pitch-rate10-0.jsonl \
+      runs/detrate/pitch-rate2-0.jsonl --label rate10 rate2
+
+    # the loss budget (read viewFrac and the >2 s totals ONLY — see E)
+    MICRODUCK_CAMERA="rate_hz={10.0,2.0}" uv run python scripts/probe_ball_loss.py \
+      --seeds 12 --seconds 180 --per-side 2 --ball-out-s 5 --jobs 3 --out runs/detrate/loss{10,2}
+
+    # the line-up census, and the cost
+    MICRODUCK_CAMERA="rate_hz={10.0,2.0}" uv run python scripts/probe_board_states.py --episodes 20 --seeds 2
+    MICRODUCK_CAMERA="rate_hz={10.0,5.0,2.0}" uv run python -m microduck_local.eval_pitch \
+      --seeds 2 --seed0 900 --seconds 60 --per-side 2 --ball-out-s 5 --jobs 2   # 16.52 / 13.86 / 12.72 s
+
+Reviewer's re-read (independent): pair whiff 7.4 → 48.1 % over 48 seeds and
+9.0 → 15.0 → 47.4 % on the 24-seed ladder, falls 5 → 7; pitch kicks with a
+line 109/157 → 71/186; `DET_MAX_AGE = 0.4` at `brain/controllers.py:382`.
+Agent's own re-read: `hz: 2.0` at `microduck/robotd-params/src/lib.rs:365` and
+the same sentence in `mediad/src/detect.rs:11-13`; `DET_MAX_AGE = 0.4` at
+`brain/controllers.py:382`; pair whiff 7.4 → 48.1 % pooled and 9.0 → 15.0 →
+47.4 % on the 24-seed ladder; pitch kicks-with-a-line 109/157 → 71/186 — the
+tables reproduce from the rows.
+Rows: `runs/detrate/gym-ship2-b{0,100,200,300}.jsonl` (4 x 480 episodes),
+`runs/detrate/gym-ship5-b{0,100}.jsonl` (2 x 480), pooled against 12as-G's
+`runs/sensedplay/gym-ship-b{0,100}.jsonl` and 12av's
+`runs/detrate/gym-ship10-b{200,300}.jsonl` for the 48-seed table;
+`runs/detrate/pitch-rate{10,2}-0.jsonl` (24 seeds each);
+`runs/detrate/loss{10,2}/shipped.jsonl` (12 seeds each).
+**Nothing committed: no source file, no default, no preset, no policy, no
+`docs/camera-hardware.md` edit — recommendations 2 and 3 are the owner's call.**
+
+→ **What settles it next:** (1) **the brain's own freshness constants against a
+slower sensor** — `Chase.DET_MAX_AGE` 0.4 s is shorter than a 2 Hz period, so
+nobody has yet measured the robot's rate with a brain that admits it; the cheap
+first cut is `DET_MAX_AGE` at one period + the arrival test in `lineup`, read
+on the gym's whiff at 24 seeds, and it is the only way the 2 Hz number above
+can be made a statement about the hardware rather than about a
+mis-specification; (2) **`probe_ball_loss`'s event rule**, which manufactures
+one loss per frame below 2.5 Hz and reports it as a 12/12 improvement — it
+needs the gate expressed in periods, not seconds, before any future rate arm
+uses it; (3) the last 12as mismatch still standing, **the tracker's ~5.5 cm
+placement error** (`Tracker._place`) — unchanged by this item and still the
+only one left from G's verdict B.
