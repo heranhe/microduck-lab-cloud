@@ -4515,8 +4515,9 @@ this stack has none of them.
       The harm is removed and nothing is gained: closer in the probe,
       nothing in the game. `fuse_window` defaults to 0.5 s so the fusion,
       if anyone turns it on, is the safe one; `fuse_ball` stays off.
-- [ ] **C.4 An opponent model and a duel — the first half BUILT and
-      measured (2026-09-07).** B-Human has a `Zweikampf` (one-on-one)
+- [x] **C.4 An opponent model and a duel — the first half BUILT and
+      measured (2026-09-07); the second half, the duel, built and measured
+      2026-09-10, ships off (below).** B-Human has a `Zweikampf` (one-on-one)
       behaviour; every stack tracks opponents as first-class objects. Ours
       had duck tracks, a colour vote that failed confirmation (4.2), and
       `avoid`/`blocked`/`yield`. Now `Chase._opponents` is the opponent
@@ -4570,6 +4571,45 @@ this stack has none of them.
       or the board to say who is who at contact range. The interception
       work (4d) found "the lever is elsewhere"; with a keeper (B.2) and an
       opponent list this is the next place to look.
+
+      **The second half, BUILT and MEASURED (2026-09-10): the duel is a real population, and the block that answers it ships off.** The three previous duel rules (`lineup_keepout`, `opp_keepout`, `contest_margin`) were judged without the number that decides whether they could be judged at all — `probe_contest.py` later put the contest rule's firing rate at 0.07% of ticks. So this one starts there. `scripts/probe_duel.py` counts, on the shipped brain with no knob, how often an opponent is within 0.35 m of the ball and NEARER to it than this duck while this duck is going for it — in the world's own geometry and, separately, as the brain can actually see it (`Chase._opponents` plus its own ball track), which is the ceiling on any rule:
+
+      | | 2v2 | 3v3 with roles |
+      |---|---|---|
+      | duck-ticks (4 seeds × 120 s) | 96,016 | 144,024 |
+      | an opponent within 0.35 m of the ball (truth) | 65.6% | 59.3% |
+      | …and nearer to it than this duck | 53.1% | 53.2% |
+      | …and this duck is going for the ball — **the duel** | **9.35%** | **6.54%** |
+      | …**as the brain can SEE it** — the reachable set | **7.44%** | **5.14%** |
+
+      A hundred times the contest rule's population, and it is where the ball is lost. Booking the next 2 s of every duel tick (2v2, seen): `retreat` (6.2% of all ticks) holds the ball 0.20 of those ticks against the other side's 0.55; `avoid` (4.7%) 0.25/0.60; `turn` (3.4%) 0.12/0.60; `lineup` (2.0%) 0.24/0.47 — where the SAME states with no opponent nearer are 0.60/0.06 (`lineup`) and 0.26/0.07 (`chase`). Today the duck either flinches or lines up on a ball it will not get.
+
+      **The rule.** A shield — a body between the opponent and the ball — is not available when the opponent is the nearer of the two. What is left is the BLOCK, and it is the one kind of answer the three nulls leave open: a positioning rule rather than another answer to "do I turn away". `ChaseParams.duel` is the standoff in metres: stand that far goal-side of the ball on the line to our OWN goal, facing it, so the opponent's next touch has to come through this duck. It never fires for a supporter (the role branch is ahead of it, so no post is abandoned) nor in `settle` (a swing about to happen), and `avoid` still owns a touch inside `duck_touch`. Two constants, both inert at 0. Locked by `tests/test_duel.py`, including knob-off byte-identical to the shipped chain row for row.
+
+      **Measured at 0.3 m, paired `eval-pitch`, 2v2 × 300 s, `--ball-out-s 5`, discovery seeds 0–23 and fresh seeds 100–123** (`runs/duel/{off,on}-b{0,100}.jsonl`):
+
+      | | b0 off → on | b100 off → on | pooled 48 | MDE% | p | verdict |
+      |---|---|---|---|---|---|---|
+      | possession s/min | 40.61 → 40.26 | 39.45 → 39.42 | −0.19 | 3% | 0.74 | **null** |
+      | ballAdvance m/min | 1.239 → 1.138 | 1.125 → 1.165 | −0.030 | 13% | 0.70 | **null** |
+      | spread m | 0.587 → 0.544 | 0.610 → 0.559 | −0.047 | 3% | **0.000** | effect (a cost) |
+      | crowd | 0.301 → 0.334 | 0.285 → 0.315 | +0.031 | 8% | **0.011** | effect (a cost) |
+      | depth m | 1.331 → 1.349 | 1.329 → 1.316 | +0.003 | 2% | 0.79 | null |
+      | kicks (events) | 157 → 136 | 151 → 174 | | | | |
+      | goals / own goals | 26/5 → 16/1 | 19/4 → 18/4 | 45/9 → 34/5 | 44% | 0.27 | NO RESULT |
+      | falls (events) | 5 → 8 | 5 → 3 | 10 → 11 | 102% | 0.84 | flat |
+      | back-kicks | 30% → 33% | 29% → 32% | | | 0.55 | |
+
+      **Nothing on the ball pays, on either block.** Possession and advance are both real nulls pooled (MDE 3% and 13% of baseline — tight enough to mean it), and kicks, goals and falls all FLIP SIGN between the blocks, which is what noise looks like. Falls are flat, so the veto never fires: the rule is not dangerous, it is merely not worth it. The only two rows that resolve replicate independently on both blocks, and both are costs — spread −0.05 m and crowd +0.03. The mechanism is in the rule itself: a duck that stands goal-side of a contested ball stands behind the play and beside its own partner, so the team compresses. That is the same shape cost D.2 measured for the carrying defender, bought here for nothing.
+
+      **And this null is QUOTABLE, which no previous duel result was.** With the knob on the rule acts on **10.36%** of duck-ticks (`probe_duel.py` with `MICRODUCK_CHASE="duel=0.3"`, 4 seeds × 120 s), so by "reading a null against how often the rule fires" (MDE ÷ firing rate) it rules out per-firing possession effects above ~29%, and smaller ones under any persistence — comfortably inside the rule of thumb that a firing rate over twice the MDE makes a null mean something. `contest_margin`'s 0.07% bounded nothing below 27,143%. This is the first duel measurement that says something about the duel rather than about the instrument.
+
+      **`duel` ships OFF at 0.0 with these numbers.** One caveat for anyone re-opening it: the arm also suppresses `avoid` while dueling (unless touching), so it is not purely positional — kept because without it the rule is preempted in exactly its most important ticks, and because "whether to turn away" is the lever already measured null three times. **What would settle it next:** the block concedes the touch by construction, and the two things it costs are shape. The untested variant is the one that does NOT stand off — close the standoff to inside `duck_touch` and take the ball, which is a walker question (this repo already records that the walker can do nothing against another body except stand still, roadmap B) rather than a geometry one. Failing that, the duel's remaining value is defensive and the metric for it is not a whole-match average: build the event in `scripts/kick_gym.py` with a contested placement at ~0.8 CPU-seconds each and score *the opponent's next kick*, not the run.
+
+      Commit 5d6a6df (`ChaseParams.duel`, `duel_near`, `scripts/probe_duel.py`,
+      `tests/test_duel.py`). Reviewer's re-read of the four row files: both
+      blocks' tables reproduce (spread effect on both, possession null on both;
+      crowd p 0.056 / 0.10 per block, 0.011 pooled).
 
 #### D. Team play — after C, not before
 
