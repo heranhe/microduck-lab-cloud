@@ -89,6 +89,7 @@ Baseline, 4 seeds x 300 s of shipped `chase` both sides (2026-09-05):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -117,6 +118,28 @@ from .world.metrics import (  # noqa: F401  (re-exported: tooling imports these 
 # Every per-team dict a row may carry. A row written before one of them
 # existed gets None for it on resume, never 0.0 (see `load_done`).
 ROW_FIELDS = METRIC_FIELDS + GOAL_FIELDS + SHAPE_FIELDS
+
+
+def kick_provenance() -> tuple[list[float] | None, dict[str, str]]:
+    """WHICH kicks this process would run, and what they aim at: the pair
+    `World.kick_exits()` reads out of the sidecars, and each resolved ONNX by
+    name + content hash.
+
+    Recorded in every row because the kicks are not a flag — they are files
+    under `policies/kick/` (or an env pin), and they MOVE. `kick_left.json`'s
+    `exit_rad` went -0.225 -> +0.209 in one commit between a ledger's first
+    161 rows and its extension: nothing in the row said so, and the resume
+    would have appended seeds measured in a different world to seeds measured
+    in the old one, in one file, silently. `load_done` refuses that now."""
+    exits = World.kick_exits()
+    skills = {}
+    for name in ("kick_left", "kick_right"):
+        p = World.skill_path(name)
+        if p is None or not p.exists():
+            skills[name] = ""                       # no such skill, or a pin that does not resolve
+            continue
+        skills[name] = f"{p.name}:{hashlib.md5(p.read_bytes()).hexdigest()[:12]}"  # noqa: S324 (provenance, not security)
+    return (None if exits is None else [float(exits[0]), float(exits[1])]), skills
 
 
 def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = None,
@@ -177,6 +200,7 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
             out_seq = w.ball_out_seq
             throw_in_brains(brains, teams)
     score = w.soccer_score()
+    kick_exits, kick_skills = kick_provenance()
     return {"seed": seed, "perSide": per_side, "left": score["left"], "right": score["right"],
             "kickGoals": score["kicked"], "bumpGoals": score["bumped"],   # attributed by the World (KICK_GOAL_S)
             "ballOuts": score["ballOuts"],                                 # the ball-out rule's placements (0 unless --ball-out-s)
@@ -185,6 +209,10 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
             "getups": w.getups, "getupTimeouts": w.getup_timeouts,   # falls it stood up from / ran the timeout out
             "getupDownS": w.getup_down_s,                # …and how long each spell on the floor lasted: a fall's PRICE
             "getupPolicy": getup_policy or "",           # which policy drove them ("" = the teleport stand-in)
+            # …and the kicks themselves, which are FILES and not flags: the
+            # sidecar exit angles the brain aims with, and each resolved ONNX
+            # by name + hash (`kick_provenance`; `load_done` refuses to mix).
+            "kickExits": kick_exits, "kickSkills": kick_skills,
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()}, "simSeconds": round(w.t, 1),
             "seconds": seconds,
@@ -213,6 +241,15 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float,
     row written before a knob existed was measured at its default, so a
     missing field reads as that default rather than as "unknown".
 
+    The KICKS get the same treatment for a reason no flag covers: they are
+    files (`policies/kick/*.onnx` and the sidecar the brain reads `exit_rad`
+    out of, or an env pin), so a commit can change what a battery is
+    measuring while every flag in the command line stays the same — and one
+    did, mid-ledger. A row whose `kickExits`/`kickSkills` differ from the
+    kicks running now is refused; a row written before those fields existed
+    is allowed, with ONE warning line saying the provenance is unverified,
+    because refusing every old ledger would cost more than it is worth.
+
     Resumable, not concurrency-safe: two batteries appending to the same
     file interleave, and a seed can land twice (identically — the loop is
     deterministic in the seed, so the duplicates agree and `done` keys by
@@ -230,6 +267,8 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float,
     if not path or not os.path.exists(path):
         return {}
     done: dict[int, dict] = {}
+    want_exits, want_skills = kick_provenance()
+    unverified = 0                      # rows written before the kicks were recorded at all
     with open(path) as fh:
         lines = fh.readlines()
     last = len(lines)
@@ -264,6 +303,18 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float,
                 f"{path}:{n} was measured with getupPolicy={(r.get('getupPolicy') or '')!r}, not "
                 f"{getup_policy!r}. That is a different world, not a resume: pass the same flags, "
                 "or write it to a different file.")
+        # …and the kicks, which are files under `policies/kick/` and move
+        # without any flag changing (`kick_provenance`). A row from before
+        # they were recorded cannot be checked — that is said once, out loud,
+        # rather than either refusing an old ledger or pretending it matches.
+        if "kickExits" not in r or "kickSkills" not in r:
+            unverified += 1
+        elif (r["kickExits"], r["kickSkills"]) != (want_exits, want_skills):
+            raise SystemExit(
+                f"{path}:{n} was measured with kickExits={r['kickExits']} kickSkills={r['kickSkills']}, "
+                f"not kickExits={want_exits} kickSkills={want_skills}. The kick policies (or the sidecar "
+                "exit angles the brain aims with) changed under this file: that is a different world, not "
+                "a resume — re-run the battery, or write it to a different file.")
         for k, want in (knobs or {}).items():
             got = float(r.get(k) or 0.0)              # a row from before the knob: its default
             if got != float(want):
@@ -278,7 +329,13 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float,
         # the same reason — a row written before it existed took kicks whose
         # events nobody recorded, which is None and not an empty list.
         r.setdefault("kickEvents", None)
+        r.setdefault("kickExits", None)
+        r.setdefault("kickSkills", None)
         done[int(r["seed"])] = r
+    if unverified:
+        print(f"{path}: {unverified} row(s) predate the kick provenance (no kickExits/kickSkills); "
+              f"this resume CANNOT verify they were measured with the kicks running now "
+              f"(kickExits={want_exits} kickSkills={want_skills})", flush=True)
     return done
 
 

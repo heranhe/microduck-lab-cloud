@@ -27,6 +27,7 @@ from microduck_local.eval_pitch import (
     _print_ledger,
     _seed_line,
     _total,
+    kick_provenance,
     load_done,
     run_one,
 )
@@ -383,7 +384,12 @@ def test_run_one_still_returns_every_field_other_tooling_reads():
 # -- resuming a file written before these metrics existed ------------------------------
 
 def _row(seed, tag="", per_side=1, seconds=300.0, **kw):
+    # …carrying the kicks running now: these rows stand in for a ledger being
+    # resumed, and one without the kick provenance is a DIFFERENT case, which
+    # tests/test_eval_pitch_resume.py owns (it resumes, with a warning).
+    exits, skills = kick_provenance()
     return {"seed": seed, "tag": tag, "perSide": per_side, "seconds": seconds,
+            "kickExits": exits, "kickSkills": skills,
             "left": 1, "right": 0, "kickGoals": 1, "bumpGoals": 0,
             "kicks": {"d0": 5, "d1": 4}, "pushes": {"d0": 1, "d1": 0},
             "falls": {"d0": 0, "d1": 1}, "simSeconds": 300.0, **kw}

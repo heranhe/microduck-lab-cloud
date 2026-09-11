@@ -58,7 +58,7 @@ import numpy as np
 from .brain import REGISTRY, Senses
 from .brain.brain_env import POLICIES_DIR, onnx_infer
 from .brain.striker import LearnedStriker
-from .eval_pitch import load_done
+from .eval_pitch import kick_provenance, load_done
 from .world import World, make_pitch
 from .world.metrics import PitchMetrics, SpinMetrics
 from .world.scenario import ROLES
@@ -187,6 +187,7 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
             out_seq = w.ball_out_seq
             throw_in_brains(brains, teams)
     score = w.soccer_score()
+    kick_exits, kick_skills = kick_provenance()
     return {"seed": seed, "perSide": per_side, "solo": solo, "left": score["left"], "right": score["right"],
             "leftBrain": left, "rightBrain": right if not solo else None,
             "home": home, "away": None if solo else away,
@@ -196,6 +197,9 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
             "cove": 0.0, "corner": 0.0,          # flat, square boards: the pitch benchmark's baseline
             "getups": w.getups, "getupTimeouts": w.getup_timeouts,
             "getupDownS": w.getup_down_s, "getupPolicy": "",   # no get-up here: the teleport, as eval-pitch defaults
+            # …and WHICH kicks ran, by sidecar exit angle and ONNX hash: they
+            # are files, they move, and a resume must refuse to mix them.
+            "kickExits": kick_exits, "kickSkills": kick_skills,
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()},
             "team": {d.id: (d.team or d.id) for d in sc.ducks},
