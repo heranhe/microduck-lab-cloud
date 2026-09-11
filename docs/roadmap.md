@@ -10614,6 +10614,165 @@ is −0.01 to −0.05 m at 0.22, 0.28 and 0.35 m with 0 % moved — it drifts
 backward. Runs `lastmetre-far-{right,left}-s1-approach` (the finding is written into each
 `behavior.json`). No new code; nothing promoted.
 
+**The right foot alone on the 2v2 ledger — the registered primary is a null, and the registration was made off the wrong statistic (2026-09-10).**
+
+12as's follow-up (1), run. 24 paired `eval-pitch` seeds a block, two blocks
+(0–23 discovery, 100–123 fresh), arm A the shipped pair at its defaults, arm B
+only `MICRODUCK_SKILL_KICK_RIGHT` pinned to a scratch copy of
+`runs/lastmetre-right-v1/policy.onnx` (ONNX md5 identical) with a sidecar
+carrying `{"sensed": true, "exit_rad": -0.1331}` — the in-play right exit 12as
+calibrated. The vendored left foot is untouched in both arms and
+`policies/kick/` is unchanged. Both blocks and both arms ran against ONE frozen
+snapshot of `src/` (`snap-20260910-195510`: HEAD `1e8824b` plus three other
+agents' uncommitted edits, `behaviors/lastmetre.py` included), `policies` /
+`microduck_rl` / `microduck` symlinked — HEAD moved to `5261c67` underneath the
+run, so a clean checkout will not reproduce these rows. The preflight asserted
+`World.skill_path` / `skill_sensed` / `kick_exits()` AND the exit off all four
+CONSTRUCTED chase brains per arm: `(-0.225, -0.036)` against `(-0.225, -0.1331)`,
+`sensed` False/False against False/**True**, both arms resolving the LOCAL
+`policies/kick/` exports and not the Hub.
+
+**The reachable set, measured on the ledger's own pitch, not estimated.** A probe
+that wraps `start_skill` and `_sensed_head` in memory over 4 ledger seeds
+(same scenario, same `--ball-out-s 5`): **21 kick windows, 10 of them right-foot
+(47.6 %) and all 10 carrying `skill_sensed=True`** — the gym's shipped foot split
+on 819 swings is 47.1 %, so the pooled arm is about **141 sensed windows of 296**.
+Over those windows the four slots carried a ball on **258 of 258 ticks (100 %)**,
+`seen` on 31.0 %, median confidence 0.787, median range slot 0.662 (= 0.166 m),
+median |bearing| 0.202 (= 18.2°). The arm is reaching what it was built to reach.
+
+| 24 seeds, 2v2 × 300 s | ship | sensedright | Δ ± MDE (MDE %) | p | verdict |
+|---|---|---|---|---|---|
+| **ballAdvance m/min (primary)** | 1.239 | 1.173 | −0.066 ± 0.223 (18 %) | 0.544 | **NO RESULT** |
+| possession s/min | 40.61 | 41.03 | +0.43 ± 1.89 (5 %) | 0.645 | **null** |
+| ballProgress m/min | 0.540 | 0.541 | — | — | unquotable |
+| spread / crowd / depth / ballOwnHalf | flat | flat | MDE 0–11 % | 0.37–1.0 | null |
+| goals | 26 | 19 | −0.29 ± 0.42 /run (39 %) | 0.166 | NO RESULT, 7 up / 12 down / 5 tied (sign p 0.36) |
+| own goals | 5 | 3 | −0.08 ± 0.21 (102 %) | 0.426 | NO RESULT |
+| falls (the veto) | 5 | 6 | +0.04 ± 0.29 (140 %) | 0.770 | NO RESULT |
+| kicks | 157 | 150 | −0.29 ± 1.02 /run (16 %) | 0.558 | NO RESULT |
+| kicks with a line | 109 | 104 | −0.21 ± 1.00 (22 %) | 0.669 | NO RESULT |
+| carry per kick | +0.280 m | +0.342 m | totals 44.0 → 51.3 m | 0.497 | total: NO RESULT |
+| `kicksBack`, of kicks | 47/157 = 29.9 % | 43/150 = 28.7 % | −1.3 pp | 0.807 | not resolved |
+| `kicksBackLine`, of lines | 31/109 = 28.4 % | 25/104 = 24.0 % | −4.4 pp | 0.466 | not resolved |
+
+The primary came back at 18 % MDE — under the 19 % this item registered, but over
+`compare_pitch`'s own 15 % tightness rule, so the tool calls it NO RESULT and by
+[[read-the-mde-not-the-p]] it cannot be published as a null. The fresh block was
+run for that reason alone.
+
+| 24 fresh seeds (100–123) | ship | sensedright | Δ ± MDE (MDE %) | p | verdict |
+|---|---|---|---|---|---|
+| **ballAdvance m/min** | 1.125 | 1.180 | +0.055 ± 0.183 (16 %) | 0.538 | **NO RESULT** (sign flips) |
+| possession s/min | 39.45 | 40.10 | +0.65 ± 1.54 (4 %) | 0.393 | **null** |
+| spread / crowd / depth / ballOwnHalf | flat | flat | MDE 0–13 % | 0.10–1.0 | null |
+| goals | 19 | 15 | −0.17 ± 0.51 (64 %) | 0.504 | NO RESULT, 5 up / 9 down / 10 tied |
+| own goals | 4 | 2 | −0.08 ± 0.21 (128 %) | 0.426 | NO RESULT |
+| falls | 5 | 2 | −0.13 ± 0.23 (109 %) | 0.266 | NO RESULT |
+| kicks | 151 | 146 | −0.21 ± 1.47 (23 %) | 0.772 | NO RESULT |
+| kicks with a line | 97 | 107 | +0.42 ± 1.13 (28 %) | 0.452 | NO RESULT |
+| carry per kick | +0.284 m | +0.399 m | totals 42.8 → 58.2 m | 0.136 | total: NO RESULT |
+| `kicksBack`, of kicks | 44/151 = 29.1 % | 33/146 = 22.6 % | −6.5 pp | 0.199 | not resolved |
+| `kicksBackLine`, of lines | 25/97 = 25.8 % | 19/107 = 17.8 % | −8.0 pp | 0.165 | not resolved |
+
+**Pooled over both blocks, 48 seeds.** Unlike 12au's pool these two blocks share
+ONE snapshot and one baseline, so this is a straight 48-seed pool, not a
+fixed-effects pool of two batteries.
+
+| 48 seeds | ship | sensedright | Δ ± MDE (MDE %) | p | verdict |
+|---|---|---|---|---|---|
+| **ballAdvance m/min (primary)** | 1.182 | 1.176 | −0.006 ± 0.140 (12 %) | 0.936 | **null** ← |
+| possession s/min | 40.03 | 40.57 | +0.54 ± 1.17 (3 %) | 0.362 | **null** |
+| spread / crowd / depth / ballOwnHalf | flat | flat | MDE 0–8 % | 0.15–1.0 | null |
+| kicks | 308 | 296 | −0.25 ± 0.86 /run (13 %) | 0.561 | **null** |
+| kicks with a line | 206 | 211 | +0.10 ± 0.73 (17 %) | 0.775 | NO RESULT |
+| goals | 45 | 34 | −0.23 ± 0.32 /run (34 %) | 0.154 | NO RESULT, 12 up / 21 down / 15 tied (sign p 0.16) |
+| own goals | 9 | 5 | −0.08 ± 0.15 (77 %) | 0.252 | NO RESULT |
+| falls (the veto) | 10 | 8 | −0.04 ± 0.18 (86 %) | 0.642 | NO RESULT (3555 seeds) |
+| carry per kick | +0.282 m | +0.370 m | totals 86.8 → 109.5 m | 0.122 | total: NO RESULT |
+| `kicksBack`, of kicks | 91/308 = 29.5 % | 76/296 = 25.7 % | −3.9 pp | 0.288 | not resolved |
+| `kicksBackLine`, of lines | 56/206 = 27.2 % | 44/211 = 20.9 % | −6.3 pp | 0.130 | not resolved |
+
+Both colourways move together on the one internal check self-play allows —
+back-lines cream 26.6 → 20.2 %, graphite 27.7 → 21.6 % — and the pooled
+ballAdvance null is not hiding a side: +0.050 home against −0.056 away.
+
+**The registered primary is a null, and the registration was made off the wrong
+statistic.** 12as registered ballAdvance "because the gym says the win is in
+advance (+0.29 m a right swing)" — but that +0.29 is a shift of **medians**
+(0.239 → 0.777 m), and every ledger column that could carry it (`kickCarry`,
+`ballAdvance`) is a **sum**, which only a mean predicts. The gym's **mean**
+advance per right swing is 0.457 → 0.620 m, **+0.163 m**, a third of the
+headline. Through the measured 47.6 % foot split:
+
+| prediction | per right swing | carry, 48 seeds | ballAdvance | against this battery |
+|---|---|---|---|---|
+| the gym's **median** headline | +0.538 m | +40 m | +0.335 m/min | **excluded** (MDE ±0.140) |
+| the gym's **mean** | +0.163 m | +23.0 m | +0.096 m/min | below resolution |
+| **observed** | — | **+22.7 m** | **−0.006 ± 0.140** | carry lands ON the mean prediction, unresolved (MDE ±29 m) |
+
+So the ledger did two things: it refuted the win at the size the gym advertised,
+and it measured the real (mean-sized) win as a point estimate it cannot resolve —
+carry +0.472 m a run against a predicted +0.479, needing **~76 seeds a block on
+carry and ~103 on ballAdvance**. Read `kickCarry`, not `ballAdvance`, for a
+per-swing kick change: it is the column the swing actually feeds, and it is the
+cheaper of the two by a third.
+
+**Nothing is paid.** Falls 10 → 8, own goals 9 → 5, kicks 308 → 296 (a genuine
+null at 13 % MDE — this arm does NOT make the selector decline swings the way
+12au's left sidecar did at −24 %), possession, spread, crowd, depth all null.
+Every direction column moves the right way and none resolves: `kicksBackLine`
+27.2 → 20.9 % (p 0.130), `kicksBack` 29.5 → 25.7 % (p 0.288). Goals fall 45 → 34
+at p 0.154 with a 34 % MDE — the coin 12au already caught, and it must not be
+quoted in either direction.
+
+Reviewer's re-read of the four row files, pooled: ballAdvance −0.006 ± 0.140
+(null), possession +0.54 null, goals 45 → 34 NO RESULT, falls 10 → 8, back-line
+56/206 → 44/211 — the table reproduces.
+
+**Verdict.** On the 2v2 ledger the sensed right foot is **indistinguishable from
+the vendored one on the registered primary** (−0.006 ± 0.140 m/min, 12 % MDE,
+48 seeds) and **costs nothing this battery can resolve**. The ledger is not the
+instrument for a win of this size: the arm changes about 141 of 296 kick windows
+and the per-swing effect it carries is a fifth of what the ledger can see. The
+per-swing gym (19× cheaper per event) remains the only instrument that has
+resolved it — whiff 9.6 → 5.0 %, MDE 3.7, p 0.015, with the untouched left foot
+as a null control.
+
+**Recommendation to the owner (shipping `policies/kick/kick_right.*` is their
+call).** The case FOR is the gym's per-swing win plus a 48-seed ledger that
+measures no cost anywhere — no falls, no own goals, no lost possession, no lost
+shape, no declined swings — and a carry point estimate exactly where the gym
+says it should be. The case AGAINST is that the ledger's own registered primary
+is a null, so **nothing on the pitch has yet been shown to improve**. Do not
+ship it on this block's evidence; ship it, if at all, on the gym's per-swing
+evidence with this block quoted as the safety check it is. If a pitch-level
+confirmation is wanted before shipping, it costs **~76 seeds a block read on
+`kickCarry`**, not on ballAdvance.
+
+    SNAP=<scratch>/sensedledger/snap-20260910-195510      # cp -R src; ln -s policies microduck_rl microduck .cache clips brains
+    export PYTHONPATH=$SNAP/microduck_local/src MICRODUCK_RL_DIR=../microduck_rl
+    export MICRODUCK_SKILL_KICK_RIGHT=<scratch>/sensedplay/sensed/kick_right.onnx   # arm B only
+    uv run --no-sync python <scratch>/sensedledger/preflight.py        # path/md5/sidecar/sensed/kick_exits + all 4 brains
+    uv run --no-sync python -m microduck_local.eval_pitch --seeds 24 --seed0 {0,100} --seconds 300 \
+        --per-side 2 --ball-out-s 5 --jobs 2 --out runs/sensedplay/pitch-{ship,sensedright}-{0,100}.jsonl \
+        --tag {ship,sensedright}
+    uv run --no-sync python scripts/compare_pitch.py runs/sensedplay/pitch-ship-0.jsonl \
+        runs/sensedplay/pitch-sensedright-0.jsonl --label ship sensedright       # + --side home/away
+    uv run --no-sync python <scratch>/sensedledger/probe_windows.py 0,1,2,3       # the reachable set
+
+→ **What settles it next:** (1) the left foot is still the open item —
+12as's follow-up (2) is untouched and is a TRAINING fix (a rung 0 that holds the
+strike, or distil the vendored left strike into the sensed obs at 250×120
+epochs), and until it lands the pair cannot ship; (2) if the right foot is to be
+confirmed on the pitch rather than in the gym, run **`kickCarry` at ~76 seeds a
+block**, and register the primary off the gym's **mean**, never its median —
+this item's own registration is the counter-example; (3) the two world/recipe
+mismatches 12as listed are still unmeasured, and the probe above now gives the
+numbers to compare against: on the pitch `seen` fires on **31 %** of sensed
+window ticks and the confidence slot's median is **0.787**, against the recipe's
+40–76 % in frame — a 25 Hz pitch detector preset is the one-line test.
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
