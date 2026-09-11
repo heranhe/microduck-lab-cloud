@@ -21,6 +21,16 @@ than whatever the match happened to produce.
     uv run python kick_gym.py --episodes 60 --out gym.jsonl
     uv run python kick_gym.py --episodes 200 --jobs 4 --out gym.jsonl
 
+...and `--duel` makes it the rung between them for a SECOND event, the duel
+(roadmap C.4): the ball in open play, this duck going for it, and an opponent
+already nearer to it. One row per episode, scoring who touches the ball first
+and what the OPPONENT'S next touch does with it — the per-event instrument
+C.4 asks for after a whole-match ledger could not price the rule.
+
+    uv run python kick_gym.py --duel --episodes 40 --seeds 12 --jobs 3 \
+        --arm 'off=' --out runs/duelgym/off-b0.jsonl
+    uv run python kick_gym.py --duel --opponents 0 --episodes 16   # the positive control
+
 It prints the same funnel table as roadmap Track 4 item 12, so the two are
 read side by side. The question it exists to answer first: does a clean
 single-duck approach reproduce the 94%? If it does, the fix can be iterated
@@ -295,9 +305,133 @@ def _place(w: World, rng: np.random.Generator, spread: float):
     return q, v
 
 
+# --- THE DUEL (roadmap C.4, second half; `--duel`) ---------------------------
+# C.4's own "what would settle it next": a whole-match ledger priced the duel
+# rule at an MDE of 3% on possession against a 10% firing rate and resolved
+# nothing about the duel itself. The duel is an EVENT — an opponent within
+# `duel_near` of the ball and nearer to it than this duck, while this duck goes
+# for it — so it wants the instrument this file already is for the kick: place
+# the event, run it, and score THE OPPONENT'S NEXT TOUCH rather than the run.
+#
+# The placement is the definition, made literal. Everything below is a constant
+# of the EVENT, not of a brain: no knob reads them, so an arm cannot move the
+# population it is measured on.
+# The contest window, set by the POSITIVE CONTROL and not by taste: with the
+# opponent removed, our duck resolves the episode (touches the ball at all) on
+# 58% of episodes at 4 s, 94% at 6 s and 94% at 8 s. Below 6 s a "nobody
+# touched it" is mostly the clock; at 6 s it is the contest, which is the only
+# reading that makes `first touch` an outcome of the duel.
+DUEL_S = 6.0                 # the contest window: one duel, start to resolution
+DUEL_MINE = (0.35, 0.60)     # our duck's range to the ball — close enough to be going for it
+DUEL_THEIRS = (0.10, 0.30)   # the opponent's — strictly nearer, and inside `duel_near`
+DUEL_APART = 0.30            # two trunks closer than this at spawn is an overlap, not a placement
+DUEL_STATE_S = 0.5           # when the duck's state is read off (C.4's own 0.5 s)
+# A TOUCH is the ball being MOVED by a body. Detected on the rising edge of the
+# ball's planar speed rather than on a contact pair: `World` snapshots contacts
+# inside every physics substep for its bump sense and does not expose them, and
+# the contact list left after a tick misses three touches in four (the comment
+# on `World._sense_bumps` measured exactly that). The edge is what the question
+# is about anyway — "whose next kick or push moved the ball" — and it catches a
+# walked-through push, which no kick-skill test does.
+TOUCH_V = 0.12               # m/s: above this the ball is travelling, not settling
+TOUCH_DV = 0.05              # ...and it got there in one tick, so something hit it
+TOUCH_R = 0.45               # only a duck this close to the ball can have moved it
+
+
+def _touch_by(w: World, ball: tuple[float, float], vel: tuple[float, float]) -> str | None:
+    """Which duck moved the ball, or None when nothing near it can have.
+
+    The ball leaves the body that struck it, so the toucher is the duck the
+    ball is travelling AWAY from (positive cosine between `ball - duck` and the
+    ball's new velocity), nearest first. A duck the ball is travelling TOWARD
+    is the one being kicked at, and crediting it is the misattribution this
+    whole instrument would die of — in a duel both ducks are inside `TOUCH_R`,
+    so distance alone cannot tell them apart. When no duck qualifies the touch
+    is nobody's and is NOT recorded (a board rebound, a duck that has already
+    walked away); `n_unattr` on the row counts those rather than hiding them.
+    """
+    sp = math.hypot(vel[0], vel[1])
+    if sp < 1e-9:
+        return None
+    best: tuple[float, str] | None = None
+    for did, d in w.ducks.items():
+        pos = d.trunk_pos(w.data)
+        dx, dy = ball[0] - float(pos[0]), ball[1] - float(pos[1])
+        dist = math.hypot(dx, dy)
+        if dist > TOUCH_R or dist < 1e-9:
+            continue
+        if (dx * vel[0] + dy * vel[1]) / (dist * sp) <= 0.0:
+            continue                                   # the ball came AT this one
+        if best is None or dist < best[0]:
+            best = (dist, did)
+    return None if best is None else best[1]
+
+
+def _place_duel(w: World, rng: np.random.Generator, opp_ids: list[str]) -> tuple[int, int, dict]:
+    """One DUEL episode's start: the ball in open play, THIS duck `DUEL_MINE`
+    from it and pointed at it (going for it), and ONE opponent `DUEL_THEIRS`
+    from it — strictly nearer — in a sampled pose.
+
+    The ball is drawn away from every board by more than the 2 s carry window
+    can roll it back from, because an `advance` that is really a rebound is not
+    a touch's advance (the same reasoning `--at-boards` exists to separate).
+    The opponent's heading is sampled around the ball rather than set facing
+    it: half the duels in a match are met side-on, and a placement that always
+    squares the opponent up would measure the one pose that suits it.
+
+    With `opp_ids` empty this is the POSITIVE CONTROL — the identical draw for
+    our duck, and nobody to contest it — so "we touch first" must read ~100%.
+    """
+    bx_h, by_h = _board_rect(w)
+    d = w.ducks["d0"]
+    r_ball = w.scenario.balls[0].radius
+    bx = float(rng.uniform(-bx_h + 0.7, bx_h - 0.7))
+    by = float(rng.uniform(-by_h + 0.5, by_h - 0.5))
+    inside = lambda x, y: abs(x) < bx_h - 0.25 and abs(y) < by_h - 0.25   # noqa: E731
+    mine = float(rng.uniform(*DUEL_MINE))
+    dx = dy = 0.0
+    for _ in range(60):
+        th = float(rng.uniform(-math.pi, math.pi))
+        dx, dy = bx + mine * math.cos(th), by + mine * math.sin(th)
+        if inside(dx, dy):
+            break
+    else:                                              # straight in from the nearest board
+        u = math.atan2(-by, -bx)
+        dx, dy = bx + mine * math.cos(u), by + mine * math.sin(u)
+    d.spawn = (dx, dy, math.atan2(by - dy, bx - dx) + float(rng.uniform(-0.25, 0.25)))
+    w._respawn(d)
+    theirs = float(rng.uniform(*DUEL_THEIRS))
+    for oid in opp_ids[:1]:
+        o = w.ducks[oid]
+        ox = oy = 0.0
+        for _ in range(80):
+            th = float(rng.uniform(-math.pi, math.pi))
+            ox, oy = bx + theirs * math.cos(th), by + theirs * math.sin(th)
+            if inside(ox, oy) and math.dist((ox, oy), (dx, dy)) >= DUEL_APART:
+                break
+        else:                                          # opposite our duck, which is always clear
+            u = math.atan2(by - dy, bx - dx)
+            ox, oy = bx + theirs * math.cos(u), by + theirs * math.sin(u)
+        o.spawn = (ox, oy, math.atan2(by - oy, bx - ox) + float(rng.uniform(-1.2, 1.2)))
+        w._respawn(o)
+    j = w._ball_joint
+    q, v = int(w.model.jnt_qposadr[j]), int(w.model.jnt_dofadr[j])
+    w.data.qpos[q:q + 7] = [bx, by, r_ball + 0.005, 1.0, 0.0, 0.0, 0.0]
+    w.data.qvel[v:v + 6] = 0.0
+    mujoco.mj_forward(w.model, w.data)
+    place = {"ball": [round(bx, 4), round(by, 4)], "mine": round(mine, 4),
+             "theirs": round(theirs, 4) if opp_ids else None}
+    return q, v, place
+
+
 def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s: float = 0.0,
         knobs: str = "", at_boards: float = 0.0, at_corners: float = 0.0,
-        cove: float = 0.0, corner: float = 0.0) -> list[dict]:
+        cove: float = 0.0, corner: float = 0.0, duel: bool = False) -> list[dict]:
+    if duel:
+        # A duel episode is a different EVENT with a different row; everything
+        # below is the swing's. Delegated rather than branched so no existing
+        # line of the swing loop changes.
+        return run_duel(seed, episodes, opponents, ball_out_s, knobs, cove, corner)
     # An ARM is a `MICRODUCK_CHASE` string, applied here so it lands in the
     # worker process before any brain is built (`brain_kwargs` reads
     # `ChaseParams.from_env()`). Every arm of a comparison runs the same seeds
@@ -556,6 +690,124 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
     return rows
 
 
+def run_duel(seed: int, episodes: int, opponents: int = 1, ball_out_s: float = 0.0,
+             knobs: str = "", cove: float = 0.0, corner: float = 0.0) -> list[dict]:
+    """One seed of DUEL episodes. One row per episode, never per swing: the
+    question is who ends up with the ball, and a duel this duck loses without
+    ever swinging is the case the whole item is about — scoring swings would
+    drop exactly those episodes (the rate-denominator rule, AGENTS.md).
+    """
+    if knobs:
+        os.environ["MICRODUCK_CHASE"] = knobs
+    else:
+        os.environ.pop("MICRODUCK_CHASE", None)
+    sc = gym_scenario(opponents=opponents, cove=cove, corner=corner)
+    infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
+    w = World(sc, infer_for={x.id: infer for x in sc.ducks}, seed=seed, ball_out_s=ball_out_s)
+    bk = __import__("microduck_local.brain.team", fromlist=["brain_kwargs"]).brain_kwargs
+    teams: dict = {}
+    brains = {x.id: REGISTRY.make("chase", **bk(x, w, teams)) for x in sc.ducks}
+    brain = brains["d0"]
+    d = w.ducks["d0"]
+    opp_ids = [x.id for x in sc.ducks if x.id != "d0"]
+    live = {k: getattr(brain.p, k) for k in sorted(ChaseParams.env_names())} if knobs else {}
+    live["_tracker_rest_coast_s"] = brain.tracker.p.rest_coast_s
+    # THE REACHABLE SET, read off the CONSTRUCTED brain (verification rule 0),
+    # and the one question this file exists to keep honest for the duel: a
+    # standoff INSIDE `duck_touch` puts the block spot where `avoid` owns the
+    # tick, so the rule can compute itself every tick and never reach the elif
+    # chain. `fire` (the rule computed) and `act` (the branch ran) are counted
+    # separately below for exactly that reason; if they diverge, the arm is not
+    # the arm anyone thinks it is.
+    reach = {"duel": float(brain.p.duel), "duel_near": float(brain.p.duel_near),
+             "duck_touch": float(brain.p.duck_touch),
+             "inside_touch": bool(0.0 < brain.p.duel < brain.p.duck_touch)}
+    # `_own_goal` is fixed at construction from the SPAWN heading, and the
+    # placement below moves the spawn — so the mouth this duck defends is
+    # recorded here, before any episode, and the advance signs come off it.
+    # d0 spawns facing +x, so it attacks +x and OUR goal is at -x.
+    ours_is_minus_x = True
+    rng = np.random.default_rng(seed)
+    rows = []
+    for ep in range(episodes):
+        q, v, place = _place_duel(w, rng, opp_ids)
+        for b in brains.values():
+            b.reset()
+        t0 = w.t
+        falls0 = {i: int(x.falls) for i, x in w.ducks.items()}
+        t_end = t0 + DUEL_S
+        state05: str | None = None
+        ticks = fire = act = avoid = unattr = 0
+        prev_sp = 0.0
+        touch: dict[str, dict] = {}
+        while w.t < t_end:
+            win = w.t - t0 < DUEL_S
+            _drive(w, brains)
+            if win:
+                ticks += 1
+                fire += bool(getattr(brain, "dueling", False))
+                act += brain.state == "duel"
+                avoid += brain.state == "avoid"
+                if state05 is None and w.t - t0 >= DUEL_STATE_S:
+                    state05 = str(brain.state)
+            w.step()
+            bxy = (float(w.data.qpos[q]), float(w.data.qpos[q + 1]))
+            vel = (float(w.data.qvel[v]), float(w.data.qvel[v + 1]))
+            sp = math.hypot(*vel)
+            if win and sp >= TOUCH_V and prev_sp < TOUCH_V and sp - prev_sp >= TOUCH_DV:
+                who = _touch_by(w, bxy, vel)
+                if who is None:
+                    unattr += 1
+                else:
+                    side = "ours" if who == "d0" else "theirs"
+                    if side not in touch:
+                        touch[side] = {"t": round(w.t - t0, 2), "ball": bxy, "after": None}
+                        # Run on long enough to score THIS touch's carry, and
+                        # no longer: the window is the ledger's own CARRY_S, so
+                        # a duel advance and a `kicksBack` are the same
+                        # quantity on different populations.
+                        t_end = max(t_end, min(w.t + SETTLE_S, t0 + DUEL_S + SETTLE_S))
+            prev_sp = sp
+            for rec in touch.values():
+                if rec["after"] is None and (w.t - t0) - rec["t"] >= SETTLE_S:
+                    rec["after"] = bxy
+        for rec in touch.values():
+            if rec["after"] is None:
+                rec["after"] = (float(w.data.qpos[q]), float(w.data.qpos[q + 1]))
+
+        def adv(side: str, toward_our_goal: bool) -> float | None:
+            rec = touch.get(side)
+            if rec is None:
+                return None
+            dx = rec["after"][0] - rec["ball"][0]
+            s = -1.0 if (toward_our_goal == ours_is_minus_x) else 1.0
+            return round(s * dx, 4)
+        first = min(touch, key=lambda s: touch[s]["t"]) if touch else None
+        rows.append({
+            "duel": True, "ep": ep, "seed": seed, "arm": knobs, "live": live, "reach": reach,
+            "place": place,
+            # WHO GOT THERE. `first` is None when nothing moved the ball inside
+            # the contest window at all — a real outcome (two ducks that never
+            # reach it), not a dropped episode.
+            "first": first,
+            "t_first": None if first is None else touch[first]["t"],
+            "ours_touched": "ours" in touch, "theirs_touched": "theirs" in touch,
+            "t_ours": touch["ours"]["t"] if "ours" in touch else None,
+            "t_theirs": touch["theirs"]["t"] if "theirs" in touch else None,
+            # Metres the ball ran in the carry window after each side's FIRST
+            # touch, each toward the goal that side attacks: `their_advance` is
+            # toward OUR mouth, `our_advance` toward theirs. Same window and
+            # same sign rule as the swing row's `advance`.
+            "their_advance": adv("theirs", True), "our_advance": adv("ours", False),
+            "falls_us": int(d.falls) - falls0["d0"],
+            "falls_them": sum(int(w.ducks[i].falls) - falls0[i] for i in opp_ids),
+            "state05": state05,
+            "ticks": ticks, "fire_ticks": fire, "act_ticks": act, "avoid_ticks": avoid,
+            "n_unattr": unattr,
+        })
+    return rows
+
+
 def _run(a):
     return run(*a)
 
@@ -630,6 +882,9 @@ def report_exit(rows: list[dict]) -> None:
 
 
 def report(rows: list[dict]) -> None:
+    if any(r.get("duel") for r in rows):
+        report_duel(rows)
+        return
     sw = [r for r in rows if r.get("swing")]
     print(f"\n{len(rows)} episodes, {len(sw)} produced a swing "
           f"({100 * len(sw) / max(len(rows), 1):.0f}%); whiff = travel < {WHIFF_M} m\n")
@@ -700,7 +955,15 @@ def two_proportions(x1: int, n1: int, x2: int, n2: int) -> tuple[float, float, f
 
 def outcome_key(rows: "list[dict]") -> tuple:
     """An arm's outcome, episode by episode, to the precision that matters.
-    Two arms that produce this identically did not differ in the physics."""
+    Two arms that produce this identically did not differ in the physics.
+
+    A duel row has no swing and no travel, so the swing key would read every
+    duel arm as identical to every other and report a real effect as BROKEN —
+    the check's own failure mode, inverted. Its key is who touched first, when,
+    and what the two carries did."""
+    if any(r.get("duel") for r in rows):
+        return tuple((r.get("first"), r.get("t_first"),
+                      r.get("our_advance"), r.get("their_advance")) for r in rows)
     return tuple((bool(r.get("swing")), None if not r.get("swing")
                   else round(float(r.get("travel", 0.0)), 9)) for r in rows)
 
@@ -738,6 +1001,9 @@ def compare(arms: "dict[str, list[dict]]") -> None:
     reported beside it, because a gate that improves the rate by refusing
     most of the touches has not improved anything (playbook rule 6)."""
     labels = list(arms)
+    if any(r.get("duel") for rs in arms.values() for r in rs):
+        compare_duel(arms)
+        return
     print("\n" + "=" * 78)
     print("A/B on the same seeds and episodes")
     print("=" * 78)
@@ -799,6 +1065,155 @@ def compare(arms: "dict[str, list[dict]]") -> None:
               f"{100 * TARGET_PP:.0f} points (had {len(arms[lab])} episodes).")
 
 
+# --- the duel's summary, its report and its A/B ------------------------------
+
+def duel_summ(rows: list[dict]) -> dict:
+    """One arm's duel block as the numbers C.4 asks for. `{}` — never a table
+    of zeros — for a row file with no duel rows in it, so every `--out` file
+    this repo has written since the gym existed still summarises (the same
+    contract `exit_summ` keeps for the pre-12at files).
+
+    Reads only `.get`, and the rates it returns are all over the SAME
+    denominator, the episodes: an episode where nobody touched the ball is an
+    outcome of the duel and is counted in it."""
+    rs = [r for r in rows if r.get("duel")]
+    if not rs:
+        return {}
+    n = len(rs)
+
+    def mean(key: str) -> float | None:
+        xs = [float(r[key]) for r in rs if r.get(key) is not None]
+        return float(np.mean(xs)) if xs else None
+
+    def med(key: str) -> float | None:
+        xs = [float(r[key]) for r in rs if r.get(key) is not None]
+        return _q(xs, 0.5) if xs else None
+    ticks = sum(int(r.get("ticks") or 0) for r in rs) or 1
+    states: dict[str, int] = {}
+    for r in rs:
+        states[str(r.get("state05"))] = states.get(str(r.get("state05")), 0) + 1
+    return {
+        "n": n,
+        "ours_first": sum(r.get("first") == "ours" for r in rs),
+        "theirs_first": sum(r.get("first") == "theirs" for r in rs),
+        "none_first": sum(r.get("first") is None for r in rs),
+        "t_first": med("t_first"),
+        "ours_touched": sum(bool(r.get("ours_touched")) for r in rs) / n,
+        "theirs_touched": sum(bool(r.get("theirs_touched")) for r in rs) / n,
+        # The two carries, averaged over the episodes where that side touched
+        # at all — a side that never touched has no advance, and scoring it 0
+        # would credit not turning up.
+        "their_advance": mean("their_advance"), "our_advance": mean("our_advance"),
+        "fell_us": sum(int(r.get("falls_us") or 0) > 0 for r in rs),
+        "fell_them": sum(int(r.get("falls_them") or 0) > 0 for r in rs),
+        # THE FIRING RATE, per duck-tick of the contest window, split into the
+        # rule computing itself and the branch actually running.
+        "fire": sum(int(r.get("fire_ticks") or 0) for r in rs) / ticks,
+        "act": sum(int(r.get("act_ticks") or 0) for r in rs) / ticks,
+        "avoid": sum(int(r.get("avoid_ticks") or 0) for r in rs) / ticks,
+        "ticks": ticks,
+        "unattr": sum(int(r.get("n_unattr") or 0) for r in rs),
+        "states": states,
+        "reach": next((r.get("reach") for r in rs if r.get("reach")), None) or {},
+    }
+
+
+def report_duel(rows: list[dict]) -> None:
+    """One arm's duel block, printed. Silent on a row file with no duel rows."""
+    s = duel_summ(rows)
+    if not s:
+        return
+    n = s["n"]
+    r = s["reach"]
+    print(f"\n{n} duel episodes of {DUEL_S:g} s — our duck {DUEL_MINE[0]:.2f}-{DUEL_MINE[1]:.2f} m "
+          f"from the ball, the opponent {DUEL_THEIRS[0]:.2f}-{DUEL_THEIRS[1]:.2f} m and NEARER.")
+    print(f"  the brain that ran: duel={r.get('duel')} duel_near={r.get('duel_near')} "
+          f"duck_touch={r.get('duck_touch')}"
+          + ("   [standoff INSIDE duck_touch: `avoid` owns the last metres]"
+             if r.get("inside_touch") else ""))
+    print(f"  the rule computed itself on {100 * s['fire']:.1f}% of our duck's "
+          f"{s['ticks']} contest ticks, and the `duel` branch RAN on {100 * s['act']:.1f}%"
+          f"  (`avoid` {100 * s['avoid']:.1f}%)")
+    if not r.get("duel"):
+        # probe_contest.py's warning, in the place it would mislead here: a
+        # zero from an instrument that could not have measured anything else
+        # reads exactly like a finding. `dueling` is only computed when the
+        # knob is on, so the shipped arm's 0% says nothing about how much of
+        # this draw IS a duel — read that off a knob-on arm's `fire`.
+        print("  (0% is by CONSTRUCTION: with `duel` at 0 the rule is never computed. It is not"
+              "\n   a measurement of the population — take that from a knob-on arm's fire rate.)")
+    print(f"\n{'first touch':<16}{'episodes':>10}{'share':>8}")
+    for key, lab in (("ours_first", "ours"), ("theirs_first", "theirs"), ("none_first", "nobody")):
+        print(f"{lab:<16}{s[key]:>10}{100 * s[key] / n:>7.0f}%")
+    print(f"\nmedian time to the first touch      {_fmt(s['t_first'])} s")
+    print(f"our duck touched it at all          {100 * s['ours_touched']:.0f}%   "
+          f"| theirs {100 * s['theirs_touched']:.0f}%")
+    print(f"their advance (m toward OUR goal)   {_fmt(s['their_advance'])}   "
+          f"| our advance {_fmt(s['our_advance'])}")
+    print(f"episodes with a fall                 us {s['fell_us']}   them {s['fell_them']}")
+    if s["unattr"]:
+        print(f"unattributed ball movements          {s['unattr']} "
+              "(no duck inside 0.45 m that the ball left)")
+    tot = sum(s["states"].values()) or 1
+    order = sorted(s["states"], key=lambda k: -s["states"][k])
+    print(f"the state our duck was in at t={DUEL_STATE_S:g} s: "
+          + ", ".join(f"{k} {100 * s['states'][k] / tot:.0f}%" for k in order))
+
+
+def _fmt(v: float | None, nd: int = 3) -> str:
+    return "  -  " if v is None else f"{v:+.{nd}f}"
+
+
+def compare_duel(arms: "dict[str, list[dict]]") -> None:
+    """Two or more duel arms on the same seeds and episodes, read the way this
+    repo reads an event rate: the block per arm, then WE TOUCH FIRST as a
+    proportion of the episodes with a two-proportion z and its MDE beside it,
+    and the falls column as the veto."""
+    labels = list(arms)
+    print("\n" + "=" * 78)
+    print("THE DUEL GYM — A/B on the same seeds and episodes")
+    print("=" * 78)
+    for lab in labels:
+        print(f"\n--- {lab} ---")
+        report_duel(arms[lab])
+        live = next((r.get("live") for r in arms[lab] if r.get("live")), None) or {}
+        on = {k: v for k, v in live.items() if v and not k.startswith("_")}
+        if live:
+            print("  live knobs (off the constructed brain):", on or "none set")
+    if len(labels) < 2:
+        return
+    base = labels[0]
+    b = duel_summ(arms[base])
+    print("\n" + "-" * 78)
+    print(f"{'arm':<22}{'eps':>6}{'we touch 1st':>14}{'vs base':>9}{'±MDE':>7}{'p':>8}  "
+          f"{'verdict':<11}{'their adv':>10}{'our adv':>9}{'fell us':>9}{'p':>7}")
+    print(f"{base + ' (base)':<22}{b['n']:>6}{100 * b['ours_first'] / b['n']:>13.0f}%"
+          f"{'—':>9}{'—':>7}{'—':>8}  {'':<11}{_fmt(b['their_advance']):>10}"
+          f"{_fmt(b['our_advance']):>9}{b['fell_us']:>9}{'—':>7}")
+    broken = []
+    for lab in labels[1:]:
+        a = duel_summ(arms[lab])
+        if not a:
+            continue
+        d_, p_, mde = two_proportions(b["ours_first"], b["n"], a["ours_first"], a["n"])
+        v = "BROKEN" if is_identical(arms[base], arms[lab]) else verdict_prop(p_, mde)
+        if v == "BROKEN":
+            broken.append(lab)
+        _, fp, _ = two_proportions(b["fell_us"], b["n"], a["fell_us"], a["n"])
+        print(f"{lab:<22}{a['n']:>6}{100 * a['ours_first'] / a['n']:>13.0f}%{100 * d_:>+8.0f}%"
+              f"{100 * mde:>6.0f}%{p_:>8.3f}  {v:<11}{_fmt(a['their_advance']):>10}"
+              f"{_fmt(a['our_advance']):>9}{a['fell_us']:>9}{fp:>7.3f}")
+    for lab in broken:
+        print(f"\n!! {lab} reproduced the baseline EPISODE FOR EPISODE — a knob that changes"
+              "\n   nothing is BROKEN, not null (playbook rule 0). Check the reachable set"
+              "\n   line printed above it: `duel` is read off the CONSTRUCTED brain, so a"
+              "\n   value there means the arm arrived and the rule still never acted.")
+    print("\nFALLS ARE THE VETO: read `fell us` before anything else. `their adv` is metres"
+          "\nthe ball ran toward OUR goal in the 2 s after THEIR first touch — lower is"
+          "\nbetter — and `our adv` is the same toward theirs, higher is better. Neither is"
+          "\nscored on episodes where that side never touched the ball.")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -806,8 +1221,15 @@ if __name__ == "__main__":
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--seed0", type=int, default=0)
     ap.add_argument("--spread", type=float, default=0.8, help="bearing spread of the ball's placement (rad)")
-    ap.add_argument("--opponents", type=int, default=0,
-                    help="contesting ducks to add (0 = the clean gym; 1 = the match's one difference)")
+    ap.add_argument("--opponents", type=int, default=None,
+                    help="contesting ducks to add (0 = the clean gym; 1 = the match's one difference). "
+                         "Defaults to 0, or to 1 under --duel, which needs exactly one.")
+    ap.add_argument("--duel", action="store_true",
+                    help="THE DUEL (roadmap C.4): place the contested event instead of a swing — the "
+                         "ball in open play, our duck 0.35-0.60 m from it going for it, an OPPONENT "
+                         "0.10-0.30 m from it and nearer — and score the opponent's next touch rather "
+                         "than the run. One row per episode. Run it with --opponents 0 for the "
+                         "positive control (nobody to contest: `we touch first` must read ~100%%).")
     ap.add_argument("--ball-out-s", type=float, default=0.0,
                     help="the referee's throw-in, as the match funnel was measured (World.ball_out_s)")
     ap.add_argument("--arm", action="append", default=None, metavar="LABEL=KNOBS",
@@ -833,6 +1255,11 @@ if __name__ == "__main__":
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    if a.duel and (a.at_boards > 0.0 or a.at_corners > 0.0):
+        ap.error("--duel places its own event (open play, contested); --at-boards and "
+                 "--at-corners are swing placements and would be silently ignored")
+    if a.opponents is None:
+        a.opponents = 1 if a.duel else 0
     specs = [(s.split("=", 1)[0], s.split("=", 1)[1] if "=" in s else "") for s in (a.arm or ["ambient="])]
     if a.at_corners > 0.0:
         print(f"\n--at-corners {a.at_corners}: EXPECTED VERDICT for board_margin >= 0.20 is"
@@ -853,7 +1280,7 @@ if __name__ == "__main__":
     arms: dict[str, list[dict]] = {}
     for label, knobs in specs:
         args = [(s, a.episodes, a.spread, a.opponents, a.ball_out_s, knobs,
-                 a.at_boards, a.at_corners, a.cove, a.corner)
+                 a.at_boards, a.at_corners, a.cove, a.corner, a.duel)
                 for s in range(a.seed0, a.seed0 + a.seeds)]
         rows: list[dict] = []
         if a.jobs > 1 and len(args) > 1:

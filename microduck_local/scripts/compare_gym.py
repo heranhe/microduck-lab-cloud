@@ -33,6 +33,68 @@ def binom_two_sided(k, n):
     p = sum(math.comb(n, i) for i in range(0, min(k, n - k) + 1)) / 2 ** n * 2
     return min(1.0, p)
 
+# THE DUEL (roadmap C.4's second half). A duel row file has no swings in it, so
+# every table below would print a page of NaN on one. `kick_gym.compare` has
+# already printed the pooled arm-by-arm reading (it dispatches on the row);
+# this is the paired one the roadmap reports beside it, and then we stop.
+if any(r.get("duel") for rs in arms.values() for r in rs):
+    def duel_per_seed(rows):
+        out = defaultdict(lambda: {"n": 0, "ours": 0, "theirs": 0, "none": 0, "fell": 0,
+                                   "their_adv": [], "our_adv": []})
+        for r in rows:
+            if not r.get("duel"):
+                continue
+            s = out[r.get("seed")]
+            s["n"] += 1
+            s["ours"] += int(r.get("first") == "ours")
+            s["theirs"] += int(r.get("first") == "theirs")
+            s["none"] += int(r.get("first") is None)
+            s["fell"] += int((r.get("falls_us") or 0) > 0)
+            for k, col in (("their_advance", "their_adv"), ("our_advance", "our_adv")):
+                if r.get(k) is not None:
+                    s[col].append(float(r[k]))
+        return out
+
+    def mean(xs):
+        return sum(xs) / len(xs) if xs else float("nan")
+
+    print("\n" + "=" * 78 + "\nper seed (paired) — we touch first\n" + "=" * 78)
+    b = duel_per_seed(arms[base])
+    for lab in labels[1:]:
+        a = duel_per_seed(arms[lab])
+        seeds = sorted(set(b) | set(a))
+        better = worse = ties = 0
+        print(f"\n{'seed':>5}{base + ' 1st':>16}{lab + ' 1st':>16}"
+              f"{'their adv ' + base:>18}{'their adv ' + lab:>18}")
+        for sd in seeds:
+            fb = b[sd]["ours"] / b[sd]["n"] if b[sd]["n"] else float("nan")
+            fa = a[sd]["ours"] / a[sd]["n"] if a[sd]["n"] else float("nan")
+            if fa > fb:
+                better += 1
+            elif fa < fb:
+                worse += 1
+            else:
+                ties += 1
+            print(f"{sd:>5}{100 * fb:>14.0f}% {100 * fa:>14.0f}% "
+                  f"{mean(b[sd]['their_adv']):>+17.3f} {mean(a[sd]['their_adv']):>+17.3f}")
+        print(f"\n{lab} vs {base}: we touch first MORE OFTEN on {better}/{len(seeds)} seeds, "
+              f"less on {worse}, ties {ties} (sign test p = "
+              f"{binom_two_sided(min(better, worse), better + worse):.3f})")
+        tb = [v for sd in seeds for v in b[sd]["their_adv"]]
+        ta = [v for sd in seeds for v in a[sd]["their_adv"]]
+        ob = [v for sd in seeds for v in b[sd]["our_adv"]]
+        oa = [v for sd in seeds for v in a[sd]["our_adv"]]
+        print(f"their advance (m toward OUR goal, per THEIR touch): "
+              f"{mean(tb):+.3f} (n={len(tb)}) -> {mean(ta):+.3f} (n={len(ta)})")
+        print(f"our advance   (m toward THEIR goal, per OUR touch): "
+              f"{mean(ob):+.3f} (n={len(ob)}) -> {mean(oa):+.3f} (n={len(oa)})")
+        fb_ = sum(b[sd]["fell"] for sd in seeds), sum(b[sd]["n"] for sd in seeds)
+        fa_ = sum(a[sd]["fell"] for sd in seeds), sum(a[sd]["n"] for sd in seeds)
+        d_, p_, mde_ = kick_gym.two_proportions(fb_[0], fb_[1], fa_[0], fa_[1])
+        print(f"THE VETO — episodes our duck fell in: {fb_[0]}/{fb_[1]} -> {fa_[0]}/{fa_[1]}, "
+              f"shift {100 * d_:+.1f} pp, MDE {100 * mde_:.1f}, p = {p_:.3f}")
+    sys.exit(0)
+
 print("\n" + "=" * 78 + "\nper seed (paired)\n" + "=" * 78)
 b = per_seed(arms[base])
 for lab in labels[1:]:
