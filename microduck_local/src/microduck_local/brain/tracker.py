@@ -8,7 +8,9 @@ bearing inside a gate, range not wildly different — smooths bearing and
 range, counts hits, and COASTS a track through misses: with odometry, the
 remembered bearing turns with the body, so a person the duck turns away
 from is still "at −1.2 rad", not gone. Ghosts (no consistent position)
-never reach the hit count a brain asks for.
+never reach the hit count a brain asks for. (The bearing turns with the
+body's YAW; `TrackerParams.coast_from_xy` is the knob that also turns it with
+the body's TRANSLATION, by re-reading it off the remembered position.)
 
 In the sim the detector also hands out the true object name; the tracker
 keeps it as `name` for the tools and tests, but its `id` is its own —
@@ -18,7 +20,8 @@ what the real robot will have.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass, field, fields
 
 from ..sensors.detector import Detection, DetectionFrame
 
@@ -92,6 +95,36 @@ class Track:
 
     def age(self, t: float) -> float:
         return t - self.last_t
+
+    def bearing_from(self, pos: tuple[float, float], yaw: float) -> float | None:
+        """The bearing (body frame) to this track's remembered POSITION from
+        a body standing at `pos` and facing `yaw`. None without a position.
+
+        `Track.bearing` is what the last HIT measured, turned since only by
+        the body's yaw (`Tracker.update`) - never by its translation. So a
+        duck that walks while coasting a track carries a bearing that stopped
+        meaning "bearing" the moment it moved: measured at 112 degrees off
+        after a walk (roadmap 12af). `xy` does not have that problem, and
+        this reads the bearing off it.
+
+        Exact inverse of `_place` at the moment of the hit: that writes
+        `xy = pos + range * (cos, sin)(yaw + bearing)`, so called with the
+        same pose this returns the same bearing to the float. The knob that
+        wires it into the coast is `TrackerParams.coast_from_xy`."""
+        if self.xy is None:
+            return None
+        a = math.atan2(self.xy[1] - pos[1], self.xy[0] - pos[0]) - yaw
+        return math.atan2(math.sin(a), math.cos(a))
+
+    def range_from(self, pos: tuple[float, float]) -> float | None:
+        """The distance to the remembered position from `pos`, the same way
+        `_place` used `range` on the way in (a ground distance in the
+        odometry plane - `range` itself is the detector's 3-D SLANT range,
+        and the ~2 cm the camera's height puts between them is the same
+        approximation `_place` already makes). None without a position."""
+        if self.xy is None:
+            return None
+        return math.hypot(self.xy[0] - pos[0], self.xy[1] - pos[1])
 
     def predict(self, t: float, decel: float = 0.0) -> tuple[float, float] | None:
         """Position at t from the last hit and the velocity (a constant
@@ -197,6 +230,23 @@ class TrackerParams:
     # the next probe run.
     meas_scale: float = 0.8
     vel_sig_after_s: float = 1.0
+    # THE COASTING TRACK'S BEARING (roadmap 12af's "recorded, not built").
+    # On, a track that has a position and did not hit this frame has its
+    # `bearing` AND `range` re-read off `xy` for the pose the body has now
+    # (`Track.bearing_from` / `range_from`), instead of only being turned by
+    # the body's yaw. Off (the default, and every number measured before
+    # this), the yaw rotation alone - so a duck that WALKS while coasting
+    # carries a bearing that is 112 degrees off after a walk (12af's per-tick
+    # trace) and a range that is short or long by however far it walked,
+    # while `xy` beside them is fine.
+    #
+    # It is one knob for both fields because they are one estimate: a brain
+    # that reads `bearing` and `range` off the same track is asking where the
+    # ball is, and answering half of that from the remembered position and
+    # half from the pose at the last hit would be worse than either. At the
+    # moment of a hit both are the exact inverse of `_place`, so turning this
+    # on changes NOTHING until the body moves.
+    coast_from_xy: bool = False
     # Detection classes the tracker never turns into tracks: landmarks. The
     # goal posts (`post`) are for the localiser (brain/localize.py), which
     # reads them off the frame; as tracks they would only cost association
@@ -206,11 +256,61 @@ class TrackerParams:
     @classmethod
     def for_detector(cls, preset: str | None, **kw) -> "TrackerParams":
         """The tracker a duck with this detector preset should run: its
-        uncertainty model is the detector's datasheet, nothing else moves."""
+        uncertainty model is the detector's datasheet, nothing else moves.
+
+        `MICRODUCK_TRACKER` (see `env_over`) fills in the knobs the CALLER
+        did not name, so a battery can say which tracker variant it is
+        measuring from the command line - the same job `MICRODUCK_CHASE`
+        does for the brain. The caller always wins: `brain/controllers.py`
+        hands `rest_coast_s` / `rest_vel` down from `ChaseParams`, and those
+        stay that one spec's business."""
         from ..sensors.detector import DetectorNoise  # noqa: PLC0415
         nz = DetectorNoise.preset(preset or "ideal")
-        return cls(meas_bearing_sigma=float(nz.bearing_sigma_rad),
-                   meas_range_frac=float(nz.width_sigma_frac), **kw)
+        kw = dict(meas_bearing_sigma=float(nz.bearing_sigma_rad),
+                  meas_range_frac=float(nz.width_sigma_frac), **kw)
+        return cls(**kw, **cls.env_over(kw))
+
+    @classmethod
+    def env_over(cls, explicit: dict | None = None, spec: str | None = None) -> dict:
+        """The knobs `MICRODUCK_TRACKER` sets, minus any the caller already
+        named in `explicit`:
+
+            MICRODUCK_TRACKER="coast_from_xy=1" uv run eval-pitch ...
+
+        Same contract as `ChaseParams.from_env`: an unknown name or an
+        unreadable value RAISES rather than silently measuring the default,
+        and tuple-valued knobs are not settable this way. Not applied by
+        `TrackerParams()` itself - a bare constructor stays the shipped
+        defaults, so tests and goldens do not move under an env var."""
+        if spec is None:
+            spec = os.environ.get("MICRODUCK_TRACKER", "")
+        if not spec.strip():
+            return {}
+        base = cls()
+        kinds = {f.name for f in fields(base)}
+        over: dict = {}
+        for item in spec.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            k, sep, v = item.partition("=")
+            k, v = k.strip(), v.strip()
+            if not sep or k not in kinds:
+                raise ValueError(f"MICRODUCK_TRACKER: {item!r} is not <TrackerParams field>=<value>")
+            if explicit and k in explicit:
+                continue                                   # the caller named it; it wins
+            cur = getattr(base, k)
+            if isinstance(cur, bool):
+                if v.lower() not in ("0", "1", "true", "false", "on", "off"):
+                    raise ValueError(f"MICRODUCK_TRACKER: {k}={v!r} is not a boolean")
+                over[k] = v.lower() in ("1", "true", "on")
+            elif isinstance(cur, int):
+                over[k] = int(v)
+            elif isinstance(cur, tuple):
+                raise ValueError(f"MICRODUCK_TRACKER: {k} is a tuple; set it in code")
+            else:
+                over[k] = float(v)
+        return over
 
 
 class Tracker:
@@ -231,12 +331,27 @@ class Tracker:
         """Fold one detection frame (or None) at time t. `yaw` is the body
         heading now: bearings of coasting tracks turn with the body. With
         `pos` (the body's odometry position) each hit also places the track
-        in the odometry frame and feeds its velocity."""
+        in the odometry frame and feeds its velocity.
+
+        With `coast_from_xy` and a `pos`, a track that HAS a position gets
+        its bearing and range re-read off that position for the pose now
+        (`Track.bearing_from` / `range_from`) instead of only turning with
+        the yaw - so a coasting track's polar pair survives a walk, not just
+        a turn. A hit below still replaces both with the measurement."""
         p = self.p
+        from_xy = p.coast_from_xy and yaw is not None and pos is not None
+        if from_xy:
+            for tr in self.tracks:
+                if tr.xy is None:
+                    continue
+                tr.bearing = tr.bearing_from(pos, yaw)
+                tr.range = tr.range_from(pos)
         if yaw is not None and self._prev_yaw is not None:
             dyaw = math.atan2(math.sin(yaw - self._prev_yaw), math.cos(yaw - self._prev_yaw))
             if dyaw:
                 for tr in self.tracks:                  # a hit below replaces this with the measurement
+                    if from_xy and tr.xy is not None:
+                        continue                        # already read off `xy`, yaw and all
                     tr.bearing = math.atan2(math.sin(tr.bearing - dyaw), math.cos(tr.bearing - dyaw))
         self._prev_yaw = yaw
         if frame is not None and frame.t != self._last_frame_t:
