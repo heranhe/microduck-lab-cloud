@@ -12424,7 +12424,11 @@ read before the `fresh` blocks had finished. The result is not a close call —
 contrasts are 2 extra reads on top of the 2 registered ones and the sr-`fresh`
 row should be Bonferroni-read at 0.0125, which it does not clear.
 
-→ **What settles it next.** The chain ends at a question this repo cannot
+→ **What settles it next.** *Owner's answer, 2026-09-11: landscape, probably
+(116° across, 60° up) — so the detector is right and the sensed recipe was
+trained against a camera the robot does not have; the retrain at the
+landscape FOV is the next arm, and the recipe's portrait default waits on a
+photograph before it is flipped.* The chain ends at a question this repo cannot
 answer from inside itself: **which way round is the camera actually mounted?**
 `behaviors/ball.py` says 116° up the robot's view; `sensors/detector.py` and
 `docs/camera-hardware.md` say 116° across it. One of them is wrong and it is a
@@ -12545,8 +12549,9 @@ sidecar +0.209 → exit +0.155. Slope −0.124, fixed point ≈ +0.161. Both val
 lie inside the other's CI, and +0.209 measures zero residual error in play (aim
 error median −0.6°), so it is the value to set.
 
-**Proposed sidecar — NOT applied; shipping a policy sidecar is the owner's
-call.** `policies/kick/kick_right.json` is unchanged.
+**Proposed sidecar — APPLIED 2026-09-11 on the owner's call** (`kick_left.json`
+`exit_rad` −0.225 → 0.209, `exit_bench_rad` kept; `policies/kick/kick_right.json`
+unchanged).
 
 ```diff
 --- a/microduck_local/policies/kick/kick_left.json
@@ -13390,7 +13395,10 @@ the run. **`eval-pitch` is not an instrument for perception quality at any
 seed count** — the column that carries it is the kick-with-a-line share, which
 resolves at 24 seeds where `kickCarry` (56 % MDE) and goals (730 seeds) do not.
 
-**RECOMMENDATION TO THE OWNER (theirs to take; nothing changed here).**
+**RECOMMENDATION TO THE OWNER — taken 2026-09-11: 10 Hz stays the lab default;
+the gap is now on record in `sensors/detector.py` beside `rate_hz` and in
+`docs/camera-hardware.md` §4, and `ROBOT` / `FIVE` are named ablations in
+`tests/test_detector.py`.**
 
 1. **Keep 10 Hz as the lab default, and put the gap on record** — do NOT move
    the default to 2 Hz. Two reasons, both measured above. (a) It would

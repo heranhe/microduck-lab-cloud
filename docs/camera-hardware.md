@@ -536,6 +536,17 @@ for anything built to paper over a sensor limit.
 
 ## 4. Frame rate is a non-issue — and the detector rate is now a lever
 
+> **Corrected 2026-09-11 (roadmap 12av).** The budget below reasons from the
+> sensor's 90 fps; the binding constraint is the NPU under a thermal ceiling,
+> and the shipped robot runs its detector at **2 Hz** (`robotd-params`
+> `DetectConfig.hz`, `deploy/robotd.toml [detect]`: "95 °C … throttles to
+> 408 MHz"). The sim's 10 Hz is therefore 5× the hardware, and it is
+> load-bearing: at 2 Hz the shipped kick pair whiffs 48 % in the per-swing
+> gym against 7 % at 10 Hz (48 of 48 seeds), because the duck arrives ~6 cm
+> further from the ball; 5 Hz costs +6 pp. The lab keeps 10 Hz as its default
+> on the owner's call, with this gap on record: do not quote the sim's kick
+> numbers as the robot's. `MICRODUCK_CAMERA="rate_hz=2.0"` is the honest arm.
+
 `DetectorSpec.rate_hz` is 10 and the brain decides at 10 Hz, against the
 sensor's 90 — nine times the headroom. The developer's "not sure we have
 enough internal compute to use the full potential" caveat does not bite this

@@ -123,6 +123,15 @@ class DetectorSpec:
     # downstream needs to know which lens found it. Wide-lens pixel mapping
     # (`projection="equidistant"`) is applied in the head frame either way.
     bottom_pitch_deg: float = 0.0
+    # The ROBOT's detector runs at 2 Hz — a thermal limit, not a taste
+    # (microduck/robotd-params/src/lib.rs `DetectConfig.hz`, deploy/robotd.toml
+    # [detect]; the 320 px INT8 YOLO11n on the NPU is p50 25.7 ms). 10 is the
+    # lab default, kept on the owner's call (roadmap 12av) with the gap on
+    # record: at 2 Hz the shipped kick pair whiffs 48 % in the per-swing gym
+    # against 7 % here, because the duck arrives further from the ball. Do
+    # not quote the sim's kick numbers as the robot's; `MICRODUCK_CAMERA=
+    # "rate_hz=2.0"` is the honest arm, and 5 Hz the rung the brain's own
+    # constants survive.
     rate_hz: float = 10.0
     site: str = "head_camera"
     # Detector input width in pixels.

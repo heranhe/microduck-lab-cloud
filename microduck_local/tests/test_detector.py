@@ -31,6 +31,15 @@ pytestmark = pytest.mark.skipif(
 # default stops characterising anything the day the default moves, and reports
 # it as nine unrelated-looking failures instead of "the camera changed".
 NARROW_REF = DetectorSpec(fov_h_deg=62.0, fov_v_deg=48.0, px_h=320, projection="pinhole")
+# Named ablations, never defaults (roadmap 12av): the rate the ROBOT ships
+# with (a thermal limit) and the rung the 640 px recommendation needs.
+ROBOT = DetectorSpec(rate_hz=2.0)
+FIVE = DetectorSpec(rate_hz=5.0)
+
+
+def test_the_named_rate_ablations_are_not_the_default():
+    assert ROBOT.rate_hz == 2.0 and FIVE.rate_hz == 5.0
+    assert DetectorSpec().rate_hz == 10.0                      # the lab default, 5x the robot
 
 
 def world(ducks, walls=(), balls=()):
