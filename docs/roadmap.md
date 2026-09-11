@@ -4611,6 +4611,91 @@ this stack has none of them.
       blocks' tables reproduce (spread effect on both, possession null on both;
       crowd p 0.056 / 0.10 per block, 0.011 pooled).
 
+      **The per-event instrument, BUILT and MEASURED (2026-09-10): the duel
+      block at 0.15 m nearly doubles first touch and zeroes the opponent's
+      advance on both blocks — and gives the same metres straight back on
+      ours.** C.4's own "what would settle it next" was that a whole-match
+      ledger cannot price a duel rule (MDE 3% on possession against a 10%
+      firing rate). `scripts/kick_gym.py --duel` places the event instead: the
+      ball in open play at least 0.45 m off every board, our duck 0.35-0.60 m
+      from it and pointed at it, one OPPONENT 0.10-0.30 m from it and NEARER,
+      in a sampled pose; both brains the shipped chase, the opponent on the
+      other team so no board owns it. One row per EPISODE, not per swing — a
+      duel this duck loses without ever swinging is the case the item is
+      about, and scoring swings would drop exactly those.
+
+      Two constants of the event were measured, not chosen. The contest window
+      is 6 s because the POSITIVE CONTROL (the identical draw, nobody to
+      contest it) resolves on 58% of episodes at 4 s, 94% at 6 s and 94% at
+      8 s — below 6 s a "nobody touched it" is the clock, not the contest. And
+      a TOUCH is the rising edge of the ball's planar speed credited to the
+      nearest duck the ball is travelling AWAY from: in a duel both bodies are
+      inside the radius, so nearest-wins would credit whichever duck the ball
+      was kicked AT. (`World` snapshots contacts inside every physics substep
+      for its bump sense and does not expose them; the contact list left after
+      a tick misses three touches in four, by its own comment.)
+
+      THE REACHABLE SET FIRST, off the constructed brain (verification rule 0),
+      per duck-tick of the contest window:
+
+      | | rule computed | `duel` branch RAN | `avoid` |
+      |---|---|---|---|
+      | shipped | 0% — by construction, no rule | 0% | 36.5% |
+      | `duel=0.3` | 63.5 / 65.4% | 48.9 / 47.0% | 9.0 / 10.3% |
+      | `duel=0.15` | 62.6 / 63.9% | 36.8 / 36.6% | 14.4 / 15.2% |
+
+      So the standoff INSIDE `duck_touch` (0.22) does fire — the worry that it
+      could not was wrong — but it is preempted by `avoid` on about a quarter
+      of its own ticks, which is the whole difference between the two arms'
+      `act` columns. `report_duel` refuses to let the shipped arm's 0% read as
+      a population measurement (probe_contest's warning, in the place it would
+      mislead here).
+
+      Measured, 40 episodes x 12 seeds an arm, discovery seeds 0-11 and fresh
+      100-111, 960 episodes an arm pooled (`runs/duelgym/`):
+
+      | | b0 off → on | b100 off → on | pooled | MDE | p | verdict |
+      |---|---|---|---|---|---|---|
+      | **duel=0.15** we touch first | 9.4 → 14.8% | 7.9 → 17.1% | +7.3 pp | 2.9 pp | **0.0000** | **effect** |
+      | their advance m/ep | +.036 → +.001 | +.031 → +.003 | −0.031 | 0.028 | **0.029** | effect |
+      | our advance m/ep | +.010 → −.020 | +.005 → −.024 | −0.029 | 0.012 | **0.0000** | effect (a cost) |
+      | net ball m/ep | −.026 → −.021 | −.026 → −.027 | +0.0015 | 0.031 | 0.92 | NO RESULT |
+      | our duck fell | 0 of 480 | 0 of 480 | 0 of 960 | | | no events |
+      | **duel=0.3** we touch first | 9.4 → 9.2% | 7.9 → 9.6% | +0.7 pp | 2.6 pp | 0.58 | null |
+
+      Sign test on we-touch-first: 0.15 better on 10/12 seeds (p=0.039) and
+      11/12 (p=0.001); 0.3 on 6/12 and 7/12.
+
+      **`duel=0.15` is the first duel arm with an effect on the duel**, and it
+      replicates independently on both blocks in direction and size. `duel=0.3`
+      — the value the pitch battery ran — is a null on first touch on both.
+      But the metres are a wash: standing goal-side of the ball means OUR touch
+      sends it back, and our advance falls 0.029 m an episode against the 0.031
+      the opponent's loses, equal and opposite to a millimetre and a half. The
+      net is not independently resolvable at this size (MDE 119% of baseline):
+      read it as "nothing suggests a gain", NOT as a null. The mechanism is in
+      the state column — at t=0.5 s the shipped duck is `lineup` 64-66% and
+      `avoid` 34-36% (this item's own "flinch, or line up on a ball it will not
+      get"); with the knob on it is `duel` 95-97%.
+
+      **The fall veto is NOT tested by this instrument**: zero falls in 2,880
+      episodes across the three arms, because a 6 s episode has no run-up to
+      fall in. The pitch battery's 10 → 11 events stays the only reading.
+
+      `duel` still ships OFF. What the instrument changes is what the next arm
+      must do: first touch and the opponent's advance are now cheap to move and
+      cheap to measure, so the open question is no longer "does a block work" —
+      it does — but whether a touch taken from goal-side can be turned
+      FORWARD (a turn-and-shield on contact, or a block spot offset off the
+      own-goal line) so the 0.029 m is not handed straight back.
+
+      Reviewer's re-read of the six row files: we-touch-first reproduces per
+      arm and block (9.4 / 7.9 → 9.2 / 9.6 at 0.3 → 14.8 / 17.1 at 0.15).
+      Commit bd23c3c (`kick_gym.py --duel`, `duel_summ` / `report_duel` /
+      `compare_duel`, the paired reading in `compare_gym.py`,
+      `tests/test_kick_gym_duel.py`). Row files: `runs/duelgym/off-b0.jsonl`,
+      `d03-b0.jsonl`, `d015-b0.jsonl` and the same three at `-b100`.
+
 #### D. Team play — after C, not before
 
 - [x] **D.1 Passing — BUILT and MEASURED (2026-09-07): a kick cannot pass
