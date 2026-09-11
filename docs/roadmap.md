@@ -12391,7 +12391,8 @@ resolves at 24 seeds where `kickCarry` (56 % MDE) and goals (730 seeds) do not.
    inheriting it, and `detector.py` has no preset registry to put them in.
    (`tests/test_detector.py:108` already names `rate_hz=10.0` explicitly in the
    latency test, which is the pattern.)
-4. **If the lab is ever to run at the robot's rate, the BRAIN moves first, not
+4. **[answered by follow-up (1.1) below: the brain is not the lever]** If the
+   lab is ever to run at the robot's rate, the BRAIN moves first, not
    the spec.** `Chase.DET_MAX_AGE` would have to be at least one detector
    period (and `probe_ball_loss`'s event rule with it), and the line-up's
    arrival test would have to stop assuming a 10 Hz belief. That is a design
@@ -12469,3 +12470,130 @@ needs the gate expressed in periods, not seconds, before any future rate arm
 uses it; (3) the last 12as mismatch still standing, **the tracker's ~5.5 cm
 placement error** (`Tracker._place`) — unchanged by this item and still the
 only one left from G's verdict B.
+
+**FOLLOW-UP (1.1), RUN: the brain's freshness constant put in detector periods — it is reachable, it is a quarter of all ticks at 2 Hz, and it moves the kick by nothing. The 48 % is the hardware (2026-09-10).**
+
+The follow-up closed on a recommendation ("if the lab is ever to run at the robot's rate, the BRAIN moves first") and a named artifact. Both taken. **The brain is not the lever, and the probe was.**
+
+**A. The knob, and its reachable set before any compute.** `ChaseParams.det_max_periods` (ships **0.0** = the bare constant) puts the gate in periods of whatever camera `MICRODUCK_CAMERA` builds, read once at construction: `det_gate(base, periods, period) = max(DET_MAX_AGE, periods * period)` — a floor, never a replacement. On the CONSTRUCTED `World` the gym builds:
+
+| `MICRODUCK_CAMERA` | period | knob off | `det_max_periods=1.0` | `=1.5` |
+|---|---|---|---|---|
+| 10 Hz | 0.100 s | 0.400 | **0.400 (no-op)** | **0.400 (no-op)** |
+| 5 Hz | 0.200 s | 0.400 | **0.400 (no-op)** | **0.400 (no-op)** |
+| 2 Hz | 0.500 s | 0.400 | **0.500** | **0.750** |
+
+It can only act **below 2.5 Hz** (1 period) and **below 3.75 Hz** (1.5). So the 10 Hz control arm MUST reproduce the baseline episode for episode — `kick_gym` prints `BROKEN` for it and **that reading is the pass** ([[check-a-knobs-reachable-set-first]]). Asserted: `is_identical` True for both 10 Hz arms; the rows differ only in `label`/`arm`/`live`.
+
+*And a correction to the follow-up's own ceiling.* It reported 2 Hz as "structurally stale a sixth of the time" from a replay that aged frames from their ARRIVAL. `Senses.det_age` ages a frame from its **capture**, which is the number the gate compares. Measured on a real 1v1 pitch (30 s, 2994 duck-ticks): at 2 Hz **26.7 % of ticks** carry a detection the shipped brain calls stale with nothing missed (73.3 % fresh, not 82.9); one period cuts that to **6.5 %**, 1.5 periods to **0 %**. At 10 Hz it is 0 % at every setting. The knob's reachable set is a quarter of all ticks.
+
+*The tree is inert.* `ship2` at defaults reproduces 12av follow-up (1)'s `runs/detrate/gym-ship2-b{0,100}.jsonl` **bit for bit** (`is_identical` True, 480 rows each), and a pristine-HEAD twin of `controllers.py` gives 40/40 identical rows at 2 Hz.
+
+**B. The gym, 24 seeds × 40 episodes on blocks 0 and 100, 2 Hz, shipped pair.**
+
+| pooled, 24 seeds, 2 Hz | swings | whiff | shift | MDE | p | verdict | seeds better | conn travel | advance med | foot→ball | `track_age` | fell |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **pair** shipped (0.40 s) | 861 | 47.4 % | — | — | — | — | — | 0.34 m | 0.058 m | 0.181 m | 1.88 s | 4/861 |
+| **pair** 1 period (0.50 s) | 840 | 50.6 % | +3.2 | 4.8 | 0.186 | **null** | 10/24 | 0.42 m | 0.050 m | 0.185 m | 1.84 s | 4/840 |
+| **pair** 1.5 periods (0.75 s) | 802 | 48.3 % | +0.9 | 4.8 | 0.723 | **null** | 11/24 | 0.47 m | 0.048 m | 0.173 m | 1.84 s | 6/802 |
+| **LEFT** shipped | 449 | 48.8 % | — | — | — | — | — | 0.62 | 0.045 | 0.177 | 1.86 | 4/449 |
+| **LEFT** 1 period | 489 | 48.3 % | −0.5 | 6.4 | 0.875 | null | — | 0.56 | 0.041 | 0.183 | 1.88 | 4/489 |
+| **LEFT** 1.5 periods | 440 | 46.4 % | −2.4 | 6.6 | 0.472 | null | — | 0.60 | 0.037 | 0.172 | 1.86 | 4/440 |
+| **RIGHT** shipped | 412 | 45.9 % | — | — | — | — | — | 0.20 | 0.077 | 0.182 | 1.88 | 0/412 |
+| **RIGHT** 1 period | 351 | 53.8 % | **+8.0** | 7.1 | **0.028** | effect (worse) | — | 0.22 | 0.063 | 0.186 | 1.84 | 0/351 |
+| **RIGHT** 1.5 periods | 362 | 50.6 % | +4.7 | 7.1 | 0.194 | null | — | 0.25 | 0.058 | 0.175 | 1.74 | 2/362 |
+
+Per block: b0 48.0 / 50.5 / 47.5 %; b100 46.8 / 50.7 / 49.0 %. Falls flat (4 → 4 → 6 of ~830 swings, p ≥ 0.16 per block). The right foot's +8.0 pp is unregistered, one foot of one arm on 24 seeds at MDE 7.1, and runs the WRONG way — **not quotable**, registered only because it is the largest thing on the table and it is a cost, not a win. Its swing count falls with it (412 → 351), which is the shape of a duck that lines up longer and takes fewer shots.
+
+**C. Why it cannot work, from the freshness columns.** The gate is unreachable where the kick is decided:
+
+| at the swing, 2 Hz (medians) | shipped | 1 period | 1.5 periods | *10 Hz, for scale* |
+|---|---|---|---|---|
+| `plan_age` | 0.44 s | 0.44 s | 0.44 s | *0.44 s* |
+| **`track_age`** | **1.88 s** | **1.84 s** | **1.84 s** | *1.43 s* |
+| `spot_age` | 0.04 s | 0.04 s | 0.04 s | *0.04 s* |
+| foot-to-ball dist | 0.181 m | 0.185 m | 0.173 m | *0.119 m* |
+| ball ahead / \|side\| | 0.150 / 0.068 | 0.150 / 0.072 | 0.144 / 0.071 | *0.104 / 0.055* |
+| on the sweet spot | 6.6 % | 5.8 % | 5.9 % | *23.7 %* |
+| carrying a prediction | 1.7 % | 1.8 % | 3.9 % | *13.3 %* |
+
+**The duck swings 1.9 s — roughly four detector periods — after the ball was last seen.** A gate of 0.40, 0.50 or 0.75 s is equally irrelevant at that moment; it can only act during the approach, while frames are still arriving, and the approach's *arrival* is what 2 Hz breaks. This is [[ball-loss-audit-head-is-not-the-lever]]'s shape a third time: the constant is not where the loss is.
+
+**D. The line-up's arrival, independent population** (`probe_board_states.py --episodes 20 --seeds 2`, ball at the boards):
+
+| 40 episodes | 10 Hz | 2 Hz shipped | 2 Hz 1 period | 2 Hz 1.5 periods |
+|---|---|---|---|---|
+| line-ups started / timeouts | 87 / 56 | 83 / 60 | 87 / 63 | 96 / 69 |
+| **dist to the spot at timeout, med** | **5 cm** | **24 cm** | **26 cm** | **26 cm** |
+| closest during that line-up, med | 3 cm | 22 cm | 22 cm | 23 cm |
+| **ever within 5 cm of the spot** | **61 %** | **40 %** | **37 %** | **35 %** |
+| \|heading err\| at timeout, med | 69° | 68° | 70° | 69° |
+| swung | 5 | 6 | 7 | 4 |
+
+**The arrival does not come back.** The state machine is unchanged and the duck still never gets there — a longer freshness gate does not put it on the spot.
+
+**E. The loss probe's event rule — FIXED, and the artifact priced.** `LOSS_PERIODS = 1.5`: a loss is now no frame for longer than `max(brain.DET_MAX_AGE, 1.5 × period)` — one period of cadence plus the datasheet's own arrival jitter (0.026 s + |N(0, 0.02)|) and a tick. That is **exactly 0.4 s at 10 Hz and 5 Hz**, so nothing 12af / 12ar / 12ae / 12as measured moves; at 2 Hz it is 0.75 s. Rows carry `detHz`, `lossGate`, `lossPeriods`. Locked by `tests/test_det_freshness.py`: over the detector's real arrival schedule with the ball in EVERY frame, the fixed rule opens **0** events at 2 Hz where the old one opens **>200 in 120 s**; and on a seeded 60 s run at 10 Hz the event count, their start times and `viewFrac` are identical under both rules.
+
+Re-run on the SAME 12 × 180 s 2v2 rollouts (identical trajectories: kicks 5.08/run, falls 0.08, blind frames 58.3 % — **only the counting rule changed**):
+
+| 12 seeds × 180 s, 2v2 | 10 Hz (rule unchanged) | 2 Hz, OLD rule | 2 Hz, FIXED rule |
+|---|---|---|---|
+| **loss events** | 1441 | ~~7159~~ | **1424** |
+| **median loss** | 1.00 s | ~~0.10 s~~ | **1.22 s** |
+| p90 | 8.62 s | 1.56 s | 9.25 s |
+| share over 2 s | 33 % | 8 % | 34 % |
+| events > 1 s | 716 | 918 | 722 |
+| events > 2 s | 471 | **595** | **478** |
+| blind s inside > 2 s events | 3351 (38.8 %) | **4152 (48.1 %)** | **3739 (43.3 %)** |
+| `viewFrac` | 52.6 % (ceiling 100 %) | 34.2 % (ceiling 82.9 %) | **46.1 % (ceiling 100 %)** |
+
+Paired per seed, 10 Hz → 2 Hz on the fixed rule: `viewFrac` **−6.43 ± 6.39 pp, p 0.049**, worse on 10/12 (the old rule read −18.32 ± 5.68); **median loss 1.02 → 1.03 s, p 0.907, NO RESULT** — where the old rule read "0.10 s, better on 12/12". **The reversal is complete and the honest statement is smaller: at 2 Hz the duck is blind a little more of the time and its losses are the same length, not shorter.** Note that the long-loss totals the follow-up called safe also move, because an event's `t0` moved 0.35 s later: **>2 s events 595 → 478, and the +26 % over 10 Hz becomes +1.5 %**; the blind seconds inside them, +24 % → **+12 %**. Fix that line in 12av follow-up (1) E when quoting it.
+
+*The knob on this instrument too* (2 Hz, `det_max_periods=1.0`): `viewFrac` 46.1 → 45.9 (p 0.925, null), median 1.22 → 1.25 s, events 1424 → 1450, **kicks/run 5.08 → 3.75 (p 0.006, effect — fewer)**, falls 0.08 → 0.17 (NO RESULT). It does not reduce blindness and it costs swings in a match.
+
+**VERDICT: the mis-specification is real, reachable and NOT the cause. The 48 % is the hardware.** `DET_MAX_AGE` at 0.4 s does blind the shipped brain on 26.7 % of its ticks at 2 Hz, and repairing that — on a quarter of all ticks, with the knob verifiably live (the arms share no episode) — moves pair whiff by **+3.2 pp and +0.9 pp, both nulls at MDE 4.8**, moves the foot-to-ball distance by ≤ 8 mm, and moves the line-up's arrival the wrong way. 12av follow-up (1)'s 2 Hz numbers are therefore **statements about the sensor's cadence, not about a mis-specified controller** — its own caveat 1(b) can be withdrawn, and its headline (41 pp of whiff, 63 % of connected travel) stands unqualified. What 2 Hz costs is the duck's ARRIVAL at the spot — `track_age` at the swing is four periods, so no freshness constant can reach it.
+
+**RECOMMENDATION (nothing shipped on; the default is unchanged at every rate).**
+1. **Leave `det_max_periods` at 0.0.** It is a named ablation, not a fix: it buys nothing on whiff, nothing on arrival, and costs kicks in a match. Keep 10 Hz as the lab default and 12av follow-up (1)'s recommendations 1-3 as written.
+2. **12av follow-up (1) recommendation 4 is answered and can be struck.** "The brain moves first" has been tried at the only two rungs that are defensible (1 and 1.5 periods) and the brain is not the lever. If anyone ever runs the lab at 2 Hz, what has to change is the **approach** — `kick_ahead`/`lineup` servoing to a spot the duck can still reach on a 0.5 s belief — not a freshness constant.
+3. **The loss probe's fix is load-bearing and should be kept.** Any future rate arm gets comparable `viewFrac` (a 100 % ceiling at every rate) and an honest median for free.
+4. **Snapshot warning for the next A/B.** A `PYTHONPATH`-only snapshot of `src/` silently swaps the local kick exports for the **shipped upstream kicks** (`World.skill_path` resolves `Path(__file__).parents[3]/"policies"`), which reads as **84 % whiff at every rate** and looks exactly like a finding. Symlink `policies/` into the snapshot, and check the 10 Hz arm against a known number before believing anything.
+
+```
+# the readback, before any compute (the CONSTRUCTED World the gym builds)
+MICRODUCK_CAMERA="rate_hz=2.0" MICRODUCK_CHASE="det_max_periods=1.0" uv run python - <<'PY'
+import sys, numpy as np; sys.path.insert(0, "scripts")
+import kick_gym
+from microduck_local.world.arena import World
+from microduck_local.brain import REGISTRY
+from microduck_local.brain.team import brain_kwargs
+from microduck_local.brain.controllers import Chase
+sc = kick_gym.gym_scenario()
+w = World(sc, infer_for={d.id: (lambda o: np.zeros(14, "float32")) for d in sc.ducks}, seed=0)
+for i, d in sorted(w.ducks.items()):
+    b = REGISTRY.make("chase", **brain_kwargs(next(x for x in sc.ducks if x.id == i), w, {}))
+    print(i, d.detector.period, b.DET_MAX_AGE, Chase.DET_MAX_AGE)      # -> 0.5 0.5 0.4
+PY
+
+# the gym: three arms per block, one command (the 10 Hz block is the control)
+MICRODUCK_CAMERA="rate_hz=2.0" uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 {0,100} \
+  --jobs 3 --arm "ship2=" --arm "p10=det_max_periods=1.0" --arm "p15=det_max_periods=1.5" \
+  --out runs/detrate/gym-detage-2hz-b{0,100}.jsonl
+MICRODUCK_CAMERA="rate_hz=10.0" uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 0 \
+  --jobs 3 --arm "ship10=" --arm "p10=det_max_periods=1.0" --arm "p15=det_max_periods=1.5" \
+  --out runs/detrate/gym-detage-10hz-b0.jsonl        # BOTH arms BROKEN = the pass
+
+# the arrival census, and the loss budget on the fixed rule
+MICRODUCK_CAMERA="rate_hz={10.0,2.0}" uv run python scripts/probe_board_states.py --episodes 20 --seeds 2 \
+  --arm "shipped=" --arm "p10=det_max_periods=1.0" --arm "p15=det_max_periods=1.5"
+MICRODUCK_CAMERA="rate_hz=2.0" uv run python scripts/probe_ball_loss.py --seeds 12 --seconds 180 \
+  --per-side 2 --ball-out-s 5 --jobs 3 --arm "shipped=" --arm "p10=det_max_periods=1.0" \
+  --out runs/detrate/loss2fix
+```
+
+Reviewer's re-read (independent): pair whiff 47.4 → 50.6 → 48.3 % and falls
+4 / 4 / 6 reproduce from `gym-detage-2hz-b{0,100}.jsonl`; `det_max_periods`
+ships 0.0 and `Chase.DET_MAX_AGE` reads 0.4 off the class. Agent's re-read:
+`det_max_periods` at `brain/controllers.py` (ChaseParams) and `det_gate` above `class Chase`; pair whiff 47.4 → 50.6 / 48.3 % over 24 seeds, `track_age` 1.88 s at the swing, arrival 24 → 26 cm; loss events 7159 → 1424 and median 0.10 → 1.22 s on the same rollouts — the tables reproduce from the rows.
+Rows: `runs/detrate/gym-detage-2hz-b{0,100}.jsonl` (3 arms × 480 episodes each), `runs/detrate/gym-detage-10hz-b0.jsonl` (3 × 480, the control), `runs/detrate/loss2fix/{shipped,p10}.jsonl` (12 seeds each), read against 12av follow-up (1)'s `runs/detrate/gym-ship2-b{0,100}.jsonl` (reproduced bit for bit) and `runs/detrate/loss{10,2}/shipped.jsonl`.
+Committed: `brain/controllers.py` (the knob, ships OFF), `scripts/probe_ball_loss.py` (the event rule), `tests/test_det_freshness.py` (new). **No default moved, no preset, no policy, no `docs/camera-hardware.md` edit.**
