@@ -5305,6 +5305,22 @@ this stack has none of them.
       pitch unless the pitch's line-ups are inside the gym's box** — and here
       they are not, on two features, by 31 % and 47 %.
 
+      **Follow-ups (1)'s acceptance test and (2), DONE (ea95472).** The box
+      probe is committed as `scripts/probe_model_box.py` and is the test a
+      gym-fitted scorer must pass BEFORE a ledger: on `model-b0.json` /
+      `data-b0.jsonl` over 3 pitch seeds × 120 s (46 604 candidate rows in
+      80 s) it reads `range` 50.2 % outside the training box, `ball_board`
+      24.8 %, `goal_off` 6.1 %, the push and `p_block`/`p_pass` columns dead in
+      training, and exits FAIL. And the ledger now keeps every kick:
+      `world/metrics.py` writes `kickEvents` per team — `[t, carry, adv, line,
+      back, foot]` per resolved kick, `carry` summing exactly to `kickCarry`
+      (asserted on 8 rows × 2 teams; reviewer re-read one) — through
+      `events_row()` (not `row()`, which feeds the 50 Hz stream), and
+      `scripts/compare_pitch.py` prints carry per kick over the pooled events
+      (Welch, MDE, verdict) beside the run-level `kickCarry` it now also
+      reports, with `—` for rows written before the list. The 48-seed E.2 rows
+      predate it; a re-run is the only way to read that pair per event.
+
       → **What settles it next:** (1) if the ranking is to be tried again,
       fit it on PITCH line-ups, not gym ones — either widen `_place` (range
       and board distance are the two out-of-box features, both placement
