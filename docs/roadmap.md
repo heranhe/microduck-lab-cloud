@@ -4214,16 +4214,82 @@ this stack has none of them.
       block above already identified. `tests/test_fall_poses.py` locks the
       instrument (each test checked to fail when its guard is broken).
 
-      **What remains on this item is unchanged and is not a training
-      problem:** the controller switch in `world/arena.py` — hand a fallen
-      duck to `alpha_stand` (or `getup-l2`) for ~1.5 s and clear `down_until`
-      when it stands, behind an `eval-pitch` flag that swaps
-      `World.getup_s`'s stand-in lie-down for the real recovery. The
-      measurement above prices it: **0.2–1.2 s, not the assumed 10–20 s.**
-      Re-read from disk: `probe_fall_poses.py --seeds 24 --dump falls.json`,
-      `--seeds 96 --modes walk_push,walk_cut --dump falls_walk.json`, then
-      `probe_getup.py --falls falls_walk.json --policy runs/getup-l2/policy.onnx --noise --sheet sheet.png`
-      (and `--policy limp`, `--policy ../microduck/policies/alpha_stand.onnx`).
+      **The controller switch is built, and it prices a fall at 0.74 s
+      (2026-09-10, commit 1e9445d).** `World.getup_infer` hands a downed duck
+      to a get-up ONNX on a zero command until it is upright and HOLDS it for
+      `getup_hold_s` (0.3 s — without that dwell one real fall was counted
+      twenty-five times, 0.1-0.3 s apart: `fallen()` is a threshold and a duck
+      handed back the tick it first crosses drops straight back over); `getup_s`
+      becomes the timeout that stops a stuck duck stalling a battery; each spell
+      on the floor is priced as it ends (`World.getup_down_s`).
+      `eval-pitch --getup-policy` and `probe_search.py --getup-policy` carry it,
+      and refuse to run without `--getup-s > 0` — at 0 a fallen duck is
+      respawned on the tick it falls and the policy is never called once, so the
+      flag would have run a whole battery of the BASELINE. `load_done` refuses
+      to resume a get-up arm into a respawn file. Locked by
+      `tests/test_getup_world.py` (11 tests, each checked to fail when its guard
+      is broken). The lab's pitches already had it on (`world_server`,
+      `PITCH_GETUP_POLICY`); eval-pitch still defaults to the teleport.
+
+      **Measured, and inert where it was measured.** 24 seeds x 300 s of 2v2,
+      `--ball-out-s 5`, the same seeds, both arms forked on one package copy:
+      arm A the shipped respawn, arm B `--getup-policy alpha_stand.onnx
+      --getup-s 5`.
+
+      | metric | respawn | getup | Δ | MDE% | p | verdict |
+      |---|---|---|---|---|---|---|
+      | goals | 0.542 | 0.542 | +0.000 | 0% | 1.000 | null |
+      | possession | 44.340 | 43.879 | −0.461 | 1% | 0.088 | null |
+      | ballAdvance | 0.945 | 0.931 | −0.015 | 6% | 0.607 | null |
+      | spread | 0.566 | 0.565 | −0.001 | 0% | 0.132 | null |
+      | crowd | 0.298 | 0.296 | −0.002 | 3% | 0.604 | null |
+      | depth | 1.328 | 1.326 | −0.003 | 1% | 0.520 | null |
+      | falls | 0.125 | 0.208 | +0.083 | **138%** | 0.328 | **NO RESULT** |
+      | ballProgress | 0.303 | 0.285 | −0.018 | 21% | 0.575 | unquotable |
+
+      13 goals to 13, 123 kicks to 126, back-kicks 22.8% → 22.2% (p = 0.92).
+      **21 of the 24 seeds are identical in every field** — the three that
+      differ are exactly the three containing a fall, so the flag is inert
+      where nothing falls at the ROW and not merely at the mean.
+
+      **The switch works and the price is real: 5 falls, 5 stood up from, 0
+      timed out, spells 0.36 / 0.62 / 0.74 / 0.98 / 2.26 s, median 0.74 s** —
+      the bench's 0.2-1.2 s band reproduced on the pitch, against the 10-20 s
+      this item once assumed and the 5 s ceiling `getup_s` sets. Nothing
+      needed the timeout, so `getup_s` is a guard and not a cost.
+
+      **What it cannot do is move the ledger, because there is nothing to
+      move.** The shipped 2v2 roster falls THREE times in 24 runs of 300 s —
+      two hours of four-duck play. `falls` would need 4565 seeds to resolve
+      10% of baseline, so its 3 → 5 is NO RESULT and not evidence of a cost.
+      That 3 → 5 is also NOT the re-count cascade the dwell was built against:
+      in seed 2 the recovered duck's own count stays at 1 and the two extra
+      falls are OTHER ducks — a real second-order effect (the duck stays in
+      the scrum instead of being teleported out of it), on one seed, a
+      hypothesis and not a result. Same verdict as `getup_s` got in 2026-09-07
+      and for the same reason: the roster no longer falls, so a fall's price
+      has nothing to price.
+
+      **Rendered and read**, because a ledger that does not move is exactly
+      when a flag can be silently broken: `record-world pitch-2v2 --seed 0`
+      (2 falls in 150 s) and then the fall window itself,
+      `--skip 49 --seconds 5 --camera follow:d0 --stride 2`. d0 kicks at
+      t=49.4, topples at 50.34 at +1.49,−0.4, and is walking again by 51.3 s
+      at +1.45,−0.81 — it never returns to its spawn at −0.90,−0.65, the fall
+      is counted once, and there is no second fall. The teleport is gone from
+      the picture. (The follow camera dives behind the boards while the duck
+      is down, which is its own evidence.)
+
+      **Recommendation: do NOT make it the eval-pitch default.** The
+      benchmark's published numbers rest on the teleport, the flag provably
+      changes nothing on this roster, and `falls` is the one column it does
+      touch — which would then be counting a different thing across the
+      archive. It is already on for the lab's pitches, which is where a person
+      watches. Leave the benchmark opting in, and turn it on the day an arm
+      falls enough to price (the fused-ball arm fell 8 times in 24,
+      push-first 4). Rows: `runs/getup/pitch-{respawn,getup}.jsonl` (reviewer's re-read: the
+      table reproduces; seeds without a fall differ in the flag's own config
+      key and nothing else; the five spells are seeds 2, 8 and 20).
 - [x] **B.2 A goalkeeper — BUILT, and measured off in 2v2 (2026-09-07).**
       A fourth static role, `keeper`: its zone is the last fifth in front of
       its own mouth (`Team.ROLE_ZONES`, the field players share the rest as
