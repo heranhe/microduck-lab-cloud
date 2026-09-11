@@ -12960,6 +12960,214 @@ probe `runs/sensedplay/gym-K-trap-envwiped-b0.jsonl`.
         --env MICRODUCK_LM_GAZE_NECK=-0.10,-0.10 --env MICRODUCK_LM_GAZE_HEAD=0.75,0.75 \
         --env MICRODUCK_LM_GAZE_YAW=0.0,0.0 --out /tmp/rr-left-deep
 
+**Follow-up L: the second and third training seed — K's right foot does NOT
+reproduce, the recipe is a null on whiff and an effect on FALLS across three
+seeds, and the ladder is a lottery, not a policy (2026-09-11).**
+
+12as's standing caveat, paid. K's right-foot chain re-run at `--seed 1` and
+`--seed 2`, identical in every other respect: the J/K ladder (rung 1 strike
+spot 1M, rung 2 the 6 × 6 box 1M, tip v2 the full 4-16 × 1-13 cm box 2M at the
+DEEP gaze window head +0.60..+1.20), `face_line` 12.0, 32 envs,
+`MICRODUCK_BALL_HFOV_DEG=116 VFOV_DEG=60` exported for every stage, tip
+warm-started from that seed's own rung 2. `log_std` flat at 0.584-0.611 over
+all 4M steps of both chains, no ratchet. Runs
+`lastmetre-land-right-s{1,2}-{rung1,rung2}` and `lastmetre-land-right-s{1,2}-v2`
+(group `lastmetre`). ~5 min a chain on this Mac, both in parallel.
+
+**The bench, landscape env, 2 seeds a cell** (`grid_kick_bench_sensed.py`, falls
+per 180; poses at 12 seeds). The shipped rows reproduce K and J to the point
+(69/67/77, falls 7/6/6, turn 13/21/14°) and `…-v2` (seed 0) reproduces K's own
+row exactly — the instrument is the same one:
+
+| arm | box (level / line-up / neck-split) | sweet | falls /180 | \|turn\| | pose whiff | pose falls /60 | pose travel |
+|---|---|---|---|---|---|---|---|
+| shipped `kick_right.onnx` | 69 / 67 / 77 % | 100 % | 7/6/6 | 13/21/14° | 0 % | 1 | 1.09-1.32 m |
+| `…-land-right-v2` (K, seed 0) | 98 / 99 / 93 % | 100 % | 6/5/5 | **16/17/19°** | 0 % | 3 | 0.78-1.09 m |
+| **`…-s1-v2` (seed 1)** | **100 / 95 / 96 %** | 100 % | **0/0/0** | **33/33/32°** | 8 % at level | 0 | 0.90-1.20 m |
+| **`…-s2-v2` (seed 2)** | 64 / 83 / 96 % | 100 % | **40/30/5** | 15/16/14° | 0 % | 7 at level | 0.38-1.23 m |
+| seed 0, BLINDFOLDED | 36 / 42 / 37 % | 61/100/83 % | 92/0/0 | 20/9/3° | — | — | — |
+| seed 1, BLINDFOLDED | 92 / 71 / 63 % | 100/100/78 % | 0/1/3 | 70/54/77° | — | — | — |
+| seed 2, BLINDFOLDED | 32 / 36 / 30 % | 61/72/56 % | 17/**179**/109 | 28/9/19° | — | — | — |
+
+**Each of K's two bench headlines survives in exactly one of the two new seeds,
+and not the same one.** "The level-row falls are gone" holds at seed 1 (0/0/0)
+and fails at seed 2 (40/30/5, worse than J's 25). "The 20° turn bar is met at
+all three poses" holds at seed 2 (15/16/14°) and fails at seed 1 (33/33/32°,
+the worst turn of any sensed arm on this page). The blindfold rows collapse at
+every seed, as K's did — seed 1's blind box is the outlier at 92 % but it walks
+70-77° round to get it.
+
+**The slots say the three seeds READ the same ball** (`probe_sensed_slots.py
+--right`, 4 seeds × 40 episodes, no FOV override — the arena's detector is
+already 116 × 60):
+
+| right-foot window ticks | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| `seen` slot[53] | 29.4 % | 29.4 % | 23.9 % |
+| `conf` slot[54], median | 0.77 | 0.74 | 0.74 |
+| track age, median (p90) | 0.24 s (1.60) | 0.26 s (1.62) | 0.28 s (1.64) |
+| track sigma, median | 2.54 cm | 2.54 cm | 2.61 cm |
+| track held a position | 97.8 % | 94.7 % | 96.3 % |
+| placement vs the true ball, median | — | 4.61 cm | 4.63 cm |
+
+So the perception half of the retrain replicates at every seed and the spread
+below is **not** a freshness difference — it is what the motor policy does with
+the same input.
+
+**In play, the test that matters** (`kick_gym.py --episodes 40 --seeds 12
+--jobs 6`, blocks seed0 0 and 100, 24 seeds pooled; the right foot pinned
+through `MICRODUCK_SKILL_KICK_RIGHT` to a scratch copy beside
+`{"sensed": true, "exit_rad": <calibrated>}`, the left vendored;
+`World.skill_path` / `skill_sensed` / `kick_exits()` and the duck's own
+`detector.spec` (116 × 60 @ 10 Hz) asserted off the CONSTRUCTED World first).
+K's shipped and seed-0 blocks are REUSED, after the check: a fresh 3-seed slice
+of the shipped command came back `outcome_key`-identical on today's tree.
+**Exits calibrated per seed, one block at 0.0 each — and they do not agree:
+seed 0 +0.0375, seed 1 −0.0461, seed 2 −0.1923 rad (+2.1 / −2.6 / −11.0°).**
+
+| kick_right | swings | whiff | vs ship | ±MDE | p | verdict | travel | adv | back line | fell | ±MDE | p |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| shipped (base) | 368 | 9.5 % | — | — | — | — | 0.87 m | 0.56 m | 0.8 % | 0.0 % | — | — |
+| `…-v2` (seed 0, K) | 353 | **2.3 %** | −7.2 | 3.5 | 0.000 | **effect** | 0.96 m | 0.86 m | 0.0 % | 0.0 % | — | 1.000 |
+| **`…-s1-v2` (seed 1)** | 360 | **10.0 %** | +0.5 | 4.3 | 0.824 | **null** | 0.86 m | 0.75 m | 0.0 % | 0.0 % | — | 1.000 |
+| **`…-s2-v2` (seed 2)** | 337 | **21.1 %** | +11.6 | 5.3 | 0.000 | **effect (worse)** | 0.62 m | 0.53 m | 0.6 % | **19.0 %** | 4.2 | **0.000** |
+| **all three seeds pooled** | 1050 | 11.0 % | +1.5 | 3.7 | 0.439 | **null** | — | — | — | **6.1 %** | 2.5 | **0.000** |
+
+The contrasts, with the falls veto beside them:
+
+| contrast | shift | ±MDE | p | verdict |
+|---|---|---|---|---|
+| whiff, vendored → seed 1 | 9.5 → 10.0 % | 4.3 | 0.824 | null |
+| whiff, vendored → seed 2 | 9.5 → 21.1 % | 5.3 | 0.000 | **effect (worse)** |
+| whiff, seed 0 → seed 1 | 2.3 → 10.0 % | 3.5 | 0.000 | **effect** |
+| whiff, seed 0 → seed 2 | 2.3 → 21.1 % | 4.8 | 0.000 | **effect** |
+| whiff, seed 1 → seed 2 | 10.0 → 21.1 % | 5.4 | 0.000 | **effect** |
+| whiff, vendored → 3 seeds pooled | 9.5 → 11.0 % | 3.7 | 0.439 | null |
+| **falls**, vendored → seed 2 | 0.0 → 19.0 % | 4.2 | 0.000 | **effect** |
+| **falls**, vendored → 3 seeds pooled | 0.0 → 6.1 % | 2.5 | 0.000 | **effect** |
+| falls, vendored → seed 0 / seed 1 | 0.0 → 0.0 % (0 of 353 / 0 of 360) | — | 1.000 | NO RESULT |
+
+Both blocks agree inside every seed (seed 1 whiff 9.5 / 10.5 %, seed 2 22.2 /
+20.0 % with falls 18.6 / 19.4 %, seed 0 1.7 / 2.9 %), so no seed's verdict is
+carried by one block. The non-pinned LEFT foot is the control in each arm and
+stays flat: 7.2 / 6.0 / 8.9 % against the vendored 7.6 %, every one a null.
+**And the nulls here are resolved nulls, not "no result":** at MDE 4.3 pp the
+seed-1 arm could not have hidden the 7.2 pp seed 0 opened.
+
+**The spread reading, which is the finding.** Across three training seeds the
+same recipe delivers 2.3 / 10.0 / 21.1 % whiff and 0 / 0 / 19.0 % falls. The
+seed-to-seed spread is **18.8 pp on whiff and 19.0 pp on falls**, against a
+7.2 pp gap between K's best seed and the vendored kick — **2.6× the effect it
+was being credited with** (memory: [[eval-seeds-dont-measure-training-runs]];
+"one training run per arm resolves nothing"). Even the SIDECAR is a seed: the
+calibrated in-play exit swings 13 degrees across the three, so a promotion
+would have to carry that seed's exit as well as that seed's weights. Read the
+recipe rather than the pick and it is a null on whiff and an effect on falls —
+the honest summary of what the ladder produces at a seed drawn at random.
+
+**Rendered, both new seeds, at the brain's own handover pose** (landscape FOV,
+gaze pinned neck −0.10 / head +0.75, seed 40, 4 episodes). Neither terminates
+in those four, and the two failure modes are different and both visible:
+**seed 1 strikes and then PIROUETTES** — it connects at 0.2 s with `seen` 1 and
+`conf` 1.0 held all the way, stays upright (trunk_z 0.101-0.109, pitch +4..+9°)
+and rotates: slot[51] runs −0.07 → +0.38 after the ball has gone, which is the
+bench's 33° turn. **Seed 2 SQUATS and stalls** — trunk_z 0.126 → 0.086 (3 cm
+below the 0.120 stand keyframe) with pitch +20° and tilt 23°, both feet planted,
+and it holds that crouch for the whole 2 s without swinging; the ball is still
+0.14 m away at the end in 2 of 4 episodes. That pose is what tips over in play
+(19 % of swings) and it is a cousin of J's dive rather than a repeat of it:
+the trunk goes down and STAYS, instead of going over.
+
+**Verdict: K's result was a seed.** The bars asked of the replication were
+whiff ≤ 5 %, falls 0, connected travel ≥ 0.9 m, turn ≤ 20°. Seed 1 meets the
+falls bar alone (whiff 10.0 %, travel 0.86 m, turn 33°); seed 2 meets the turn
+bar alone (whiff 21.1 %, falls 19.0 %, travel 0.62 m). **No bar is met at both
+new seeds, and every bar is failed by at least one.** Pooled, the recipe does
+not beat the vendored foot on whiff and DOES cost falls, which is the veto.
+Nothing here refutes the reachable-set argument K made — cutting the shallow
+half of the gaze window really does take the trained sighting 42 → 70 %, and
+the slot table shows all three seeds reading the ball the same way — but a
+sighting the policy can convert at one seed and squat through at another is not
+yet a kick.
+
+**Recommendation: promote nothing; `policies/kick/` stays the vendored w12
+pair, and `runs/lastmetre-land-right-v2` should NOT be promoted into
+`policies/kick/kick_right.*`.** The case that would have been made for it —
+2.3 % against 9.5 %, zero falls in 353 swings, advance 0.56 → 0.86 m, the turn
+bar met, the sidecar carrying `"sensed": true` and `exit_rad` +0.0375 (the
+world already honours both) — rests on the one seed that is now known to be the
+best of three, with the other two at 10.0 % and 21.1 %/19 % falls. Two further
+reasons stand unchanged from K: blindfolded the arm collapses at every seed
+(box 30-42 %, and 179 falls per 180 at seed 2's line-up row), so it is a kick
+only as good as the detector — a sim2real bet the 10 Hz / 116 × 60 detector
+model has not been checked against hardware — and the recipe still ships
+portrait pending the camera photograph.
+
+→ **What settles it next:** the lever is no longer the gaze window — three
+windows, three ladders and a brain knob have now been measured, and the
+variance between SEEDS is larger than any of them. Either (1) find what makes
+seed 0 different (its truth-projected `seen` is 67 % against 43-49 % for the
+other two at the same track freshness — it points its head at the ball and the
+others do not, which is a pose the recipe could pay for rather than hope for),
+or (2) accept the ladder as a lottery and run 4-6 seeds a candidate, shipping
+only a policy whose MEDIAN seed clears the bars. Either way, no in-play number
+from this line should be quoted from a single chain again.
+
+Reviewer's re-read (independent): ship 9.5 / 0.0 %, seed 0 2.3 / 0.0 %,
+seed 1 10.0 / 0.0 %, seed 2 21.1 / 19.0 % whiff / falls — the table reproduces.
+Agent's own re-read of the eight row files: ship 9.5 % / 0.0 %, seed 0 2.3 % / 0.0 %, seed 1 10.0 % / 0.0 %,
+seed 2 21.1 % / 19.0 %, travel 0.87 / 0.96 / 0.86 / 0.62 m — the tables
+reproduce.
+Runs: `lastmetre-land-right-s{1,2}-{rung1,rung2}` and
+`lastmetre-land-right-s{1,2}-v2` (group `lastmetre`).
+Rows: `runs/sensedplay/gym-L-s{1,2}-b{0,100}.jsonl`, calibration
+`runs/sensedplay/gym-L-s{1,2}-cal-b0.jsonl`, slot ticks
+`runs/sensedplay/slots-L-s{0,1,2}.jsonl`; the shipped and seed-0 blocks are
+K's own `runs/sensedplay/gym-K-{ship,v2right}-b{0,100}.jsonl`, reused after an
+`outcome_key` check.
+
+    # one seed's chain (right foot, ~5 min; both seeds in parallel)
+    export MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60
+    MICRODUCK_KICK_BOX_AHEAD=0.075,0.105 MICRODUCK_KICK_BOX_SIDE=0.027,0.057 \
+    MICRODUCK_LM_GAZE_NECK=-0.45,-0.30 MICRODUCK_LM_GAZE_HEAD=0.90,1.05 MICRODUCK_LM_GAZE_YAW=0.30,0.50 \
+      uv run train-behavior kick_right_sensed --run-name lastmetre-land-right-s1-rung1 \
+      --envs 32 --steps 1000000 --seed 1 --weights-json '{"face_line": 12.0}' \
+      --group lastmetre --title … --description …
+    # rung 2: same gaze, BOX 0.06,0.12 / 0.03,0.09, --init-from runs/…-s1-rung1
+    # tip v2: BOX 0.04,0.16 / 0.01,0.13, GAZE -0.60,0.0 / 0.60,1.20 / 0.0,0.0, 2M,
+    #         --init-from runs/…-s1-rung2, --run-name lastmetre-land-right-s1-v2
+
+    # the bench, with the bench's env at landscape TOO
+    MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60 \
+      uv run python scripts/grid_kick_bench_sensed.py --foot right --seeds 2 \
+        s1=runs/lastmetre-land-right-s1-v2/policy.onnx \
+        s1-BLIND:kick_right=runs/lastmetre-land-right-s1-v2/policy.onnx \
+        s2=runs/lastmetre-land-right-s2-v2/policy.onnx \
+        s2-BLIND:kick_right=runs/lastmetre-land-right-s2-v2/policy.onnx \
+        v2=runs/lastmetre-land-right-v2/policy.onnx \
+        v2-BLIND:kick_right=runs/lastmetre-land-right-v2/policy.onnx \
+        shipped=policies/kick/kick_right.onnx
+    # …and the same with --mode poses --seeds 12
+
+    # the slots in play (NO override: the arena's detector is already 116 x 60)
+    uv run python scripts/probe_sensed_slots.py --right <scratch>/skills/s1/kick_right.onnx \
+        --seeds 4 --episodes 40 --jobs 3 --out runs/sensedplay/slots-L-s1.jsonl
+
+    # exit calibration (one block at exit_rad 0.0), then the two blocks
+    MICRODUCK_SKILL_KICK_RIGHT=<scratch>/skills/s1/kick_right.onnx \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --jobs 6 --seed0 0 \
+        --out runs/sensedplay/gym-L-s1-cal-b0.jsonl        # median exit_play -> the sidecar
+    MICRODUCK_SKILL_KICK_RIGHT=<scratch>/skills/s1/kick_right.onnx \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --jobs 6 --seed0 0 \
+        --arm 's1=' --out runs/sensedplay/gym-L-s1-b0.jsonl    # repeat with --seed0 100
+
+    # the squat, pinned at the brain's own handover pose
+    MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60 \
+      uv run render-rollout --policy runs/lastmetre-land-right-s2-v2/policy.onnx \
+        --behavior kick_right_sensed --seed 40 --episodes 4 --camera three-quarter \
+        --env MICRODUCK_LM_GAZE_NECK=-0.10,-0.10 --env MICRODUCK_LM_GAZE_HEAD=0.75,0.75 \
+        --env MICRODUCK_LM_GAZE_YAW=0.0,0.0 --out /tmp/rr-s2-deep
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
