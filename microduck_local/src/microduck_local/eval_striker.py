@@ -195,6 +195,7 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
             "ballOuts": score["ballOuts"], "ballOutS": 0.0, "getupS": 0.0,
             "cove": 0.0, "corner": 0.0,          # flat, square boards: the pitch benchmark's baseline
             "getups": w.getups, "getupTimeouts": w.getup_timeouts,
+            "getupDownS": w.getup_down_s, "getupPolicy": "",   # no get-up here: the teleport, as eval-pitch defaults
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()},
             "team": {d.id: (d.team or d.id) for d in sc.ducks},

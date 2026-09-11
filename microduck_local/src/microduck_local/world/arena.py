@@ -139,6 +139,7 @@ class WorldDuck:
     falls: int = 0
     down_until: float = -1.0           # lying where it fell until then (World.getup_s); -1: up
     up_since: float = -1.0             # …when it first read upright again during a get-up; -1: not yet
+    down_since: float = -1.0           # …and when this spell on the floor began, to price it; -1: up
     step_count: int = 0
     bumped_t: float = -1e9             # when a body of this duck last touched another duck or a person
     episodes: int = 0
@@ -357,6 +358,11 @@ class World:
         self.getup_hold_s = 0.3
         self.getups = 0                    # falls the duck got up from by itself
         self.getup_timeouts = 0            # …and falls that ran `getup_s` out and were respawned
+        # …and how long each of those spells on the floor actually lasted, so a
+        # battery can quote the PRICE of a fall rather than assume it (the bench
+        # says 0.2-1.2 s to stand; `getup_s` is only the ceiling). One entry a
+        # spell, get-ups and timeouts alike, in the order they finished.
+        self.getup_down_s: list[float] = []
         # BALL OUT (roadmap Track 4 item 11b): what a referee does on a
         # walled table. A ball at rest within `ball_out_m` of the boards for
         # `ball_out_s` seconds is placed `ball_out_in` in from that wall
@@ -531,6 +537,7 @@ class World:
         self.goals_kicked = self.goals_bumped = 0
         self.ball_outs, self.ball_out_seq, self._ball_rest_t0 = 0, 0, None
         self.getups = self.getup_timeouts = 0
+        self.getup_down_s = []
         for p in self.persons.values():
             p.reset(self.data)
         for d in self.ducks.values():
@@ -558,6 +565,14 @@ class World:
             x, y = p.x + sx * need, p.y + sy * need
         return x, y
 
+    def _price_spell(self, d: WorldDuck) -> None:
+        """Record how long this spell on the floor lasted, as it ends. A fall's
+        price is the thing a get-up changes, and it is not `getup_s`: that is
+        only the ceiling a stuck duck hits."""
+        if d.down_since >= 0.0:
+            self.getup_down_s.append(round(self.t - d.down_since, 3))
+            d.down_since = -1.0
+
     def _respawn(self, d: WorldDuck) -> None:
         x, y, yaw = d.spawn
         x, y = self._clear_of_persons(x, y)
@@ -567,6 +582,7 @@ class World:
         d.step_count = 0
         d.down_until = -1.0
         d.up_since = -1.0
+        d.down_since = -1.0
         d._hold_yaw = None
         d.episodes += 1
         self.release(d)
@@ -1078,11 +1094,13 @@ class World:
                     if d.up_since < 0.0:
                         d.up_since = self.t   # first tick upright: start the dwell
                     if self.t - d.up_since >= self.getup_hold_s:
+                        self._price_spell(d)
                         d.down_until = d.up_since = -1.0   # up and STAYING up: the walker has it back
                         self.getups += 1
                 elif self.getup_infer is not None and d.fallen(data):
                     d.up_since = -1.0         # back over the line: the dwell starts again
                 if d.down_until >= 0.0 and self.t >= d.down_until:  # the clock, or the get-up's timeout
+                    self._price_spell(d)
                     if self.getup_infer is not None:
                         self.getup_timeouts += 1
                     self._respawn(d)
@@ -1092,7 +1110,7 @@ class World:
             if d.fallen(data):
                 d.falls += 1
                 if self.getup_s > 0.0:
-                    d.down_until = self.t + self.getup_s
+                    d.down_until, d.down_since = self.t + self.getup_s, self.t
                     continue
                 self._respawn(d)
                 mujoco.mj_forward(m, data)

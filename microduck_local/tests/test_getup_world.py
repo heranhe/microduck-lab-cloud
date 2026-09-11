@@ -160,3 +160,72 @@ def test_the_lab_pitches_get_up_and_rooms_and_batteries_do_not():
 
     from microduck_local.eval_pitch import run_one  # the benchmark is untouched
     assert inspect.signature(run_one).parameters["getup_policy"].default is None
+
+
+def test_a_fall_is_priced_by_how_long_the_duck_was_actually_DOWN():
+    """`getup_s` is the ceiling, not the price. The bench says a real recovery
+    costs 0.2-1.2 s; a battery can only quote that if the World records each
+    spell on the floor as it ends, so it does (`World.getup_down_s`)."""
+    w = _world(onnx_infer(POLICIES_DIR / "alpha_stand.onnx"), getup_s=5.0)
+    assert w.getup_down_s == []
+    _lay_and_register(w)
+    _run_until_up(w)
+    assert w.getups == 1 and len(w.getup_down_s) == 1
+    assert 0.0 < w.getup_down_s[0] < 5.0, "it was priced at the timeout, not at what it took"
+    w.reset()
+    assert w.getup_down_s == []
+
+
+def test_a_timeout_is_priced_too_and_at_the_ceiling():
+    """The other outcome has a price as well, and it is the one `getup_s` sets."""
+    w = _world(zero_infer, getup_s=2.0)
+    _lay_and_register(w)
+    _run_until_up(w, limit_s=6.0)
+    assert w.getup_timeouts >= 1 and len(w.getup_down_s) >= 1
+    assert w.getup_down_s[0] >= 2.0 - 1e-6
+
+
+def test_the_teleport_baseline_records_no_spells_at_all():
+    """`getup_s` 0: a fallen duck is respawned on the tick it falls, so there is
+    no spell to price and the baseline's rows are unchanged."""
+    sc = make_pitch(per_side=1)
+    walker = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
+    w = World(sc, infer_for={d.id: walker for d in sc.ducks}, seed=0)
+    _lay_on_back(w)
+    for _ in range(120):
+        w.step()
+    assert w.ducks["d0"].falls >= 1                     # it did fall…
+    assert w.getup_down_s == [] and w.getups == 0       # …and cost nothing
+
+
+def test_eval_pitch_refuses_a_getup_policy_that_cannot_run():
+    """A flag that changes nothing is broken. `--getup-policy` without
+    `--getup-s` would respawn on the tick of the fall and never call the policy
+    once, so a whole battery would measure the BASELINE under a get-up flag."""
+    import pytest
+
+    from microduck_local.eval_pitch import run_one
+    with pytest.raises(SystemExit, match="getup-s"):
+        run_one(seed=0, seconds=0.1, per_side=1,
+                getup_policy=str(POLICIES_DIR / "alpha_stand.onnx"))
+    with pytest.raises(SystemExit, match="no such file"):
+        run_one(seed=0, seconds=0.1, per_side=1, getup_s=5.0, getup_policy="/nope/absent.onnx")
+
+
+def test_an_eval_pitch_row_says_which_world_it_was_measured_in():
+    """…and a resume refuses to mix the two arms in one file, which is the exact
+    pair this item's battery runs (`load_done`'s reason, for a string knob)."""
+    import json
+    import tempfile
+
+    from microduck_local.eval_pitch import load_done, run_one
+    r = run_one(seed=0, seconds=0.5, per_side=1, getup_s=5.0,
+                getup_policy=str(POLICIES_DIR / "alpha_stand.onnx"))
+    assert r["getupPolicy"].endswith("alpha_stand.onnx") and r["getupDownS"] == []
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        fh.write(json.dumps({**r, "tag": ""}) + "\n")
+        path = fh.name
+    assert load_done(path, "", 1, 0.5, getup_policy=r["getupPolicy"])      # same world: resumable
+    import pytest
+    with pytest.raises(SystemExit, match="getupPolicy"):
+        load_done(path, "", 1, 0.5, getup_policy="")                       # the respawn arm: refused

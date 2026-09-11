@@ -67,7 +67,7 @@ def _ahead_columns(frame) -> float:
 
 
 def run(seed: int, seconds: float, per_side: int, roles: str | None = None, getup_s: float = 0.0,
-        walker: str | None = None) -> dict:
+        walker: str | None = None, getup_policy: str | None = None) -> dict:
     sc = make_pitch(per_side=per_side)
     if roles:
         # Static jobs, the same on both sides, in spawn order (as probe_threat):
@@ -77,7 +77,18 @@ def run(seed: int, seconds: float, per_side: int, roles: str | None = None, getu
         for i, d in enumerate(sc.ducks):
             d.role = names[i % per_side]
     infer = onnx_infer(Path(walker) if walker else POLICIES_DIR / "alpha_walking.onnx")
-    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, getup_s=getup_s)
+    # The real get-up rather than the lie-down stand-in (roadmap B.1): checked,
+    # not assumed, because a flag that changes nothing is broken.
+    getup_infer = None
+    if getup_policy:
+        if getup_s <= 0.0:
+            raise SystemExit("--getup-policy needs --getup-s > 0: it is the get-up's timeout.")
+        if not Path(getup_policy).exists():
+            raise SystemExit(f"--getup-policy {getup_policy}: no such file")
+        getup_infer = onnx_infer(Path(getup_policy))
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, getup_s=getup_s,
+              getup_infer=getup_infer)
+    assert (w.getup_infer is not None) == bool(getup_policy), "the get-up policy did not reach the World"
     teams: dict = {}
     brains: dict[str, Chase] = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams))
                                 for d in sc.ducks}
@@ -175,6 +186,8 @@ def run(seed: int, seconds: float, per_side: int, roles: str | None = None, getu
     per_duck = dt / nd                     # ticks -> seconds a duck spends, averaged over the roster
     row = {
         "seed": seed, "perSide": per_side, "seconds": seconds, "simSeconds": round(w.t, 1), "getupS": getup_s,
+        "getupPolicy": getup_policy or "", "getups": w.getups, "getupTimeouts": w.getup_timeouts,
+        "getupDownS": w.getup_down_s,
         "live": {k: (v if not isinstance(v, float) else round(v, 4)) for k, v in live.items()},
         "stateS": {k: round(v * per_duck, 1) for k, v in state_s.most_common()},
         "frozenS": {k: round(v * per_duck, 1) for k, v in frozen_s.most_common()},
@@ -288,10 +301,14 @@ def main() -> None:
     ap.add_argument("--walker", default=None, metavar="PATH", help="an exported walker ONNX instead of the shipped alpha_walking")
     ap.add_argument("--getup-s", type=float, default=0.0,
                     help="a fallen duck lies where it fell this long before it respawns (roadmap B.1; 0 = the baseline)")
+    ap.add_argument("--getup-policy", default=None, metavar="ONNX",
+                    help="drive a fallen duck with this policy until it stands instead of teleporting it "
+                         "(roadmap B.1; ../microduck/policies/alpha_stand.onnx works). --getup-s is its timeout")
     ap.add_argument("--label", default=None)
     args = ap.parse_args()
     label = args.label or (os.environ.get("MICRODUCK_CHASE", "") or "baseline")
-    todo = [(s, args.seconds, args.per_side, args.roles, args.getup_s, args.walker) for s in range(args.seed0, args.seed0 + args.seeds)]
+    todo = [(s, args.seconds, args.per_side, args.roles, args.getup_s, args.walker, args.getup_policy)
+            for s in range(args.seed0, args.seed0 + args.seeds)]
     rows: list[dict] = []
     if args.jobs > 1 and len(todo) > 1:
         import multiprocessing as mp

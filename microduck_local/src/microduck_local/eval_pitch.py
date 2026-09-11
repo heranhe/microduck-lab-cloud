@@ -129,9 +129,23 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
     # fallen duck is driven by this policy until it stands, and `--getup-s` is
     # the timeout rather than a fixed lie-down. `alpha_stand` is the one that
     # works (100% from back/front/side in 0.2-1.3 s on the bench).
-    getup_infer = onnx_infer(Path(getup_policy)) if getup_policy else None
+    # A flag that changes nothing is broken, so this is checked and not assumed:
+    # the file has to exist, `--getup-s` has to be > 0 (at 0 a fallen duck is
+    # respawned on the tick it falls and is never handed to the policy at all,
+    # which would run a whole battery of the BASELINE under a get-up flag), and
+    # the constructed World has to be carrying it.
+    getup_infer = None
+    if getup_policy:
+        if getup_s <= 0.0:
+            raise SystemExit("--getup-policy needs --getup-s > 0: it is the get-up's timeout, and at 0 a "
+                             "fallen duck is respawned on the tick it falls, so the policy never runs.")
+        path = Path(getup_policy)
+        if not path.exists():
+            raise SystemExit(f"--getup-policy {getup_policy}: no such file")
+        getup_infer = onnx_infer(path)
     w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, getup_s=getup_s,
               ball_out_s=ball_out_s, getup_infer=getup_infer)
+    assert (w.getup_infer is not None) == bool(getup_policy), "the get-up policy did not reach the World"
     teams: dict = {}
     brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
     # A little seed-dependent asymmetry: nudge the ball off centre.
@@ -169,6 +183,8 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
             "ballOutS": ball_out_s, "getupS": getup_s,   # the physics this row was measured under (`load_done` refuses to mix)
             "cove": cove, "corner": corner,              # …and the boards' geometry (Scenario.cove, make_pitch corner)
             "getups": w.getups, "getupTimeouts": w.getup_timeouts,   # falls it stood up from / ran the timeout out
+            "getupDownS": w.getup_down_s,                # …and how long each spell on the floor lasted: a fall's PRICE
+            "getupPolicy": getup_policy or "",           # which policy drove them ("" = the teleport stand-in)
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()}, "simSeconds": round(w.t, 1),
             "seconds": seconds,
@@ -176,7 +192,7 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
 
 
 def load_done(path: str | None, tag: str, per_side: int, seconds: float,
-              knobs: dict[str, float] | None = None) -> dict[int, dict]:
+              knobs: dict[str, float] | None = None, getup_policy: str | None = None) -> dict[int, dict]:
     """Seeds already measured into `path` (JSON lines, one row a seed), for a
     resume. A battery is the best part of an hour and this machine reclaims
     its container mid-run, so a killed run should cost the seed it was on and
@@ -236,6 +252,14 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float,
                 f"{path}:{n} was measured with tag={r.get('tag', '')!r} perSide={r.get('perSide')} "
                 f"seconds={r.get('seconds')}, not tag={tag!r} perSide={per_side} seconds={seconds}. "
                 "Write a different variant to a different file.")
+        # …and the one knob that is not a number. A get-up arm and a respawn arm
+        # in one file is the same silent mixing `knobs` exists to refuse, and it
+        # is the exact pair this item's battery runs.
+        if getup_policy is not None and (r.get("getupPolicy") or "") != getup_policy:
+            raise SystemExit(
+                f"{path}:{n} was measured with getupPolicy={(r.get('getupPolicy') or '')!r}, not "
+                f"{getup_policy!r}. That is a different world, not a resume: pass the same flags, "
+                "or write it to a different file.")
         for k, want in (knobs or {}).items():
             got = float(r.get(k) or 0.0)              # a row from before the knob: its default
             if got != float(want):
@@ -283,6 +307,26 @@ def _seed_line(r: dict) -> str:
             f" · pushes {sum(r['pushes'].values())} · falls {r['falls']}"
             f" · progress {_fmt(r.get('ballProgress'), 'm/min')}"
             f" · possession {_fmt(r.get('possession'), 's/min')}")
+
+
+def _getup_line(rows: list[dict]) -> str | None:
+    """What the falls actually COST, which is the whole point of the flag:
+    how many the duck stood up from, how many ran the timeout out, and the
+    distribution of time spent on the floor. None when nobody ever went down
+    (or the rows predate the counters), so the baseline prints nothing new."""
+    ups = sum(int(r.get("getups") or 0) for r in rows)
+    outs = sum(int(r.get("getupTimeouts") or 0) for r in rows)
+    down = sorted(float(x) for r in rows for x in (r.get("getupDownS") or []))
+    if not (ups or outs or down):
+        return None
+    n = ups + outs
+    part = f"get-ups: {ups} stood, {outs} timed out"
+    if n:
+        part += f" ({ups / n:.0%} of {n})"
+    if down:
+        part += (f" · time down median {np.median(down):.2f} s"
+                 f" (p90 {np.percentile(down, 90):.2f}, max {max(down):.2f}, n={len(down)})")
+    return part
 
 
 def _run_one_args(a: tuple) -> dict:
@@ -396,9 +440,16 @@ def main() -> None:
     # end: a 12-seed 3v3 battery is the best part of an hour, and a machine
     # that reclaims its container mid-run should cost one seed, not all of
     # them (it cost all of them, twice). Resume the rest with --seed0.
+    if args.getup_policy and args.getup_s <= 0.0:
+        raise SystemExit("--getup-policy needs --getup-s > 0: it is the get-up's timeout, and at 0 a fallen "
+                         "duck is respawned on the tick it falls, so the policy never runs.")
+    if args.getup_policy:
+        print(f"get-up: fallen ducks driven by {Path(args.getup_policy).resolve()} "
+              f"(timeout {args.getup_s:g} s)", flush=True)
     done = load_done(args.out, args.tag, args.per_side, args.seconds,
                      {"ballOutS": args.ball_out_s, "getupS": args.getup_s,
-                      "cove": args.cove, "corner": args.corner})
+                      "cove": args.cove, "corner": args.corner},
+                     getup_policy=args.getup_policy or "")
     rows = [done[sd] for sd in seeds if sd in done]
     if not args.json:
         for r in rows:
@@ -451,6 +502,9 @@ def main() -> None:
         parts.append(f"{f} {'—' if m is None else f'{m:+.2f}' if unit == 'm/min' else f'{m:.1f}'} {unit}")
     print("both teams: " + " · ".join(parts)
           + (f"   ({len(rows) - missing}/{len(rows)} seeds; the rest predate these metrics)" if missing else ""))
+    gl = _getup_line(rows)
+    if gl:
+        print(gl)
     _print_ledger(rows)
 
 
