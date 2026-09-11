@@ -4057,7 +4057,8 @@ this stack has none of them.
       than a rule.
 #### B. Things that are simply not modelled
 
-- [ ] **B.1 A get-up.** Every RoboCup humanoid must recover from a fall
+- [x] **B.1 A get-up — built, benched on real falls, switched into eval-pitch
+      behind a flag; ticked 2026-09-10 (details below).** Every RoboCup humanoid must recover from a fall
       unaided; the KidSize rules require it. DeepMind's OP3 soccer agent
       (Science Robotics 2024) trained a get-up as one of its two stage-1
       skills and distilled it in with KL regularisation gated on "is the
