@@ -175,33 +175,46 @@ def test_the_foot_comes_off_the_skill_the_world_started():
 # -- the list against the totals, on a real run --------------------------------
 
 def test_the_list_and_the_columns_are_made_of_the_same_kicks():
-    """A seeded 2v2 run, end to end through `eval_pitch.run_one`: every kick
-    column in the row is recomputable from the list. Two instruments for one
-    quantity are only worth having if they cannot drift, and this is the test
-    that would see them drift."""
+    """Seeded runs end to end through `eval_pitch.run_one`: every kick column
+    in the row is recomputable from the list. Two instruments for one quantity
+    are only worth having if they cannot drift, and this is the test that
+    would see them drift.
+
+    The identity is checked on EVERY run this walks, kicks or none — a run
+    where nobody swings still has to carry columns and a list that agree, at
+    zero. What the scan underneath it is for is the NON-VACUITY guard: the
+    identity only bites on a run that actually contains kicks, and how many a
+    run contains moves whenever the brain, the kick sidecars or the camera
+    model move. This test pinned seed 0 of a 90 s 2v2, which carried exactly
+    two kicks at 90b01c7 and none at all the day the left sidecar was set to
+    its in-play exit (9ca8d9d) — which is the day it started failing on main,
+    on a behaviour change the sidecar's own note predicts ("~24% fewer swings
+    for harder touches"). Measured at HEAD over seeds 0-5: 90 s of 2v2 gives
+    0.33 kicks a seed against 1.17 before the correction, so no single seed of
+    it is a safe premise. 120 s of 3v3 gives ~1.4 a run over seeds 0-7 (11
+    kicks, 6 of 8 seeds non-empty), so the scan walks the denser world, adds
+    up what it sees and stops as soon as it has swings to test on."""
     from microduck_local.eval_pitch import run_one
 
-    # Which seed produces kicks inside 90 s moves whenever the brain, the
-    # kick sidecars or the camera model move (seed 0 stopped kicking the day
-    # the left sidecar was corrected, 9ca8d9d); the identity under test does
-    # not care which seed, so take the first of a few that does.
-    r = None
+    seen = 0
     for seed in (0, 1, 2, 3):
-        cand = run_one(seed, 90.0, per_side=2)
-        if sum(len(v) for v in cand["kickEvents"].values()) >= 2:
-            r = cand
+        r = run_one(seed, 120.0, per_side=3)
+        ev = r["kickEvents"]
+        assert set(ev) == set(r["kickCount"])
+        for t, kicks in ev.items():
+            assert len(kicks) == r["kickCount"][t]
+            assert sum(e[1] for e in kicks) == pytest.approx(r["kickCarry"][t], abs=2e-3)
+            assert sum(1 for e in kicks if e[1] < 0) == r["kicksBack"][t]
+            assert sum(e[3] for e in kicks) == r["kickLineCount"][t]
+            assert sum(e[4] for e in kicks) == r["kicksBackLine"][t]
+            assert all(e[5] in ("L", "R") for e in kicks)   # a real swing has a foot
+            assert all(e[4] == 0 for e in kicks if e[3] == 0)   # no line, no direction
+            seen += len(kicks)
+        if seen >= 2:
             break
-    assert r is not None, "no seed in 0-3 produced two kicks in 90 s of 2v2"
-    ev = r["kickEvents"]
-    assert set(ev) == set(r["kickCount"])
-    for t, kicks in ev.items():
-        assert len(kicks) == r["kickCount"][t]
-        assert sum(e[1] for e in kicks) == pytest.approx(r["kickCarry"][t], abs=2e-3)
-        assert sum(1 for e in kicks if e[1] < 0) == r["kicksBack"][t]
-        assert sum(e[3] for e in kicks) == r["kickLineCount"][t]
-        assert sum(e[4] for e in kicks) == r["kicksBackLine"][t]
-        assert all(e[5] in ("L", "R") for e in kicks)       # a real swing has a foot
-        assert all(e[4] == 0 for e in kicks if e[3] == 0)   # no line, no direction
+    assert seen >= 2, ("seeds 0-3 of a 120 s 3v3 took fewer than two kicks between them, so the "
+                       "identity above never ran on a real swing: the pitch stopped kicking, or "
+                       "the scan needs a denser world")
 
 
 def test_the_streamed_row_does_not_carry_the_growing_list():
