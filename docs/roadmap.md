@@ -10088,6 +10088,152 @@ for the pitch, and the `seen`/`conf` distribution measured against the recipe's
 own - since either could be the whole left-foot gap and neither costs a
 retrain to test.
 
+**Follow-up C: the range slot was the wall, and raising it moves the cliff
+with it — `kick_{side}_sensed_far`, 0.60 m (2026-09-10).**
+
+Follow-up B's "next cut", built. `behaviors/lastmetre.py` gains a second
+recipe id per foot, `kick_{right,left}_sensed_far`, whose ONLY difference
+from `kick_{side}_sensed` is `LM_RANGE_SCALE_FAR = 0.60 m`: the whole of
+stage 3's far window (0.20-0.45 m) now sits inside the informative part of
+obs[52] instead of pinned at 1.00, so a ball 0.30 m away reads 0.50 and one
+at 0.45 reads 0.75. A new ID and not an edit, because that changes what the
+slot MEANS and every policy in the tables above was trained against the 0.25
+meaning. Everything else is shared by construction and tested that way: the
+same bearing / seen / conf encoding, the same `_kick_terms` + `face_line`
+pay, the same four spawn-only stages with the same env dicts, the same spawn
+RNG stream (a test resets both ids at the same seed and compares `qpos`).
+The scale is stamped on the env by the recipe's own reset, so
+`grid_kick_bench_sensed.reseed_task_state` re-senses under the scale the
+policy was trained with, without knowing the knob exists. The 0.25 pair is
+unchanged **bit for bit** — card, terms, keywords, stage envs, reset name,
+and its obs vectors over 8 spawn seeds, 5 placements and a 40-step
+trajectory, all compared against a HEAD copy of the module on `PYTHONPATH`.
+`tests/test_lastmetre.py` gains four tests (the shared-by-construction
+check, the 0.30 m → 0.5 slot reading, the first recipe still reading under
+0.25, and the identical spawn streams); commit 45d3a81.
+
+Trained both feet, seed 0, 32 envs, `face_line` 12.0, the same four rungs
+Follow-up A documents: `lastmetre-far-{right,left}-{rung1,rung2,v1,approach}`
+(group `lastmetre`). 6M steps a foot, ~12 min a chain on this Mac, log_std
+flat at 0.586-0.594 throughout (no bang-bang ratchet).
+
+**Trunk advance and ball travel vs ball distance** (`probe_kick_approach.py`,
+8 seeds a cell, 4 s horizon, ball 0.042 m to the kicking foot's side; advance
+at 4 s, `moved` = share of seeds the ball travelled ≥ 0.10 m; level gaze /
+neck −0.30 + head +0.60):
+
+| foot | ball ahead | 0.25 v1 | 0.25 approach | **far v1** | **far approach** |
+|---|---|---|---|---|---|
+| right | 0.16 m | 0.09/0.05 m, 100/100 % | 0.16/0.14, 100/88 | **0.22/0.11, 100/100** | **0.34/0.14, 100/100** |
+| | 0.22 m | 0.05/0.07, 50/0 | 0.14/0.17, 75/100 | **0.21/0.16, 100/100** | **0.17/0.22, 100/100** |
+| | **0.28 m** | 0.01/0.02, **0/0** | 0.03/0.04, **0/0** | **0.26/0.24, 100/100** | **0.32/0.27, 100/75** |
+| | **0.35 m** | 0.02/0.02, **0/0** | 0.03/0.04, **0/0** | **0.34/0.36, 100/100** | **0.35/0.38, 50/75** |
+| | 0.45 m | 0.02/0.03, 0/0 | 0.03/0.03, 0/0 | 0.25/0.28, 0/12 | **0.47/0.44, 38/38** |
+| | 0.60 m | 0.02/0.03, 0/0 | 0.03/0.03, 0/0 | 0.01/0.04, **0/0** | 0.43/0.42, 12/0 |
+| left | 0.16 m | 0.08/0.05, 100/100 | 0.06/0.05, 88/100 | **0.16/0.17, 100/100** | 0.24/0.20, 75/50 |
+| | 0.22 m | 0.16/0.16, 100/100 | 0.03/0.06, 0/50 | **0.21/0.19, 100/100** | 0.15/0.20, 25/62 |
+| | **0.28 m** | 0.03/0.03, **0/0** | −0.01/0.00, **0/0** | **0.23/0.26, 100/100** | **0.48/0.44, 88/88** |
+| | **0.35 m** | 0.02/0.03, **0/0** | 0.00/0.00, **0/0** | **0.28/0.30, 75/88** | **0.65/0.42, 88/88** |
+| | 0.45 m | 0.01/0.03, 0/0 | 0.00/0.00, 0/0 | 0.21/0.23, 0/12 | **0.57/0.54, 100/88** |
+| | 0.60 m | 0.02/0.03, 0/0 | −0.01/0.00, 0/0 | 0.02/0.04, **0/0** | 0.38/0.41, 0/12 |
+
+**The cliff moved with the slot, which is the whole claim.** Both 0.25 m
+arms move the ball on 0 % of seeds at every distance past 0.25 m and advance
+1-4 cm — Follow-up B, reproduced. Both far arms walk and connect out to
+0.35 m on both feet. And the far-range NEAR tip — `lastmetre-far-{foot}-v1`,
+which has never seen a ball out of reach in training — dies at exactly
+0.45-0.60 m, i.e. at its OWN saturation radius: 0.01-0.04 m of advance and
+0 % moved at 0.60. The approach is an observation problem, the observation
+was the range slot, and the ceiling is wherever that slot stops moving.
+
+**The approach rung is not what buys the walk.** The far v1 tip is trained
+on stages 1-3 only (the 4-16 cm box, 2 s clips) and still advances 0.23-0.36 m
+to a ball at 0.28-0.35 m and moves it on 75-100 % of seeds. Under the 0.60 m
+scale the near box's own gradient (a ball at 0.16 m reads 0.27, not 0.64)
+extends outward instead of hitting a wall at 0.25; the rung then extends the
+REACH — the left approach tip is the only arm that moves a ball at 0.45 m
+(88-100 %) — and that is where the falls come from.
+
+**The near game** (`grid_kick_bench_sensed.py`, 2 seeds a cell, level /
+line-up gaze / neck split; poses at 12 seeds; env named per row):
+
+| arm | env | box | sweet | falls /180 | \|turn\| | pose whiff | pose falls /60 | travel |
+|---|---|---|---|---|---|---|---|---|
+| `lastmetre-right-v1-approach` (0.25) | `kick_right_sensed` | 100/100/98 % | 100 % | 9/12/18 | 18/16/21° | 0 % | 2 | 0.70-0.98 m |
+| **`lastmetre-far-right-v1`** | `kick_right_sensed_far` | **96/100/100 %** | 100 % | **0/1/0** | 36/25/24° | 0 % | **0** | 1.22-1.55 m |
+| **`lastmetre-far-right-approach`** | `kick_right_sensed_far` | 95/98/99 % | 100 % | 12/13/6 | 31/26/27° | 0 % | **0** | 1.07-1.57 m |
+| the same policy, BLINDFOLDED | `kick_right` | 80/90/80 % | 100 % | 2/64/5 | 26/39/37° | 0-8 % | 8 | 0.39-1.31 m |
+| `lastmetre-left-v1-approach` (0.25) | `kick_left_sensed` | 98/92/99 % | 100 % | 24/20/20 | 24/20/19° | 0 % | 22 | 0.91-1.20 m |
+| **`lastmetre-far-left-v1`** | `kick_left_sensed_far` | **100/100/100 %** | 100 % | **3/10/14** | 23/24/27° | 0 % | **0** | 1.00-1.27 m |
+| `lastmetre-far-left-approach` | `kick_left_sensed_far` | 95/86/87 % | 100 % | **40/87/109** | 27/33/37° | 0/0/25/33/58 % | 23 | 0.06-1.23 m |
+| the same policy, BLINDFOLDED | `kick_left` | 21/69/57 % | 33/83/89 % | 0/5/10 | 19/62/78° | 75/25/8/0/0 % | 25 | 0.01-0.79 m |
+
+(The 0.25 approach rows re-ran identically to Follow-up B — 100/100/98 and
+98/92/99, falls 9/12/18 and 24/20/20, left pose falls 22 — so the bench is
+reproducing, which is the positive control for everything else here.)
+
+**The render is a walk, not a lean.** `render-rollout` on the right approach
+tip with the far window pinned to 0.30-0.45 m: at a ball 0.43 m ahead the
+range slot falls 0.73 → 0.63 → 0.53 → 0.47 → 0.36 → 0.28 over alternating
+single-support steps, the right foot meets the ball at ~2.2 s and the slot
+reads 1.00 afterwards (the ball is past 0.60 m). At 0.34 m: 0.57 → 0.20 in
+2.6 s, then the strike. The far-range v1 tip does the same thing at 0.43 m
+(0.73 → 0.22 over five steps, swing at ~3.0 s) — a policy that never trained
+on a far ball. The left approach tip falls in 2 of 3 rendered far episodes.
+
+**Verdict: yes, the wider range slot buys the approach past 0.25 m — and the
+arm worth keeping is the one WITHOUT the approach rung.** `far v1` is the
+best arm measured on this page on every axis except turn: box coverage
+96-100 % on both feet (the 0.25 pair's 94-99 %), 0-14 falls per 180 against
+the 0.25 approach tips' 9-24, zero pose-bench falls against 2 and 22, pose
+travel 1.00-1.55 m against 0.70-1.20, and an approach out to 0.35 m the 0.25
+recipe cannot do at any distance. The costs are real and named: the turn
+median is WORSE on the right (36/25/24° against 23/17/20°) and misses the
+20° bar on both feet at most poses, as it has since 12as; the near strike
+leans less on the observation (the right blindfold row holds 80-90 % of the
+box against the 0.25 pair's 33-46 %), which is what a 2.4× coarser slot in
+the near box should do; and stacking the approach rung on top costs 12/13/6
+falls per 180 on the right and 40/87/109 on the left, where it also loses
+13 pp of box coverage. **Recommended: keep the recipe, treat
+`lastmetre-far-{right,left}-v1` as the arm to carry forward, and do NOT
+promote anything into `policies/kick/` — the turn bar is still missed and
+this is one training seed an arm** (12as's own caveat: at 2 seeds a cell a
+fall count is not an instrument, and run-to-run variance has not been
+measured for this recipe). The honest next cut is the second training seed
+on `far v1`, both feet, before any of these numbers is credited to the slot
+rather than to luck.
+
+    # the chain (both feet, seed 0, 32 envs, ~12 min a foot on this Mac)
+    MICRODUCK_KICK_BOX_AHEAD=0.075,0.105 MICRODUCK_KICK_BOX_SIDE=0.027,0.057 \
+    MICRODUCK_LM_GAZE_NECK=-0.30,-0.15 MICRODUCK_LM_GAZE_HEAD=0.45,0.60 MICRODUCK_LM_GAZE_YAW=0.30,0.50 \
+      uv run train-behavior kick_right_sensed_far --run-name lastmetre-far-right-rung1 --envs 32 \
+      --steps 1000000 --seed 0 --weights-json '{"face_line": 12.0}' --group lastmetre --title ... --description ...
+    # rung 2: same gaze, BOX 0.06,0.12 / 0.03,0.09, --init-from runs/lastmetre-far-right-rung1
+    # v1:     BOX 0.04,0.16 / 0.01,0.13, GAZE -0.3,0.0 / 0.0,0.6 / 0.0,0.0, 2M, --init-from ...-rung2
+    # approach: + MICRODUCK_LM_FAR_PROB=0.5 MICRODUCK_LM_FAR_AHEAD=0.2,0.45 \
+    #             MICRODUCK_LM_FAR_SIDE=-0.13,0.13 MICRODUCK_EPISODE_S=4.0, 2M, --init-from ...-v1
+    uv run python scripts/probe_kick_approach.py --foot right --seeds 8 --seconds 4.0 \
+      --distances 0.16,0.22,0.28,0.35,0.45,0.60 \
+      far-approach:kick_right_sensed_far=runs/lastmetre-far-right-approach/policy.onnx \
+      far-v1:kick_right_sensed_far=runs/lastmetre-far-right-v1/policy.onnx \
+      0.25-approach:kick_right_sensed=runs/lastmetre-right-v1-approach/policy.onnx \
+      0.25-v1:kick_right_sensed=runs/lastmetre-right-v1/policy.onnx
+    uv run python scripts/grid_kick_bench_sensed.py --foot right --seeds 2 \
+      far-approach:kick_right_sensed_far=runs/lastmetre-far-right-approach/policy.onnx \
+      far-v1:kick_right_sensed_far=runs/lastmetre-far-right-v1/policy.onnx \
+      far-approach-BLIND:kick_right=runs/lastmetre-far-right-approach/policy.onnx \
+      0.25-approach:kick_right_sensed=runs/lastmetre-right-v1-approach/policy.onnx
+    # ...and the same with --mode poses --seeds 12
+    uv run render-rollout --policy runs/lastmetre-far-right-approach/policy.onnx \
+      --behavior kick_right_sensed_far --out /tmp/rr --episodes 3 --seed 40 --camera side \
+      --env MICRODUCK_LM_FAR_PROB=1.0 --env MICRODUCK_LM_FAR_AHEAD=0.30,0.45 --env MICRODUCK_EPISODE_S=4.0
+
+Reviewer's reproduction (4 seeds, right foot, 4 s): far v1 moves the ball on
+100 % of seeds at 0.28 and 0.35 m and 0 % at 0.60 m; the 0.25 recipe 0 % at
+all three. Commit 45d3a81; runs `lastmetre-far-{right,left}-{rung1,rung2,v1,approach}`
+(the finding is written into each `behavior.json`). Full suite green (1260
+passed, 14 skipped).
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
