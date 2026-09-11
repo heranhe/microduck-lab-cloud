@@ -66,3 +66,40 @@ for lab in labels[1:]:
           f" | median travel of connected: "
           f"{sorted(r['travel'] for r in swb if not r['whiff'])[max(0, sum(not r['whiff'] for r in swb) // 2)] if swb else float('nan'):.2f} -> "
           f"{sorted(r['travel'] for r in swa if not r['whiff'])[max(0, sum(not r['whiff'] for r in swa) // 2)] if swa else float('nan'):.2f} m")
+
+# THE EXIT AND THE BACK SHARE (roadmap 12at). Silent on row files written
+# before the exit column existed, so every older pair compares as it did.
+if any(kick_gym.exit_summ(arms[lab]) for lab in labels):
+    print("\n" + "=" * 78 + "\nin-play exit per foot, and the back share\n" + "=" * 78)
+    print(f"{'arm':<22}{'foot':<12}{'n':>5}{'exit med':>10}{'IQR':>17}{'sidecar':>9}"
+          f"{'off by':>8}{'|err| med':>11}{'>±34°':>7}{'back':>7}")
+    for lab in labels:
+        s = kick_gym.exit_summ(arms[lab])
+        for foot, d in s.items():
+            deg = math.degrees
+            iqr = f"{deg(d['exit_q1']):+.0f}..{deg(d['exit_q3']):+.0f}°"
+            sc = "  -  " if d["assumed"] is None else f"{deg(d['assumed']):+.0f}°"
+            off = "  -  " if d["assumed"] is None else f"{deg(d['exit_med'] - d['assumed']):+.0f}°"
+            ea = f"{deg(d['err_abs_med']):.0f}°" if "err_abs_med" in d else "  -  "
+            eo = f"{100 * d['err_outside']:.0f}%" if "err_outside" in d else "  - "
+            print(f"{lab:<22}{foot:<12}{d['n']:>5}{deg(d['exit_med']):>+9.0f}°{iqr:>17}{sc:>9}"
+                  f"{off:>8}{ea:>11}{eo:>7}{100 * d['back']:>6.0f}%")
+    # The back share as a PROPORTION OF THE TOUCH EVENTS, which is how the
+    # ledger's `kicksBack` is read (memory: soccer-metric-power-table) -- never
+    # as a per-seed rate. Same two-proportion z + MDE as the whiff column.
+    def back(rows):
+        rs = [r for r in rows if r.get("swing") and r.get("back") is not None]
+        return sum(bool(r["back"]) for r in rs), len(rs)
+    xb, nb = back(arms[base])
+    if nb:
+        print(f"\n{'arm':<22}{'touches':>9}{'back':>7}{'share':>8}{'vs base':>9}{'±MDE':>7}{'p':>8}  verdict")
+        print(f"{base + ' (base)':<22}{nb:>9}{xb:>7}{100 * xb / nb:>7.0f}%{'—':>9}{'—':>7}{'—':>8}")
+        for lab in labels[1:]:
+            xa, na = back(arms[lab])
+            if not na:
+                continue
+            d_, p_, mde_ = kick_gym.two_proportions(xb, nb, xa, na)
+            print(f"{lab:<22}{na:>9}{xa:>7}{100 * xa / na:>7.0f}%{100 * d_:>+8.0f}%"
+                  f"{100 * mde_:>6.0f}%{p_:>8.3f}  {kick_gym.verdict_prop(p_, mde_)}")
+        print("  back = the ledger's own rule per touch: signed displacement along the attacked"
+              "\n  axis over the carry window < 0 (`Metrics._resolve_kicks`).")

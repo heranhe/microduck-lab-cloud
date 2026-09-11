@@ -56,6 +56,55 @@ WHIFF_M = 0.10
 SETTLE_S = CARRY_S
 EPISODE_S = 25.0        # a walk-in from ~1 m plus a line-up; beyond this the episode is a no-swing
 
+# THE EXIT WINDOW (roadmap 12at, 2026-09-10). The sidecar `exit_rad` the
+# selector aims with is a BENCH median (`scripts/bench_kick_headdown.py`), and
+# the sidecar of the pair it replaced records that the same foot read -0.16 on
+# the bench and +0.26 in play. Nothing here measured the in-play exit per
+# swing, so the selector's aim error was never a number.
+#
+# The exit is the ball's travel direction over the FIRST 0.5 s after the touch,
+# not over the whole carry window: at 1.4 m/s off the foot and 0.3 m/s^2 of
+# rolling resistance the ball has run ~0.66 m by then and has not yet reached a
+# board on this 3.0 x 2.5 m pitch from most placements, so the direction is the
+# kick's and not the wall's. `advance` below keeps the full CARRY_S window,
+# because that is what the ledger's `kicksBack` scores.
+EXIT_S = 0.5
+# Under this the direction is numerical noise, not a line: a ball nudged 2 cm
+# has an angle, but not one worth a row. Half the whiff threshold, so every
+# connected swing (>= 0.10 m over CARRY_S) that actually left in the first
+# half-second is measured and a stationary ball reads None rather than a
+# uniformly-distributed angle that would bias a median toward nothing.
+EXIT_MIN_M = 0.05
+
+
+def _wrap(a: float) -> float:
+    """An angle into (-pi, pi]."""
+    return math.atan2(math.sin(a), math.cos(a))
+
+
+def exit_angle(ball0, ball1, yaw: float, min_m: float = EXIT_MIN_M) -> float | None:
+    """The direction a ball travelled from `ball0` to `ball1`, in the BODY
+    frame of a duck whose world yaw was `yaw` at the swing — the same sign
+    convention as the sidecar's `exit_rad` and `ChaseParams.kick_exit_*`:
+    POSITIVE is to the duck's LEFT.
+
+    None when the ball moved under `min_m`: a stationary ball has no
+    direction, and giving it one would put uniform noise in the median.
+    """
+    dx, dy = float(ball1[0]) - float(ball0[0]), float(ball1[1]) - float(ball0[1])
+    if math.hypot(dx, dy) < min_m:
+        return None
+    return _wrap(math.atan2(dy, dx) - yaw)
+
+
+def aim_error(exit_play: float | None, aim_body: float | None) -> float | None:
+    """Realised minus intended, wrapped: how far off the line the selector
+    laid the ball actually left. Both arguments are in the body frame at the
+    swing, so no odometry drift enters. None when either is missing."""
+    if exit_play is None or aim_body is None:
+        return None
+    return _wrap(exit_play - aim_body)
+
 
 def gym_scenario(size=(3.0, 2.5), goal_width=0.7, opponents: int = 0,
                  cove: float = 0.0, corner: float = 0.0) -> Scenario:
@@ -299,6 +348,7 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
         swing = None
         prev_skill = None
         last_spot, last_spot_t = None, None
+        last_sel = None             # kick_select's Verdict for that latched plan (12at)
         pre_track = None            # (age, sigma, hits) of the ball track at the decision tick
         pushes0 = brain.pushes      # a PUSH is a touch too (roadmap 12g): the brain counts them, the skill never starts
         while w.t - t0 < EPISODE_S:
@@ -317,6 +367,10 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
             # Still read off the brain, never recomputed from the ball.
             if brain.spot is not None:
                 last_spot, last_spot_t = brain.spot, w.t
+                # `_plan` sets `last_select` on its way to setting `spot`, so
+                # the verdict latched here is the one that chose this plan's
+                # line and foot (None when `kick_select` declined or is off).
+                last_sel = brain.last_select
             outs_before = w.ball_outs
             w.step()
             if w.ball_outs != outs_before:
@@ -406,6 +460,37 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                     "spot_board": None if last_spot is None
                     else round(to_board(float(last_spot[0]), float(last_spot[1])), 4),
                     "spot_age": None if last_spot_t is None else round(w.t - last_spot_t, 2),
+                    # --- THE EXIT (12at) ---
+                    # The three raw angles the exit and the aim error are
+                    # built from, all recorded rather than reconstructed, so
+                    # an analysis that disagrees with `exit_play` below can
+                    # say where. `spot_head` is the BODY HEADING `_plan` laid
+                    # the spot in, in the ODOM frame (`self.spot[3]`, which
+                    # the old three-field `spot` column above throws away);
+                    # `odom_yaw` is the body's odom yaw at the swing, so the
+                    # two differ by the line-up's residual; `swing_yaw` is the
+                    # true world yaw, which is what the exit is measured
+                    # against. Odometry drift cancels in `spot_head -
+                    # odom_yaw` and never enters `exit_play`.
+                    "spot_head": None if last_spot is None else round(float(last_spot[3]), 4),
+                    "odom_yaw": round(float(odom_now[2]), 4),
+                    "swing_yaw": round(float(yaw), 4),
+                    # What the brain BELIEVES this foot's exit is: the sidecar
+                    # value `World.kick_exits()` put into `ChaseParams` (or the
+                    # shipped default when there is no sidecar). This is the
+                    # number the selector aimed with, and the one `exit_play`
+                    # is the audit of. A push leaves along the walk: 0.0.
+                    "exit_assumed": round(float(
+                        brain.p.kick_exit_left if str(d.skill) == "kick_left"
+                        else brain.p.kick_exit_right if str(d.skill) == "kick_right" else 0.0), 4),
+                    # The selector's own verdict for the latched plan, so "the
+                    # aim was back toward our own mouth" and "the kick went
+                    # back" can be told apart: a line the selector KNEW was
+                    # 20% own-goal is a different failure from one it thought
+                    # was safe and the foot bent round.
+                    "sel_foot": None if last_sel is None else str(last_sel.foot),
+                    "sel_p_own": None if last_sel is None else round(float(last_sel.p_own), 4),
+                    "sel_p_goal": None if last_sel is None else round(float(last_sel.p_goal), 4),
                     # Seconds since the last throw-in, or None if there has not
                     # been one this run.
                     "since_out": None if last_out_t is None else round(w.t - last_out_t, 2),
@@ -430,16 +515,42 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
             continue
         # let the ball run, then measure how far the swing actually sent it
         ts = w.t
+        b_exit = None               # where the ball was EXIT_S after the touch (12at)
         while w.t - ts < SETTLE_S:
             _drive(w, brains)
             w.step()
+            if b_exit is None and w.t - ts >= EXIT_S:
+                b_exit = (float(w.data.qpos[q]), float(w.data.qpos[q + 1]))
         bx1, by1 = float(w.data.qpos[q]), float(w.data.qpos[q + 1])
         travel = math.dist(swing["ball0"], (bx1, by1))
         # ...and how much of it went TOWARD the goal (+x is the attacked
         # mouth in this gym): the number a board touch is for (12g).
         advance = bx1 - swing["ball0"][0]
+        # THE EXIT, realised (12at): the ball's line over the first EXIT_S in
+        # the body frame at the swing, and the error against the line the plan
+        # laid. `aim_body` is the intended BALL direction relative to the body
+        # at the swing -- the spot's heading turned into the body frame plus
+        # the exit the brain assumed for the foot it swung, which is exactly
+        # the quantity `kickselect.evaluate` rolls out (`u + model.exit`). With
+        # `kick_deflect_*` at their shipped 0 the spot heading IS the aim line
+        # `u`, so `aim_body` reduces to `exit_assumed` for a duck that finished
+        # its line-up, and the residual says how much of the error is the
+        # line-up rather than the foot.
+        e_play = None if b_exit is None else exit_angle(swing["ball0"], b_exit, swing["swing_yaw"])
+        aim_body = (None if swing["spot_head"] is None
+                    else _wrap(swing["spot_head"] - swing["odom_yaw"]) + swing["exit_assumed"])
         swing.update(swing=True, travel=travel, advance=round(advance, 4), whiff=travel < WHIFF_M, seed=seed,
-                     arm=knobs, live=live, fell=int(d.falls) > swing["falls_before"])
+                     arm=knobs, live=live, fell=int(d.falls) > swing["falls_before"],
+                     # The ledger's own rule, per swing: `Metrics._resolve_kicks`
+                     # counts a kick BACK when the signed displacement along the
+                     # attacked axis over CARRY_S is negative. Same window, same
+                     # sign, so the gym's back-share and `kicksBack` are the same
+                     # quantity measured on different populations.
+                     back=bool(advance < 0.0),
+                     exit_travel=None if b_exit is None else round(math.dist(swing["ball0"], b_exit), 4),
+                     exit_play=None if e_play is None else round(e_play, 4),
+                     aim_body=None if aim_body is None else round(_wrap(aim_body), 4),
+                     aim_err=None if aim_error(e_play, aim_body) is None else round(aim_error(e_play, aim_body), 4))
         swing.pop("ball0")
         rows.append(swing)
     return rows
@@ -450,6 +561,72 @@ def _run(a):
 
 
 BANDS = ((0.00, 0.08), (0.08, 0.11), (0.11, 0.15), (0.15, 0.20), (0.20, 9.9))
+
+# The scatter `kickselect` already assumes about the exit line
+# (`ChaseParams.kick_select_dir_sd`, shipped 0.6 rad = 34.4 deg). A systematic
+# aim error INSIDE this is already in the model's variance; one outside it is a
+# bias the roll-out cannot see, and every own-goal filter rests on the roll-out.
+SELECTOR_DIR_SD = 0.6
+
+
+def _q(xs, f: float) -> float:
+    return float(np.quantile(np.asarray(xs, float), f))
+
+
+def exit_summ(rows: list[dict]) -> dict:
+    """Per foot: the realised in-play exit and the aim error, as median and
+    IQR, plus the share of swings whose aim error is outside the scatter the
+    selector assumes. Keys are the skill names (`kick_left`, `kick_right`,
+    `push`); a foot with no measured exit is absent rather than zero.
+
+    Reads only `.get`, so a row file written before 12at summarises to `{}`
+    and every caller of this module keeps working on it."""
+    out: dict[str, dict] = {}
+    by_foot: dict[str, list[dict]] = {}
+    for r in rows:
+        if r.get("swing") and r.get("exit_play") is not None:
+            by_foot.setdefault(str(r.get("foot")), []).append(r)
+    for foot, rs in sorted(by_foot.items()):
+        ex = [float(r["exit_play"]) for r in rs]
+        er = [float(r["aim_err"]) for r in rs if r.get("aim_err") is not None]
+        assumed = [float(r["exit_assumed"]) for r in rs if r.get("exit_assumed") is not None]
+        d = {"n": len(rs), "exit_med": _q(ex, 0.5), "exit_q1": _q(ex, 0.25), "exit_q3": _q(ex, 0.75),
+             "assumed": (float(np.median(assumed)) if assumed else None),
+             "back": sum(bool(r.get("back")) for r in rs) / len(rs)}
+        if er:
+            d.update(n_err=len(er), err_med=_q(er, 0.5), err_q1=_q(er, 0.25), err_q3=_q(er, 0.75),
+                     err_abs_med=_q([abs(v) for v in er], 0.5),
+                     err_outside=sum(abs(v) > SELECTOR_DIR_SD for v in er) / len(er))
+        out[foot] = d
+    return out
+
+
+def report_exit(rows: list[dict]) -> None:
+    """`exit_summ` as the roadmap reads it: degrees, per foot, against the
+    sidecar the selector aimed with. Silent on a row file with no exit
+    column, so every pre-12at `--out` file prints exactly what it did."""
+    s = exit_summ(rows)
+    if not s:
+        return
+    deg = math.degrees
+    print(f"\nin-play exit over the first {EXIT_S:g} s, body frame at the swing "
+          f"(+ = to the duck's LEFT; sidecar = what the selector aimed with):")
+    print(f"{'foot':<12}{'n':>5}{'exit med':>10}{'IQR':>17}{'sidecar':>9}{'off by':>8}"
+          f"{'aim err med':>13}{'|err| med':>10}{'>±34°':>7}{'back':>7}")
+    for foot, d in s.items():
+        iqr = f"{deg(d['exit_q1']):+.0f}..{deg(d['exit_q3']):+.0f}°"
+        sc = "  -  " if d["assumed"] is None else f"{deg(d['assumed']):+.0f}°"
+        off = "  -  " if d["assumed"] is None else f"{deg(d['exit_med'] - d['assumed']):+.0f}°"
+        em = f"{deg(d['err_med']):+.0f}°" if "err_med" in d else "  -  "
+        ea = f"{deg(d['err_abs_med']):.0f}°" if "err_abs_med" in d else "  -  "
+        eo = f"{100 * d['err_outside']:.0f}%" if "err_outside" in d else "  - "
+        print(f"{foot:<12}{d['n']:>5}{deg(d['exit_med']):>+9.0f}°{iqr:>17}{sc:>9}{off:>8}"
+              f"{em:>13}{ea:>10}{eo:>7}{100 * d['back']:>6.0f}%")
+    print(f"  `off by` is the in-play median minus the sidecar `exit_rad` the brain aimed with;"
+          f"\n  `>±34°` is the share of swings whose aim error exceeds the {SELECTOR_DIR_SD:g} rad scatter"
+          "\n  kickselect already samples (`kick_select_dir_sd`) — a bias inside it is priced in,"
+          "\n  one outside it is invisible to the own-goal filter. `back` is the ledger's rule"
+          "\n  (`advance` < 0 over the carry window), per foot.")
 
 
 def report(rows: list[dict]) -> None:
@@ -493,6 +670,7 @@ def report(rows: list[dict]) -> None:
         if sw[0].get(k) is None:
             continue
         print(f"{lab:<26}{col(hit, k):>12}{col(miss, k):>12}")
+    report_exit(sw)
     print("\nREAD IT AGAINST roadmap Track 4 item 12's 372-swing match table. If the "
           "0.08-0.11 row is ~94% here too, the failure reproduces with ONE duck and "
           "can be iterated in minutes. If it is low, what breaks the kick is something "
