@@ -290,12 +290,33 @@ def test_the_truth_knob_is_off_unless_asked_and_keeps_no_state(monkeypatch, tmp_
     assert d.head_cmd[0] == pytest.approx(0.5, abs=1e-6)      # the TRACK's bearing, not the ball's
     assert w._truth_sense == {} and w._truth_rng is None      # …and nothing was computed beside it
 
+    assert w.sensed_truth_mode == ""
+
     for value in ("1", "true", "yes"):
         monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", value)
-        assert World(_one_duck(), seed=0).sensed_truth is True
+        built = World(_one_duck(), seed=0)
+        assert built.sensed_truth is True and built.sensed_truth_mode == "all"
     for value in ("", "0", "false"):
         monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", value)
-        assert World(_one_duck(), seed=0).sensed_truth is False
+        built = World(_one_duck(), seed=0)
+        assert built.sensed_truth is False and built.sensed_truth_mode == ""
+
+
+def test_the_split_modes_are_read_onto_the_constructed_world_and_a_typo_raises(monkeypatch, tmp_path):
+    """The two SPLITS (roadmap 12as follow-up I) are modes of the same knob, so
+    the same rule 0 applies to them: the arm a battery is running has to be
+    readable off the World it built. A value that is not a mode RAISES — the
+    failure this prevents is `MICRODUCK_SENSED_TRUTH=fesh` running the truth
+    arm (or, worse, the play arm) and being quoted as the split."""
+    _pin(monkeypatch, tmp_path, lambda foot: {"sensed": True, "exit_rad": 0.0})
+    for value in ("xy", "fresh", "all"):
+        monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", value)
+        built = World(_one_duck(), seed=0)
+        assert built.sensed_truth is True and built.sensed_truth_mode == value
+    for value in ("fesh", "XY", "2", "truth"):
+        monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", value)
+        with pytest.raises(ValueError, match="is not a mode"):
+            World(_one_duck(), seed=0)
 
 
 @needs_walker
@@ -412,3 +433,123 @@ def test_the_truth_knob_on_writes_the_recipes_projection_of_the_true_ball(monkey
     # …and the memory goes with the duck, like the track's.
     w.reset_duck("d0")
     assert "d0" not in w._truth_sense
+
+
+# -- the two SPLITS of the ablation (roadmap 12as follow-up I) ---------------
+#
+# `=1` swaps THREE things at once — placement, `seen`, and the held estimate's
+# age — so it prices the tracker as a whole and cannot say which term the kick
+# pays for. `xy` and `fresh` cut it in half: `xy` is the truth's PLACEMENT with
+# the track's own freshness, `fresh` is the track's placement with the truth's
+# freshness. What has to be locked is that each really writes the mix it claims
+# and nothing else, which needs a track that is WRONG in one half and RIGHT in
+# the other — a tidy track would let a mode read the wrong producer and pass.
+
+def _slots(w: World, d, mode: str) -> np.ndarray:
+    """The four slots this World would write in `mode`, on the state it is in
+    right now. The mode is an attribute read per call, so all four arms can be
+    taken off ONE world state — which is the only way the mix is checkable."""
+    w.sensed_truth_mode, w.sensed_truth = mode, mode != ""
+    w._sensed_head(d)
+    return np.asarray(d.head_cmd, np.float64).copy()
+
+
+@needs_walker
+def test_the_splits_write_exactly_the_mix_they_claim(monkeypatch, tmp_path):
+    """Both poisonings, on one warm world. First a track whose PLACEMENT is
+    nonsense but whose freshness is real, then a track placed on the true ball
+    but a second and a half STALE — in each the mode that is supposed to take
+    the poisoned half must carry it, and the mode that is supposed to replace
+    it must not."""
+    _pin(monkeypatch, tmp_path, lambda foot: {"sensed": True, "exit_rad": 0.0})
+    monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", "1")     # …so the truth memory runs and is warm
+    w = _standing_world(_one_duck())
+    d = w.ducks["d0"]
+    _place_ball(w, 0.45, 0.22)
+    for _ in range(15):
+        w.step()
+    assert w._truth_sense["d0"]["world"] is not None, "the recipe's camera never saw the ball"
+    assert w._ball_tracker(d).best(SENSED_BALL_CLS, w.t, min_hits=1) is not None, "the camera never saw it"
+    trk = w._ball_tracker(d)
+    last = d.detector.last
+    assert last is not None
+
+    # (A) placement POISONED, freshness REAL: the ball is behind and to the
+    # right of where it is, and the newest detector frame is the track's hit.
+    bogus = _fake_track(-math.pi / 3, 2.0, last_t=last.t)
+    bogus.xy = (-1.0, -1.0)
+    trk.tracks = [bogus]
+    track, allm = _slots(w, d, ""), _slots(w, d, "all")
+    xy, fresh = _slots(w, d, "xy"), _slots(w, d, "fresh")
+
+    # the composition itself: each half is one producer's own output, exactly.
+    assert np.array_equal(xy[0:2], allm[0:2]) and np.array_equal(xy[2:4], track[2:4])
+    assert np.array_equal(fresh[0:2], track[0:2]) and np.array_equal(fresh[2:4], allm[2:4])
+    # …and the poison is visible, so the check above is not vacuous.
+    assert track[0] < -0.3 and allm[0] > 0.0          # the track says RIGHT, the truth says LEFT
+    assert abs(xy[0] - track[0]) > 0.3               # `xy` did not inherit the poisoned placement
+    assert abs(fresh[0] - track[0]) < 1e-9           # …and `fresh` did
+    assert track[2] == 1.0 and track[3] == 1.0       # the track's freshness is REAL here
+    assert xy[2] == 1.0 and xy[3] == 1.0             # …and `xy` keeps it
+
+    # (B) placement REAL, freshness POISONED: the track sits on the true ball
+    # but its last hit is 1.5 s old, so `seen` is off and confidence has faded.
+    stale = _fake_track(0.0, 1.0, last_t=w.t - 1.5)
+    stale.xy = (0.45, 0.22)          # ON the true ball, in the odometry frame `_track_head` reads from
+    trk.tracks = [stale]
+    # …and the truth memory pinned to a sighting on THIS tick, so the contrast
+    # between the two freshness halves is the poisoning and not the cadence
+    # (`truth_update` only refreshes every LM_DETECT_EVERY ticks, and whether
+    # the last one landed is a property of where the head happened to be).
+    w._truth_sense["d0"]["seen"], w._truth_sense["d0"]["conf"] = True, 1.0
+    track, allm = _slots(w, d, ""), _slots(w, d, "all")
+    xy, fresh = _slots(w, d, "xy"), _slots(w, d, "fresh")
+
+    assert np.array_equal(xy[0:2], allm[0:2]) and np.array_equal(xy[2:4], track[2:4])
+    assert np.array_equal(fresh[0:2], track[0:2]) and np.array_equal(fresh[2:4], allm[2:4])
+    assert track[2] == 0.0 and track[3] == pytest.approx(math.exp(-1.5 / LM_MEM_TAU), abs=1e-6)
+    assert allm[2] == 1.0 and allm[3] > 0.9          # the truth path saw it on this very frame
+    assert fresh[2] == 1.0 and fresh[3] > 0.9        # …and `fresh` takes that, not the stale fade
+    assert xy[2] == 0.0                              # …while `xy` keeps the track's staleness
+    # the placement halves agree with each other AND with the ball, both ways
+    assert track[0] == pytest.approx(allm[0], abs=0.08) and fresh[0] == pytest.approx(track[0])
+
+
+@needs_walker
+def test_a_split_mode_runs_a_whole_kick_window_and_off_is_unchanged_beside_it(monkeypatch, tmp_path):
+    """End to end, through `_skill_cmd`, with the duck's own camera: the split
+    arms are arms a gym can actually run. The ball is to the LEFT, so every
+    tick of every mode reads left — and the OFF world beside them, built from
+    the same seed, is bit-for-bit the world it always was."""
+    _pin(monkeypatch, tmp_path, lambda foot: {"sensed": True, "exit_rad": 0.0})
+
+    def window(mode: str) -> list[np.ndarray]:
+        if mode:
+            monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", mode)
+        else:
+            monkeypatch.delenv("MICRODUCK_SENSED_TRUTH", raising=False)
+        w = _standing_world(_one_duck())
+        assert w.sensed_truth_mode == mode
+        d = w.ducks["d0"]
+        _place_ball(w, 0.45, 0.22)
+        for _ in range(15):
+            w.step()
+        assert w.start_skill(d, "kick_left")
+        rows = []
+        for _ in range(int(round(KICK_S / CTRL_DT))):
+            w.step()
+            if d.skill is None:
+                break
+            rows.append(d.head_cmd.copy())
+        assert len(rows) >= 5
+        return rows
+
+    # (The vendored blind network topples this cold standing duck partway
+    # through the window, and under the truth halves the bearing follows the
+    # ball LIVE as the body rotates — so what is locked is the window's OPENING
+    # ticks, before the fall turns the duck past the ball.)
+    for mode in ("xy", "fresh", ""):
+        rows = window(mode)
+        assert rows[0][0] > 0.0 and rows[1][0] > 0.0, (mode, [float(r[0]) for r in rows])
+        assert all(0.0 < r[1] <= 1.0 for r in rows), mode
+        assert all(r[3] > 0.0 for r in rows), mode

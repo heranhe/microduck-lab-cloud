@@ -30,6 +30,14 @@ built) because that is what training did — a memory that only ran during the
     uv run python scripts/probe_sensed_slots.py --pair <dir with kick_*.onnx+json> \
         --seeds 4 --episodes 40 --jobs 3 --out runs/sensedplay/slots-right.json
 
+With `--mode xy` / `--mode fresh` / `--mode all` it reads a window UNDER THE
+ABLATION instead of in play (roadmap 12as follow-up I): the first four columns
+then carry what THAT ARM's kick actually received — the mix that mode composes
+— while the truth columns stay the same reference they always were, so the
+four arms' slot tables are read off one instrument. `--mode` sets
+`MICRODUCK_SENSED_TRUTH` before the World is built and the preflight prints
+the mode the constructed World came out with.
+
 The pair directory is pinned with MICRODUCK_SKILL_KICK_{LEFT,RIGHT}; pin only
 the foot you mean to read by passing --left / --right instead of --pair. The
 run PREFLIGHTS what it pinned off the constructed World (playbook rule 0, and
@@ -101,7 +109,7 @@ def _row(w: World, d) -> dict:
     dx, dy = bx - x, by - y
     ahead, beside = c * dx + s * dy, -s * dx + c * dy
     r = {
-        "foot": str(d.skill), "t": round(w.t, 3),
+        "foot": str(d.skill), "t": round(w.t, 3), "mode": w.sensed_truth_mode,
         # the slots, as the network saw them
         "psi": hc[0], "rng": hc[1], "seen": hc[2], "conf": hc[3],
         "t_psi": truth[0], "t_rng": truth[1], "t_seen": truth[2], "t_conf": truth[3],
@@ -113,6 +121,21 @@ def _row(w: World, d) -> dict:
     tr = None if trk is None else trk.best(SENSED_BALL_CLS, w.t, min_hits=1)
     r["track_xy"] = None if tr is None or tr.xy is None else [float(tr.xy[0]), float(tr.xy[1])]
     r["track_age"] = None if tr is None else float(tr.age(w.t))
+    # What the tracker ALREADY KNOWS about its own estimate beside the age —
+    # the reachable set of any fix that would let slot[54] mean "this estimate
+    # is good" instead of "a frame hit just now" (memory note
+    # check-a-knobs-reachable-set-first: price where a knob CAN act first).
+    # …and what the DETECTOR's newest frame holds, which is the ceiling of any
+    # change that would read `seen` off the frame instead of off the track's
+    # association: a tick whose newest frame has no ball in it cannot be made
+    # to say `seen` by any tracker fix at all.
+    last = d.detector.last if d.detector is not None else None
+    r["det_t"] = None if last is None else float(last.t)
+    r["det_ball"] = None if last is None else any(
+        det.cls == SENSED_BALL_CLS for det in last.detections)
+    trk_p = None if trk is None else trk.p
+    r["track_rest"] = None if tr is None else bool(tr.at_rest(trk_p.rest_vel))
+    r["track_sigma"] = None if tr is None else float(tr.sigma(w.t))
     st = w._truth_sense.get(d.id)
     r["truth_xy"] = None if st is None or st["world"] is None else [float(st["world"][0]),
                                                                     float(st["world"][1])]
@@ -148,8 +171,18 @@ def report(rows: list[dict]) -> None:
     by_foot = defaultdict(list)
     for r in rows:
         by_foot[r["foot"]].append(r)
+    # Which arm wrote these ticks. OFF, the first four columns are the track,
+    # which IS what the kick read; under an ablation mode they are the MIX that
+    # mode composes, so they are labelled for what they are and not for where
+    # they came from. The TRUTH columns are the same reference in every mode.
+    mode = next((r.get("mode", "") for r in rows), "")
+    lbl = "track" if not mode else "read "
     print(f"\nSENSED-KICK SLOT ERROR, {len(rows)} window ticks over "
-          f"{len({r['seed'] for r in rows})} seeds\n" + "=" * 78)
+          f"{len({r['seed'] for r in rows})} seeds"
+          + (f"   [MICRODUCK_SENSED_TRUTH={mode}]" if mode else "") + "\n" + "=" * 78)
+    if mode:
+        print(f"ABLATION ARM {mode!r}: the first column is what the kick RECEIVED — the mix that\n"
+              "mode writes, NOT the track. Placement below follows the half the mode took.\n")
     print("The TRACK is what the kick read; the TRUTH arm is the recipe's own projection of\n"
           "the true ball (the same code MICRODUCK_SENSED_TRUTH=1 runs). A slot unit of\n"
           f"bearing is pi/2 = 90 deg; a slot unit of range is LM_RANGE_SCALE = {LM_RANGE_SCALE} m.\n")
@@ -159,26 +192,40 @@ def report(rows: list[dict]) -> None:
         t_live = [r for r in rs if r["t_conf"] > 0.0 or r["t_rng"] > 0.0]
         both = [r for r in rs if r in live and r in t_live]
         print(f"-- {foot}  ({len(rs)} ticks) " + "-" * (52 - len(foot)))
-        print(f"  ticks with a ball in the slots   track {len(live) / len(rs):5.1%}    "
+        print(f"  ticks with a ball in the slots   {lbl} {len(live) / len(rs):5.1%}    "
               f"truth {len(t_live) / len(rs):5.1%}")
-        print(f"  slot[53] seen                    track {np.mean([r['seen'] for r in rs]):5.1%}    "
+        print(f"  slot[53] seen                    {lbl} {np.mean([r['seen'] for r in rs]):5.1%}    "
               f"truth {np.mean([r['t_seen'] for r in rs]):5.1%}    "
               f"agree {np.mean([r['seen'] == r['t_seen'] for r in rs]):5.1%}")
-        print(f"  slot[54] confidence  median      track {np.median([r['conf'] for r in rs]):5.2f}     "
+        print(f"  slot[54] confidence  median      {lbl} {np.median([r['conf'] for r in rs]):5.2f}     "
               f"truth {np.median([r['t_conf'] for r in rs]):5.2f}")
         print(f"  track age at the tick            {_stat([r['track_age'] for r in rs if r['track_age'] is not None], ' s')}")
+        # …and what the tracker knows about that estimate anyway.
+        held = [r for r in rs if r.get("track_xy")]
+        rest = [r for r in held if r.get("track_rest")]
+        det = [r for r in rs if r.get("det_ball")]
+        print(f"  the newest DETECTOR FRAME had a ball on {len(det) / len(rs):5.1%} of ticks "
+              "(the ceiling for reading `seen` off the frame)")
+        if held:
+            print(f"  track HELD a position on         {len(held) / len(rs):5.1%} of ticks, "
+                  f"and called it AT REST on {len(rest) / len(rs):5.1%}")
+            print(f"  track sigma at the tick          "
+                  f"{_stat([r['track_sigma'] for r in held if r.get('track_sigma') is not None], ' cm', 100)}")
         if both:
             d_psi = [_wrap((r["psi"] - r["t_psi"]) * math.pi / 2) for r in both]
             d_rng = [r["rng"] - r["t_rng"] for r in both]
             clip = np.mean([r["rng"] >= 1.0 or r["t_rng"] >= 1.0 for r in both])
-            print("  TRACK - TRUTH, slot by slot (the ablation's whole reach):")
+            print(f"  {lbl.strip().upper()} - TRUTH, slot by slot (the ablation's whole reach):")
             print(f"    bearing slot[51]  {_stat([abs(v) / (math.pi / 2) for v in d_psi])}")
             print(f"    bearing, degrees  {_stat([abs(math.degrees(v)) for v in d_psi], ' deg')}")
             print(f"    range slot[52]    {_stat([abs(v) for v in d_rng])}   "
                   f"(one or both clipped at 1.0 on {clip:.0%} of ticks)")
             print(f"    range, cm         {_stat([abs(v) for v in d_rng], ' cm', LM_RANGE_SCALE * 100)}")
         print("  ABSOLUTE error against the true ball in the duck's own frame:")
-        for tag, bk, rk, xk in (("track", "psi", "rng", "track_xy"), ("truth", "t_psi", "t_rng", "truth_xy")):
+        # the placement column follows the half the mode actually took
+        read_xy = "truth_xy" if mode in ("all", "xy") else "track_xy"
+        for tag, bk, rk, xk in ((lbl.strip(), "psi", "rng", read_xy),
+                                ("truth", "t_psi", "t_rng", "truth_xy")):
             live_r = [r for r in rs if r[rk] > 0.0 or r[bk] != 0.0]
             if not live_r:
                 print(f"    {tag:<6} —")
@@ -207,7 +254,12 @@ def main() -> None:
     ap.add_argument("--spread", type=float, default=0.8)
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out", default=None, help="write the per-tick rows here as jsonl")
+    ap.add_argument("--mode", default=None,
+                    help="read a window under the SIM-ONLY ablation instead of in play: "
+                         "all | xy | fresh (MICRODUCK_SENSED_TRUTH; see world/arena.py)")
     a = ap.parse_args()
+    if a.mode:
+        os.environ["MICRODUCK_SENSED_TRUTH"] = a.mode
     if a.pair:
         for foot in ("left", "right"):
             os.environ[f"MICRODUCK_SKILL_KICK_{foot.upper()}"] = str(Path(a.pair) / f"kick_{foot}.onnx")
@@ -220,6 +272,8 @@ def main() -> None:
     for n in ("kick_left", "kick_right"):
         print(f"[preflight] {n}: {World.skill_path(n)}  sensed={w._skill_sensed[n]}  "
               f"exit={World.skill_sidecar(n).get('exit_rad')}")
+    print(f"[preflight] ablation mode off the CONSTRUCTED world: {w.sensed_truth_mode!r} "
+          f"(sensed_truth={w.sensed_truth})")
     if not w._sensed_kick:
         raise SystemExit("neither foot is a SENSED kick — this probe would record nothing")
 

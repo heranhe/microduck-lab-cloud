@@ -68,6 +68,25 @@ SENSED_BALL_CLS = "ball"
 # `World.sensed_truth` is printed at construction so a battery cannot run it
 # by accident and quote the number as play.
 SENSED_TRUTH_ENV = "MICRODUCK_SENSED_TRUTH"
+# `=1` (or true/yes) swaps ALL FOUR slots — and therefore THREE things at once:
+# where the ball is (placement), whether this tick saw it (`seen`), and how old
+# the held estimate is (confidence). Follow-up H measured all three moving
+# together and could not say which one the kick pays for, so the knob also
+# takes the two SPLITS that separate them (roadmap 12as follow-up I):
+#
+#   xy     the truth path's PLACEMENT (slots 51/52, bearing and range off the
+#          recipe's projection) with the TRACK's own freshness (53/54)
+#   fresh  the TRACK's placement (51/52, off `Track.bearing_from`/`range_from`
+#          exactly as the played path reads it) with the truth path's `seen`
+#          and confidence (53/54)
+#
+# Both are composed from the same two producers `=1` and the played path
+# already use — nothing is re-derived — so `xy` + `fresh` between them cover
+# exactly the four slots `=1` swaps. Every mode is the same SIM-ONLY ablation
+# and none of them can ship.
+SENSED_TRUTH_MODES = ("all", "xy", "fresh")
+SENSED_TRUTH_OFF = ("", "0", "false", "False")
+SENSED_TRUTH_ALL = ("1", "true", "True", "yes")
 # A goal this soon after a kick is the kick's; the rest were walked into.
 # (Until 2026-09-06 the ball had no rolling resistance, so a chase at
 # 0.45 m/s sent a bumped ball as far as a kick did - to the boards; now a
@@ -417,15 +436,19 @@ class World:
         # the flag a battery thinks it is measuring has to be readable off the
         # World it built). Off is the only shipping value and costs one
         # attribute: no state is kept and no random number is drawn.
-        self.sensed_truth = os.environ.get(SENSED_TRUTH_ENV, "").strip() not in ("", "0", "false", "False")
+        self.sensed_truth_mode = World.sensed_truth_env_mode()
+        self.sensed_truth = self.sensed_truth_mode != ""
         self._truth_sense: dict = {}
         self._truth_cam: dict = {}
         self._truth_seed = scenario.seed if seed is None else seed
         self._truth_rng = None
         if self.sensed_truth:
-            print(f"[world] {SENSED_TRUTH_ENV}=1 — the sensed kick reads the TRUE ball through the "
-                  "recipe's projection. SIM-ONLY ABLATION: the robot has no truth, this can never ship.",
-                  flush=True)
+            what = {"all": "all four slots", "xy": "the PLACEMENT slots only (51/52); 53/54 stay the track's",
+                    "fresh": "the FRESHNESS slots only (53/54); 51/52 stay the track's",
+                    }[self.sensed_truth_mode]
+            print(f"[world] {SENSED_TRUTH_ENV}={self.sensed_truth_mode} — the sensed kick reads the TRUE "
+                  f"ball through the recipe's projection in {what}. SIM-ONLY ABLATION: the robot has no "
+                  "truth, this can never ship.", flush=True)
         self.model = compose(scenario)
         self.data = mujoco.MjData(self.model)
         self.t = 0.0
@@ -1015,6 +1038,23 @@ class World:
         gets the all-zero command block it was trained on, to the bit."""
         return bool(World.skill_sidecar(name).get("sensed", False))
 
+    @staticmethod
+    def sensed_truth_env_mode() -> str:
+        """Which of the SIM-ONLY truth ablations the environment asks for:
+        "" (off, the only shipping value), "all", "xy" or "fresh" — see
+        SENSED_TRUTH_ENV. A value that is none of these RAISES rather than
+        falling back to a mode, because the failure it prevents is a battery
+        running an arm it did not mean to and quoting the number."""
+        raw = os.environ.get(SENSED_TRUTH_ENV, "").strip()
+        if raw in SENSED_TRUTH_OFF:
+            return ""
+        if raw in SENSED_TRUTH_ALL:
+            return "all"
+        if raw in SENSED_TRUTH_MODES:
+            return raw
+        raise ValueError(f"{SENSED_TRUTH_ENV}={raw!r} is not a mode: "
+                         f"one of {SENSED_TRUTH_OFF + SENSED_TRUTH_ALL + SENSED_TRUTH_MODES}")
+
     def _ball_tracker(self, d: WorldDuck):
         """This duck's ball track, for a SENSED kick to read. The brain's own
         `Tracker` (brain/tracker.py) over this duck's own detector frames and
@@ -1043,13 +1083,33 @@ class World:
 
         and all four zero while nothing is known, which is what the recipe
         spawns with. The scale and the decay are IMPORTED from the recipe, so
-        the trained units and the played units cannot drift apart."""
-        from ..behaviors.lastmetre import LM_MEM_TAU, LM_RANGE_SCALE  # noqa: PLC0415
+        the trained units and the played units cannot drift apart.
+
+        Under the sim-only ablation (SENSED_TRUTH_ENV) some or all of the four
+        come from `truth_slots` instead. The mix is COMPOSED here and nowhere
+        else: each half is whichever producer's own output, unmodified, so
+        "xy" and "fresh" between them are exactly "all" and neither can drift
+        from the played path they are being compared against."""
         hc = d.head_cmd
         hc[:] = 0.0
-        if self.sensed_truth:
-            hc[:] = self.truth_slots(d)       # the sim-only ablation; see SENSED_TRUTH_ENV
+        mode = self.sensed_truth_mode
+        if mode:
+            if mode == "all":
+                hc[:] = self.truth_slots(d)   # the sim-only ablation; see SENSED_TRUTH_ENV
+                return
+            truth = self.truth_slots(d)
+            self._track_head(d, hc)           # the played path, into the same buffer…
+            half = slice(0, 2) if mode == "xy" else slice(2, 4)
+            hc[half] = truth[half]            # …then ONE half of it replaced by the truth's
             return
+        self._track_head(d, hc)
+
+    def _track_head(self, d: WorldDuck, hc: np.ndarray) -> None:
+        """The four slots off the TRACK — the played path, and the arithmetic
+        `_sensed_head` had inline before the splits existed. Writes into `hc`,
+        which the caller has already zeroed, and leaves it all-zero when the
+        duck knows nothing about a ball."""
+        from ..behaviors.lastmetre import LM_MEM_TAU, LM_RANGE_SCALE  # noqa: PLC0415
         trk = self._ball_trackers.get(d.id)
         tr = None if trk is None else trk.best(SENSED_BALL_CLS, self.t, min_hits=1)
         if tr is None:
