@@ -603,7 +603,9 @@ on, so that is what is left of this section.
         This matters on hardware too: the daemon runs the same gate, and it
         will now hand the kick a ball 14.5° off vertically.
 
-- [ ] **Retraining at the real FOV made it WORSE — negative result, and the
+- [x] **Retraining at the real FOV made it WORSE — negative result, recorded
+      and closed (ticked 2026-09-10; the FOV question was settled by the lens
+      calibration and the BAM fine-tune in section 2, `22f3df`) — and the
       tolerance rescale above is the leading suspect.** Run
       `teach-find_ball-c06bbb` (same recipe, 8M steps, only the FOV knobs
       changed). Against the shipped brain, both evaluated in the real-FOV env
@@ -648,8 +650,11 @@ on, so that is what is left of this section.
       hardware as well as in sim. A recipe whose meaning moves when a lens
       changes is wrong even when it happens to score well.
 
-- [ ] **The remaining falls are an over-aggressive belief-driven turn, and
-      that is a stability problem, not an aiming one.** Rendered
+- [x] **The remaining falls are an over-aggressive belief-driven turn, and
+      that is a stability problem, not an aiming one — decide-on MET by the
+      physics, not a term (ticked 2026-09-10): the BAM fine-tune `22f3df`
+      (section 2) falls 1 / 60 under BAM at `--events 0.33` with in frame
+      74 % and centred 68 %, against the shipped export's 13 / 60.** Rendered
       (`/tmp/rr-ang`), 5 of 6 episodes are excellent — in frame 88-99%,
       centred 74-98%, aim streaks to 7.26 s. The one fall is legible and is
       the same shape as the other arms' back-start falls: from a ball at
@@ -724,8 +729,10 @@ on, so that is what is left of this section.
         one. Every arm in this file is one draw from seed 0 (the lab pins it);
         a second seed would need the CLI and a hand-chained curriculum.
 
-- [ ] **The falls want a structural fix, and there is a specific candidate
-      this codebase has already used once.** `_upright` pays
+- [x] **The falls want a structural fix, and there is a specific candidate
+      this codebase has already used once — tried, Pareto-dominated, and the
+      falls were then fixed by the actuator model instead (`22f3df`, 1 / 60);
+      ticked 2026-09-10.** `_upright` pays
       `exp(-sin²(tilt)/0.05)` — a std of ~12.9° of tilt, so it is worth 0.55
       at 10°, 0.10 at 20° and 0.007 at 30°. Past ~25° there is essentially no
       pay left and therefore **no gradient pulling the duck back**: the term
@@ -777,7 +784,10 @@ its fall count — because at a 31° half-VFOV, leaning far enough to topple
 LOST THE BALL, so the centring pay was buying uprightness for free. The real
 lens removed that coupling, and no reward term has replaced it.
 
-- [ ] **Push the frontier out by changing the WORLD, not the pay.** Three
+- [x] **Push the frontier out by changing the WORLD, not the pay — built,
+      A/B'd, decide-on not met, and the frontier's physical root found
+      (the fall line is 20-25° of tilt); a closed negative, ticked
+      2026-09-10.** Three
       reward sweeps is enough evidence that this is not a pricing problem, and
       it is this file's own lesson: "if rollouts never contain the skill you
       are paying for, ladder the physics, not the reward" (`AGENTS.md`). The
@@ -11132,3 +11142,112 @@ used as part of the case.
 the only open behaviour question: it is a `kick_select` pricing effect, and
 `kick_gym.py` (19× cheaper per event) is where to ask whether the declined
 swings were ones worth taking.
+
+**The declined swings, asked in the gym — and there are none to ask about
+(2026-09-10).** 12au's open question (3). Read the code before the battery:
+`kickselect.select` returns None only when EVERY candidate line exceeds
+`kick_select_t_own` (0.10), and `Chase._plan` does not treat that as "no kick"
+— `if chosen is not None: u, foot_sel = chosen`, so on None it keeps the clamp's
+line and its own foot and **swings anyway**. A selector verdict cannot remove a
+swing. The only path that refuses a settled swing is `Chase.declines`:
+`_too_wide` (`kick_side_max`, which ships at **0.0** and is therefore
+structurally off) and `_too_far` (`kick_ahead_max` 0.15, on the BELIEVED ball).
+Neither reads the exit. So "the selector declines a quarter of its swings" had
+an empty reachable set before a second of compute was spent — the knob-reachable-
+set rule, applied to a sentence in our own roadmap.
+
+`scripts/probe_declined_swings.py` (new) measures it instead of asserting it. It
+drives `kick_gym`'s own scenario, placement and swing detection (imported, never
+copied) and logs per PLAN what the selector priced plus the COUNTERFACTUAL: the
+same candidate fan re-scored under the OTHER arm's exit on the SAME random
+stream, the generator's state snapshotted and restored so the live run is
+bit-identical to an un-probed one (`--selfcheck` asserts it; a nested patch that
+tripled the census was caught by it before any block ran). Rows:
+`runs/declined/{w12,w12fix}-b{0,100}.jsonl`. 24 paired seeds × 40 episodes an
+arm, both blocks, pinned through `MICRODUCK_SKILL_KICK_*` with
+`World.kick_exits()` and the exits read back off the CONSTRUCTED brains in the
+preflight — (−0.225, −0.036) and (0.209, −0.036).
+
+| 24 paired seeds, 960 episodes an arm | w12 (shipped) | w12fix (+0.209) | Δ ± MDE | p | verdict |
+|---|---|---|---|---|---|
+| swings per seed | 43.96 | 47.38 | +3.42 ± 1.90 (4 %) | **0.0004** | **effect**, UP on 17/24 |
+| time to first swing (s) | 10.36 | 9.87 | −0.50 ± 0.45 (4 %) | 0.032 | effect |
+| episodes with no swing | 17.2 % | 15.1 % | −2.1 ± 3.3 pp | 0.215 | null |
+| declines per seed | 67.0 | 72.3 | +5.25 ± 5.64 (8 %) | 0.068 | NO RESULT |
+| `select` → None | 4/192 377 | 5/202 943 | 0.002 % both | 0.800 | **null** |
+| counterfactual → None | 10/192 377 | 9/202 943 | 0.005 % both | 0.729 | null |
+| chosen line pinned at ±`aim_max` | 24.46 % | 23.22 % | −1.24 ± 0.27 pp | <0.0001 | effect, WRONG WAY |
+| any `p_own` > 0 on the chosen line | 0.79 % | 0.49 % | −0.30 ± 0.05 pp | <0.0001 | effect (safer) |
+| swing: ball 4 s later, dx | +0.519 m | +0.477 m | −0.042 ± 0.048 | 0.088 | NO RESULT |
+| decline: ball 4 s later, dx | +0.191 m | +0.221 m | +0.030 ± 0.025 | 0.017 | effect |
+
+**At matched placements the correction takes MORE swings, sooner, and leaves
+the ball nearer** (ball 0.845 → 0.756 m from the kicker at +4 s; inter-swing gap
+9.04 → 8.58 s median). What it changes is the AIM: a different FOOT on 34.5 % of
+plans and a different LINE on 41 %. The two models price each other's plans as
+equal — mean `value(other) − value(this)` +0.0001 on the shipped arm's own
+plans — so nothing here is the selector refusing a bad bet.
+
+**The declines that do exist are a stale-plan gate, not a pricing one.** 3341 of
+3344 had the believed ball past `kick_ahead_max` (median 0.200 m against the
+0.15 gate) and `kick_side_max` ships at 0.0, so `_too_wide` never fired once.
+They rise with the swing count, not against it.
+
+**The counterfactual on the swings TAKEN.** "Swings the shipped arm took that
+the corrected model would have declined" has no population (10 of 192 377
+plans). The nearest question that does — shipped swings whose latched plan the
+corrected model would have RE-AIMED — says they were the better half, not a
+population worth refusing:
+
+| shipped arm's swings, by what the corrected model would do | n | 4 s dx mean | med | backward |
+|---|---|---|---|---|
+| same line | 510 | +0.482 m | +0.412 | 23.7 % |
+| RE-AIMED line | 400 | **+0.568 m** | +0.521 | **21.2 %** |
+
+**So where does the pitch's −24 % come from? The contest.** One opponent in the
+gym is enough to flip the sign (`--opponents 1`, seeds 0–11, 40 episodes,
+`runs/declined/{w12,w12fix}-opp1-b0.jsonl`):
+
+| 12 paired seeds, contested | w12 | w12fix | Δ ± MDE | p | verdict |
+|---|---|---|---|---|---|
+| swings per seed | 27.25 | 23.25 | −4.00 ± 2.47 (9 %) | **0.0015** | **effect**, down 8/12 |
+| declines per seed | 35.42 | 34.58 | −0.83 ± 4.89 (14 %) | 0.738 | NO RESULT |
+| `select` → None | 292/116 473 = 0.25 % | 314/115 516 = 0.27 % | +0.02 ± 0.04 pp | 0.319 | **null** |
+| pinned at ±`aim_max` | 35.0 % | 36.2 % | +1.19 ± 0.39 pp | <0.0001 | effect, 10× too small |
+| episodes with no swing | 41.3 % | 47.5 % | +6.3 ± 6.3 pp | 0.051 | NO RESULT |
+| swing: ball 4 s later, dx | +0.445 m | +0.529 m | +0.085 ± 0.137 (31 %) | 0.227 | NO RESULT |
+| TOTAL 4 s advance delivered per seed | 11.06 m | 11.78 m | +0.72 ± 4.31 (39 %) | 0.745 | NO RESULT |
+
+Every candidate mechanism inside the brain is measured OFF at the size the
+effect needs: the own-goal filter fires on 0.25 % of plans and does not move;
+the decline gate is flat; `aim_max` binds 1.2 pp more, against a 15 % swing
+drop; the line-up is not longer (time to first swing flat). The ledger agrees
+from its own side — possession is flat (40.41 → 40.37 s/min, p 0.92) while
+kicks fall, so kicks per possession-second falls 24 % (0.171 → 0.130, p 0.0011):
+the ducks are near the ball as long and swing less often. `ballOuts` falls
+6.46 → 5.35 (p 0.007) but correlates with kicks at only −0.21 within arm and
+conditioning on it leaves the drop unchanged, so it is a companion, not a cause.
+What is left, and what the contested block reproduces, is that a correctly aimed
+kick goes where the OTHER duck is, and the other duck gets more of it. "Fewer,
+better touches" survives with the total advance delivered flat.
+
+Reviewer's re-read of the six row files: swings per seed 42.75 / 45.17 → 47.58 /
+47.17 on the two blocks (pooled 43.96 → 47.38) and 27.25 → 23.25 contested —
+the table reproduces. Commit 4d24d01.
+
+**Verdict on the ship recommendation: unchanged.** Set
+`policies/kick/kick_left.json` `exit_rad` to +0.209. The swings the ledger
+loses were never declined by the selector, and the ones the corrected model
+re-aims were the better half of the population, not the worse. Neither
+`kick_select_t_own` (0.10) nor `aim_max` (1.05) is the mechanism and neither
+needs a re-fit: at 0.25 % firing and −1.24 pp of window pressure they cannot
+reach an effect of this size, and a re-fit of either would be tuning a knob
+measured not to act.
+
+→ **What settles it next:** (1) nothing further is needed to ship the sidecar;
+(2) if the −24 % is ever worth attributing, the instrument is a touch-owner
+column on the contested gym (`kick_gym --duel` already attributes touches —
+`_touch_by`) or a per-duck line-up census on `eval-pitch` rows, which carry
+kicks but no `declines` and no time-in-lineup; (3) `kick_gym.py` records no
+"declined" row and `Chase.declines` reaches no row file — `probe_declined_swings.py`
+is where that census lives now.
