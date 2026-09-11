@@ -5067,7 +5067,8 @@ this stack has none of them.
       closed loop on the sighting. → item 4's own bar: possession 11.8 →
       5.9 s/min was the loss; a striker that reaches the ball as often as
       `Chase` is the gate.
-- [ ] **E.2 RL for the decision layer only.** WisTex United (SPL Challenge
+- [x] **E.2 RL for the decision layer only — first cut built and measured
+      2026-09-10, ships off pending a 48-seed ledger (below).** WisTex United (SPL Challenge
       Shield 2024, 7 wins of 8, 39–7 on goals) kept B-Human's perception,
       localisation and motion and replaced only the high-level behaviour
       with four RL sub-policies (mid-field walk-and-kick angle, ball duel,
@@ -5078,6 +5079,100 @@ this stack has none of them.
       the split this repo already has (scripted `Chase` + learned skills),
       so the natural first RL decision here is the kick choice in A.3 or the
       supporter position in D.2, not the whole brain.
+      **FIRST CUT BUILT AND MEASURED, SHIPS OFF ON THE GYM (2026-09-10).**
+      The decision taken was the one this item named: A.3's kick CHOICE.
+      `brain/kickchoice.py` learns the RANKING of the candidate fan and
+      nothing else — `_plan` still lays the fan, `kickselect` still rolls
+      every candidate out and still refuses any line with more than
+      `kick_select_t_own` of its samples in our own net, and
+      `ChaseParams.kick_select_learned` (a path to weights, default "",
+      inert when off: `select` does not look at its `chooser` argument)
+      swaps only which of the SAFE candidates wins. Locked by
+      `tests/test_kick_choice.py` (9).
+
+      **The dataset and the model.** `scripts/kick_choice_data.py` drives
+      `kick_gym`'s own scenario, placement, timing and outcome definitions
+      by import and records, at every line-up, the whole safe candidate
+      list with the roll-out's own verdict, the context, the pick, and what
+      the swing then did. 60% of episodes take a RANDOM safe candidate,
+      held fixed for the line-up — a regressor fitted only on the shipped
+      selector's picks is extrapolating on every candidate the learned one
+      would ever prefer. 3 000 line-ups on seeds 0-11 ONLY, 2 513 labelled
+      swings, ~0.37 CPU-s a line-up. 19 hand features per candidate,
+      including the roll-out's own p_goal / p_own / value / p_block /
+      p_pass so the model can at worst re-derive the shipped ranking, and
+      the context it cannot see (`turn` — how far round the ball the line
+      asks the duck to walk — `range`, the line against the attack axis).
+      Two heads (realised advance, backward line), pure numpy; held-out R2
+      on advance 0.375 for a 16-unit MLP against 0.335 for ridge, MLP
+      chosen, backward-line penalty swept to 0. The instrument was
+      controlled first: at `--explore 0` the collector reproduces
+      `kick_gym` EPISODE FOR EPISODE (travel equal to 4 dp).
+
+      **Measured**, 12 seeds x 150 episodes an arm a block:
+
+      | learned vs shipped | discovery 0-11 | fresh 100-111 | pooled |
+      |---|---|---|---|
+      | advance a swing (m) | +0.281 (MDE 0.047, p<1e-3) | **+0.283 (MDE 0.046, p<1e-3)** | +0.282 (MDE 0.033) |
+      | backward LINE share | 5.8 -> 3.1% (p=0.001) | **7.6 -> 2.8% (p<1e-3)** | 6.7 -> 3.0% (p<1e-3) |
+      | `back` (ledger rule) | 20 -> 8% (p<1e-3) | 21 -> 6% (p<1e-3) | 20.5 -> 7.1% (p<1e-3) |
+      | whiff | 8.8 -> 6.5% (p=0.018) | 8.0 -> 6.9% (null, MDE 1.9) | 8.4 -> 6.7% (p=0.012) |
+      | fell in the window (VETO) | 0.3 -> 0.4% (null) | 0.5 -> 0.1% (p=0.051) | 0.4 -> 0.3% (null) |
+      | swings of 1 800 | 1511 -> 1560 | 1507 -> 1553 | more, not fewer |
+
+      It beats the roll-out on the fresh block on both registered columns,
+      the whiff is better on MORE swings rather than better on fewer, and
+      the veto does not bite.
+
+      **A third arm rules out the laundered aim correction.** 12at measured
+      the left foot's in-play exit at +0.209 rad against a -0.227 sidecar,
+      so "the model just learned the exit bias" was the null to kill.
+      `kick_exit_left=0.209` fixes the backward LINE exactly as 12at
+      predicts (6.7 -> 3.6% pooled, p<1e-3) and moves advance **+0.018 m,
+      p=0.32, NO RESULT**. The aim number is not what the model found.
+
+      **What it did find.** From the ridge's standardised weights on
+      advance, `cos_att` (+0.53) dwarfs everything and `p_goal` enters
+      NEGATIVE (-0.13): the roll-out ranks by the chance of SCORING, and
+      what actually moves the ball is the line's component down the pitch.
+      The learned pick agrees with the roll-out on 6% of line-ups, takes a
+      line further off the attack axis (0.61 vs 0.40 rad) at a third of its
+      p_goal, and carries 1.21 m against 0.98 m. The ball-only roll-out
+      cannot see which candidates the BODY executes well; that is the gap.
+
+      **SHIPS OFF, and why.** Two gym blocks are not a pitch: the model was
+      fitted with no opponents and no teammates (`p_block` and `p_pass` are
+      identically 0 in every training row), and the weights live in `runs/`
+      rather than anywhere a default could point at. **What would settle
+      it, with its size registered in advance:** a ledger on `kickCarry` at
+      **~48 seeds a block** — a +0.28 m per-swing shift is 1.7x the one
+      12as tracked to +22.7 m over 48 seeds against an MDE of 29 m, so 12
+      seeds is a NO RESULT by construction. After that, the two open
+      questions the gym cannot answer: does the ranking survive opponents
+      (refit with `kick_select_opps=1` so `p_block` is not a dead column),
+      and is the gain still there once the supporter field and the team
+      board are in the loop. D.2's supporter position is the next RL
+      decision if this one lands.
+
+      Reviewer's re-read of the four gym row files: advance 0.546 → 0.827 m
+      and 0.550 → 0.832 m per swing on the two blocks, whiff 8.8 → 6.5 % and
+      8.0 → 6.9 %, `back` 20 → 8 % and 21 → 6 %, fell 0.3 → 0.4 % and 0.5 →
+      0.1 % — the table reproduces. Commit b9c65a8.
+      Data, weights and row files: `runs/kickchoice/` (gitignored).
+      Commands:
+        uv run python scripts/kick_choice_data.py collect --seeds 12 --seed0 0 \
+            --episodes 250 --explore 0.6 --jobs 3 --out runs/kickchoice/data-b0.jsonl
+        uv run python scripts/kick_choice_data.py fit runs/kickchoice/data-b0.jsonl \
+            --out runs/kickchoice/model-b0.json
+        for B in 0 100; do uv run python scripts/kick_gym.py --seeds 12 --seed0 $B \
+            --episodes 150 --jobs 3 --arm 'shipped=' --out runs/kickchoice/gym-shipped-b$B.jsonl; \
+          uv run python scripts/kick_gym.py --seeds 12 --seed0 $B --episodes 150 --jobs 3 \
+            --arm "learned=kick_select_learned=$PWD/runs/kickchoice/model-b0.json" \
+            --out runs/kickchoice/gym-learned-b$B.jsonl; done
+        uv run python scripts/compare_gym.py shipped=runs/kickchoice/gym-shipped-b100.jsonl \
+            learned=runs/kickchoice/gym-learned-b100.jsonl
+        uv run python scripts/kick_choice_data.py report shipped=... sidecar=... learned=...
+
 - [ ] **E.3 Learning from recordings.** SoccerDiffusion (2025) learns joint
       trajectories from RoboCup gameplay logs (vision + proprioception +
       game state) and runs on hardware after distillation, with "high-level
