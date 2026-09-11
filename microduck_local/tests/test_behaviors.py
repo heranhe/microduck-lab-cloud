@@ -1026,7 +1026,10 @@ def test_only_the_one_sided_recipes_opt_out_of_the_mirror_prior():
     # a side to look first, so the exported mean would sit and stare.
     assert asymmetric == {"one_leg", "imitate", "find_ball", "kick_left", "kick_right",
                           "kick_left_wide", "kick_right_wide",     # the box kicks name a foot too (12b)
-                          "kick_left_sensed", "kick_right_sensed"}  # ...and so do the sensed ones (12h)
+                          "kick_left_sensed", "kick_right_sensed",   # ...and so do the sensed ones (12h)
+                          # ...and the far-range pair, which is the same recipe with a
+                          # 0.60 m range slot instead of 0.25 (12as's next cut).
+                          "kick_left_sensed_far", "kick_right_sensed_far"}
     # spin stays mirror-safe: the direction COMMAND rides the wz slot, and
     # the mirror map negates that slot and the gyro together, so a mirrored
     # episode is just the opposite commanded direction. The rest are sagittal

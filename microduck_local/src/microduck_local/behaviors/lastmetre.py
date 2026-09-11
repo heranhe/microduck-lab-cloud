@@ -104,6 +104,21 @@ the optical axis and outside the 58 deg half-VFOV - a level duck cannot see
 its own feet, which is 12k's finding). Stage 2 opens both: the full box play
 produces, and the whole gaze range the wide kick trains on, so the finished
 policy still has to swing blind at the poses where there is nothing to see.
+
+**The far-range pair, `kick_{side}_sensed_far`** (12as's "next cut"). The
+approach cliff above is the range slot's own ceiling, so the cut is to raise
+it: LM_RANGE_SCALE_FAR = 0.60 m, which puts the WHOLE of stage 3's far window
+(0.20-0.45 m) inside the informative part of obs[52] instead of pinned at
+1.0. That is a different observation, not a different curriculum: the same
+ball at the same place reads 1.00 under the 0.25 recipe and 0.42 under this
+one. So it is a NEW RECIPE ID rather than an edit to `kick_{side}_sensed` -
+every policy 12as and its follow-ups measured was trained against the 0.25
+meaning of that slot, and silently re-scaling it would make all of them read
+their own range wrong while every test and table still passed. Everything
+else is shared to the line: the same four slots with the same bearing / seen
+/ conf encoding, the same pay (`kick._kick_terms` + `face_line`), the same
+four spawn-only stages, the same spawn knobs. The two ids differ in ONE
+number, which is what makes them a controlled pair.
 """
 
 import math
@@ -129,6 +144,14 @@ from .kick import (
 )
 
 LM_RANGE_SCALE = 0.25        # m of ground range at slot [52] = 1.0 (the box tops out ~0.21)
+# ...and the far-range recipe's own scale (`kick_{side}_sensed_far`, 12as's
+# next cut). 0.60 m is not a round number picked for looks: stage 3 spawns
+# the ball out to 0.45 m, and the slot has to still be MOVING there for a
+# step toward it to change anything the policy can see. At 0.60 the far
+# window reads 0.33-0.75 instead of a flat 1.00. A policy trained under one
+# scale reads its range slot wrong under the other, which is why this is a
+# second recipe id and not a knob.
+LM_RANGE_SCALE_FAR = 0.60
 LM_DETECT_EVERY = 2          # control steps between detector reports (25 Hz, find_ball's cadence)
 LM_JITTER = 0.02             # normalized bearing units, find_ball's MICRODUCK_BALL_JITTER
 LM_MEM_TAU = 1.0             # s: the confidence slot's fade while the report says nothing
@@ -196,7 +219,7 @@ def _lm_ground_point(cam, fwd, right, up, ax: float, ay: float):
     return cam[0] + t * dx, cam[1] + t * dy
 
 
-def _lm_reset_for(side: str):
+def _lm_reset_for(side: str, range_scale: float = LM_RANGE_SCALE, suffix: str = ""):
     sgn = -1.0 if side == "right" else 1.0
 
     def _lm_reset(env) -> None:
@@ -244,9 +267,15 @@ def _lm_reset_for(side: str):
         env._lm_seen_steps = 0
         env._lm_half_h = math.radians(_ball_knob(env, "MICRODUCK_BALL_HFOV_DEG")) / 2
         env._lm_half_v = math.radians(_ball_knob(env, "MICRODUCK_BALL_VFOV_DEG")) / 2
+        # What obs[52] MEANS for this recipe, stamped on the env by its own
+        # reset: the sensing code is shared, and the two ids differ in this
+        # number alone. A bench that re-senses a ball it placed itself
+        # (`grid_kick_bench_sensed.reseed_task_state`) therefore gets the
+        # scale the policy was trained under, without knowing it exists.
+        env._lm_range_scale = range_scale
         _lm_sense(env, force=True)
 
-    _lm_reset.__name__ = f"_lm_reset_{side}"
+    _lm_reset.__name__ = f"_lm_reset_{side}{suffix}"
     return _lm_reset
 
 
@@ -296,7 +325,8 @@ def _lm_sense(env, force: bool = False) -> None:
         c, s = math.cos(yaw), math.sin(yaw)
         ahead, beside = c * dx + s * dy, -s * dx + c * dy      # + beside = to the LEFT
         hc[0] = max(-1.0, min(1.0, math.atan2(beside, ahead) / (math.pi / 2)))
-        hc[1] = max(0.0, min(1.0, math.hypot(ahead, beside) / LM_RANGE_SCALE))
+        scale = getattr(env, "_lm_range_scale", LM_RANGE_SCALE)
+        hc[1] = max(0.0, min(1.0, math.hypot(ahead, beside) / scale))
     hc[2] = 1.0 if env._lm_det_seen else 0.0
     hc[3] = max(0.0, min(1.0, env._lm_conf))
 
@@ -335,15 +365,25 @@ def _lm_report(env) -> list[str]:
             f"ball now {ahead:+.3f} m ahead, {beside:+.3f} m left of the trunk"]
 
 
-for _side in ("right", "left"):
-    _register(Behavior(
-        id=f"kick_{_side}_sensed",
+def _lm_behavior(side: str, suffix: str, range_scale: float) -> Behavior:
+    """One recipe. `suffix`/`range_scale` are the ONLY axis these two ids
+    differ on — the pay, the slots, the spawns and the four rungs below are
+    shared by construction, so `kick_{side}_sensed` and
+    `kick_{side}_sensed_far` are a controlled pair on the meaning of obs[52]
+    and on nothing else."""
+    far = suffix != ""
+    reach = (f" out to {range_scale:.2f} m" if far else "")
+    return Behavior(
+        id=f"kick_{side}_sensed{suffix}",
         emoji="👁",
-        title=f"Kick the ball it can see ({_side} foot)",
+        title=f"Kick the ball it can see{reach} ({side} foot)",
         description=(
-            f"Kick a ball off the {_side} foot down the line it is facing, from standing, "
+            f"Kick a ball off the {side} foot down the line it is facing, from standing, "
             "with the ball's position in its observation - so it can step to a ball "
             "that is not where the swing wants it."
+            + (f" The range slot spans {range_scale:.2f} m rather than the first recipe's "
+               "0.25, so a ball it has to walk to is still telling it how far away it is."
+               if far else "")
         ),
         how_it_learns=(
             "The ball starts anywhere in the box a duck really arrives at in play, "
@@ -356,27 +396,41 @@ for _side in ("right", "left"):
             "near home, and no turning off the line. Nothing pays for looking or for "
             "stepping - the two seconds do that, because a ball it has to walk to is "
             "a ball it is not yet being paid for."
+            + (" What is different here is only how far the range slot reaches: it "
+               f"saturates at {range_scale:.2f} m instead of 0.25, so walking toward a "
+               "ball out of reach changes a number the policy can see the whole way in, "
+               "which the first recipe could not offer past a quarter of a metre."
+               if far else "")
         ),
         # No bare "kick <side>": the plain strike owns that phrase and the
         # matcher scores by how much of the message a keyword explains, so a
         # generic substring of a specific request would win it (core's own
         # "jump backflip" note). The side-named "last metre" is the handle.
-        keywords=(f"kick {_side} sensed", f"kick_{_side}_sensed", f"sensed kick {_side}",
-                  f"seeing kick {_side}", f"{_side} foot sensed kick",
-                  f"last metre {_side}", f"last meter {_side}"),
-        terms=_kick_terms(_side) + (
+        # The far pair's keywords are all strictly LONGER than the sensed
+        # pair's, so "... sensed far" outscores the phrase it contains.
+        keywords=((f"kick {side} sensed", f"kick_{side}_sensed", f"sensed kick {side}",
+                   f"seeing kick {side}", f"{side} foot sensed kick",
+                   f"last metre {side}", f"last meter {side}")
+                  if not far else
+                  (f"kick {side} sensed far", f"kick_{side}_sensed_far",
+                   f"far sensed kick {side}", f"far range sensed kick {side}",
+                   f"{side} foot far sensed kick",
+                   f"last metre {side} far", f"last meter {side} far")),
+        terms=_kick_terms(side) + (
             RewardTerm("face_line", "Docked for the body turning off the kick line through the swing",
                        4.0, _face_home_pen, is_penalty=True),
         ),
         default_steps=6_000_000,
         success_metric=("ball speed along the kick line at 0.5 s from every spot in the box and every "
                         "gaze pose; coverage of the play box above the blind pair's 69-82 %; body turn under 20 deg; "
-                        "and, from stage 3, a ball 0.20-0.45 m ahead moved at all"),
+                        "and, from stage 3, a ball 0.20-0.45 m ahead moved at all"
+                        + (f" — which is what the {range_scale:.2f} m range slot exists to make "
+                           "learnable past 0.25 m" if far else "")),
         symmetric=False,
         episode_s=2.0,
         scene="ball",
         terminate_on_fall=True,
-        reset_fn=_lm_reset_for(_side),
+        reset_fn=_lm_reset_for(side, range_scale, suffix),
         obs_fn=_lm_obs,
         caption_fn=_lm_caption,
         report_fn=_lm_report,
@@ -436,6 +490,15 @@ for _side in ("right", "left"):
                                     "clips at LM_RANGE_SCALE (0.25 m) and a ball beyond it is "
                                     "observationally identical to one at 0.45 m - see the module "
                                     "docstring. The far window is left at the range it was "
-                                    "trained and measured on.")),
+                                    "trained and measured on."
+                                    + (f" On THIS id the slot reaches {range_scale:.2f} m, so the "
+                                       "same window is informative end to end and the rung is "
+                                       "being asked the question the 0.25 pair could not hear."
+                                       if far else ""))),
         ),
-    ))
+    )
+
+
+for _side in ("right", "left"):
+    _register(_lm_behavior(_side, "", LM_RANGE_SCALE))
+    _register(_lm_behavior(_side, "_far", LM_RANGE_SCALE_FAR))

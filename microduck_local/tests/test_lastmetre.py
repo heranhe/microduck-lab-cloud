@@ -28,8 +28,10 @@ from microduck_local.behaviors.kick import (
 )
 from microduck_local.behaviors.lastmetre import (
     LM_FAR_AHEAD,
+    LM_FAR_SIDE,
     LM_GAZE_STAGE1,
     LM_RANGE_SCALE,
+    LM_RANGE_SCALE_FAR,
     _lm_sense,
 )
 
@@ -44,10 +46,14 @@ STAGE_KNOBS = {"MICRODUCK_KICK_BOX_AHEAD", "MICRODUCK_KICK_BOX_SIDE",
                "MICRODUCK_EPISODE_S"}
 
 
-def _env(side: str, **over):
-    return BehaviorEnv(f"kick_{side}_sensed", seed=3, max_episode_s=2.0, domain_rand=False,
+def _env_id(behavior_id: str, **over):
+    return BehaviorEnv(behavior_id, seed=3, max_episode_s=2.0, domain_rand=False,
                        random_yaw=False, obs_noise=False, action_delay=False,
                        spawn_overrides=over or None)
+
+
+def _env(side: str, **over):
+    return _env_id(f"kick_{side}_sensed", **over)
 
 
 def _place(env, ahead: float, side: float, neck: float, head: float, yaw: float = 0.0):
@@ -323,3 +329,123 @@ def test_the_range_slot_saturates_and_that_is_where_the_approach_stops():
     assert far_out[1] == pytest.approx(1.0)
     # ...and the two out-of-range balls are INDISTINGUISHABLE, 0.19 m apart.
     assert np.allclose(just_out, far_out, atol=0.02), (just_out, far_out)
+
+
+# --- the far-range pair: the same recipe, one number different (12as's next cut) ---
+
+
+def test_the_far_recipe_is_the_sensed_recipe_with_a_wider_range_slot():
+    """`kick_<side>_sensed_far` exists to change ONE thing — what obs[52]
+    means — so everything else has to be equal by construction, or the pair
+    stops being a control for each other.
+
+    The pay, the stages, the spawn knobs, the clip, the scene and the
+    asymmetry are all compared term for term and key for key against the
+    0.25 m recipe.
+    """
+    for side in ("right", "left"):
+        near, far = BEHAVIORS[f"kick_{side}_sensed"], BEHAVIORS[f"kick_{side}_sensed_far"]
+        assert [(t.key, t.weight, t.is_penalty, t.fn.__name__, t.friendly) for t in far.terms] == \
+               [(t.key, t.weight, t.is_penalty, t.fn.__name__, t.friendly) for t in near.terms]
+        assert far.scene == near.scene and far.episode_s == pytest.approx(near.episode_s)
+        assert far.terminate_on_fall == near.terminate_on_fall
+        assert far.symmetric is False and far.default_steps == near.default_steps
+        assert far.obs_fn is near.obs_fn                       # one sensing code path
+        assert far.reset_fn.__name__ == f"_lm_reset_{side}_far"
+        # The ladder is the same ladder: same labels, same budgets, same knobs.
+        assert [st.label for st in far.curriculum] == [st.label for st in near.curriculum]
+        assert [st.steps for st in far.curriculum] == [st.steps for st in near.curriculum]
+        for a, b in zip(far.curriculum, near.curriculum):
+            assert a.env == b.env, (a.label, a.env, b.env)
+            assert set(a.env) <= STAGE_KNOBS, a.env       # ...and the allowlist still holds
+            assert a.detail
+        assert sum(st.steps for st in far.curriculum) == far.default_steps
+        # Asked for by name — and on the shared handle the LONGER phrase wins
+        # the phrase it contains, so "last metre right far" does not land on
+        # the 0.25 m recipe. (Bare "kick <side>" prose still belongs to the
+        # plain strike, deliberately, as the first sensed test asserts.)
+        assert match_behavior(f"kick_{side}_sensed_far").id == far.id
+        assert match_behavior(f"last metre {side} far").id == far.id
+        assert match_behavior(f"last meter {side} far").id == far.id
+        assert match_behavior(f"last metre {side}").id == near.id
+
+
+def test_the_far_recipe_ranges_a_ball_the_first_one_cannot_tell_apart():
+    """The whole cut, as a number. obs[52] is `min(1, range / scale)`; under
+    0.25 m a ball 0.30 m away reads a pinned 1.00 and so does one at 0.45,
+    which is why the approach died there (12as follow-up B). Under 0.60 m the
+    same ball reads 0.5 and the one at 0.45 reads 0.75 — a slot that still
+    moves when the duck walks.
+    """
+    assert LM_RANGE_SCALE_FAR == pytest.approx(0.60)
+    # The point of the number: the WHOLE of stage 3's far window is inside it,
+    # so there is no spawn the policy cannot range.
+    assert LM_RANGE_SCALE_FAR > LM_FAR_AHEAD[1] > LM_RANGE_SCALE
+    assert LM_RANGE_SCALE_FAR > math.hypot(LM_FAR_AHEAD[1], LM_FAR_SIDE[1])
+
+    down = (-0.30, 0.60)
+    for side in ("right", "left"):
+        near_env, far_env = _env(side), _env_id(f"kick_{side}_sensed_far")
+        # The scale is stamped on the env by the recipe's own reset — one
+        # sensing code path, two meanings, and the env knows which it is.
+        near_env.reset(seed=1)
+        far_env.reset(seed=1)
+        assert near_env._lm_range_scale == pytest.approx(LM_RANGE_SCALE)
+        assert far_env._lm_range_scale == pytest.approx(LM_RANGE_SCALE_FAR)
+        for ahead in (0.30, 0.45):
+            n = _place(near_env, ahead, 0.0, *down)
+            f = _place(far_env, ahead, 0.0, *down)
+            assert n[1] == pytest.approx(1.0)                      # saturated, as it always was
+            assert f[1] == pytest.approx(ahead / LM_RANGE_SCALE_FAR, abs=0.03)
+            assert f[1] < 0.95                                     # ...and still informative
+            # Everything else in the slot vector is the SAME observation.
+            assert f[0] == pytest.approx(n[0], abs=1e-9)
+            assert f[2] == n[2] == 1.0
+            assert f[3] == pytest.approx(n[3])
+        # 0.30 m reads 0.5, not 1.0 — the headline of the cut.
+        assert _place(far_env, 0.30, 0.0, *down)[1] == pytest.approx(0.5, abs=0.03)
+        # Inside the old radius the two agree on the ORDERING and differ only
+        # by the scale factor, so the near game is the same problem.
+        for ahead in (0.08, 0.16, 0.22):
+            n = _place(near_env, ahead, 0.0, *down)
+            f = _place(far_env, ahead, 0.0, *down)
+            assert f[1] == pytest.approx(n[1] * LM_RANGE_SCALE / LM_RANGE_SCALE_FAR, abs=0.02)
+
+
+def test_the_first_recipe_still_reads_its_range_slot_under_0_25():
+    """The reason this is a new id and not an edit: every policy in 12as's
+    tables was trained against `min(1, range / 0.25)`. If the far recipe's
+    scale ever leaked onto the original id, all of them would silently read
+    their own range wrong and every table above would still pass.
+    """
+    down = (-0.30, 0.60)
+    for side in ("right", "left"):
+        env = _env(side)
+        for ahead in (0.08, 0.16, 0.22):
+            slot = _place(env, ahead, 0.0, *down)[1]
+            assert slot == pytest.approx(math.hypot(ahead, 0.0) / LM_RANGE_SCALE, abs=0.02)
+        # ...and it still saturates where it always did.
+        assert _place(env, 0.26, 0.0, *down)[1] == pytest.approx(1.0)
+        assert np.allclose(_place(env, 0.26, 0.0, *down), _place(env, 0.45, 0.0, *down), atol=0.02)
+
+
+def test_the_far_recipe_spawns_the_same_worlds_as_the_first_one():
+    """Same spawn code, same knobs, same RNG stream: at a given seed the ball
+    and the duck land in the same place under both ids, so a grid or an
+    approach probe run on one arm is measuring the same world as the other.
+    Only the slots the policy reads differ.
+    """
+    for side in ("right", "left"):
+        a, b = _env(side), _env_id(f"kick_{side}_sensed_far")
+        for k in range(15):
+            a.reset(seed=900 + k)
+            b.reset(seed=900 + k)
+            assert np.allclose(a.data.qpos, b.data.qpos)
+        # ...including the approach rung's mixed spawn.
+        st3 = dict(BEHAVIORS[f"kick_{side}_sensed"].curriculum[3].env)
+        a, b = _env(side, **st3), _env_id(f"kick_{side}_sensed_far", **st3)
+        assert a.max_steps == b.max_steps == round(4.0 / C.CTRL_DT)
+        for k in range(15):
+            a.reset(seed=950 + k)
+            b.reset(seed=950 + k)
+            assert np.allclose(a.data.qpos, b.data.qpos)
