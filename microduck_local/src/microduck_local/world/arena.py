@@ -50,6 +50,11 @@ GROUND_PICK_END_PHI = 0.7
 # `kick_duration` (0.5 s in robotd's control.rs) with an all-zero command,
 # then back to the walker. Same protocol here.
 KICK_S = 0.5
+# A kick ONNX whose sidecar says `"sensed": true` was trained with the BALL in
+# its four head command slots (roadmap 12as, `behaviors/lastmetre.py`) instead
+# of the all-zero block the vendored pair was trained on. This is the class the
+# tracker must hold for it to have anything to say.
+SENSED_BALL_CLS = "ball"
 # A goal this soon after a kick is the kick's; the rest were walked into.
 # (Until 2026-09-06 the ball had no rolling resistance, so a chase at
 # 0.45 m/s sent a bumped ball as far as a kick did - to the boards; now a
@@ -126,6 +131,7 @@ class WorldDuck:
     skill: str | None = None
     skill_t0: float = 0.0
     skill_infer: Infer | None = None
+    skill_sensed: bool = False         # …and was it trained to SEE the ball (roadmap 12as)?
     kp_base: np.ndarray | None = None      # the model's actuator Kp for this duck, restored after a kick
     gain_ratio: float = 1.0
     grasp_attempts: int = 0
@@ -388,6 +394,12 @@ class World:
         # it notices a goal. `ball_outs` is a count nobody watched: the World
         # teleported the ball and told no brain (roadmap 12s).
         self.ball_out_seq = 0
+        # THE SENSED KICK (roadmap 12as). Read once, at build, off the same
+        # sidecars `kick_exits` aims with: a pair without the field is the
+        # vendored blind pair and every number measured before this.
+        self._skill_sensed = {n: World.skill_sensed(n) for n in SKILLS}
+        self._sensed_kick = any(self._skill_sensed[n] for n in SKILLS if n.startswith("kick"))
+        self._ball_trackers: dict = {}
         self.model = compose(scenario)
         self.data = mujoco.MjData(self.model)
         self.t = 0.0
@@ -593,6 +605,9 @@ class World:
             d.tof.reset()
         if d.detector is not None:
             d.detector.reset()
+        d.skill_sensed = False
+        if d.id in self._ball_trackers:
+            self._ball_trackers[d.id].reset()
 
     def reset_duck(self, duck_id: str) -> None:
         d = self.ducks[duck_id]
@@ -667,6 +682,9 @@ class World:
         self.data.qvel[v:v + 6] = 0.0
         self.ball_outs += 1
         self.ball_out_seq += 1        # harnesses watch this like `goal_seq` (brain/team.py throw_in_brains)
+        for trk in self._ball_trackers.values():
+            trk.reset()               # …and the ball a sensed kick remembers goes with it, exactly as the
+                                      # brains' does (world_server.after_step): the referee moved it.
         self._ball_rest_t0 = None
 
     def _clear_of_ducks(self, x: float, y: float, hx: float, hy: float) -> tuple[float, float]:
@@ -945,6 +963,80 @@ class World:
                 return None
         return out[0], out[1]
 
+    @staticmethod
+    def skill_sidecar(name: str) -> dict:
+        """Everything the sidecar .json beside a skill's ONNX says — the same
+        file `kick_exits` reads `exit_rad` out of. `{}` when there is no
+        sidecar, or it is not readable, or it is not an object."""
+        p = World.skill_path(name)
+        side = p.with_suffix(".json") if p is not None else None
+        if side is None or not side.exists():
+            return {}
+        try:
+            out = json.loads(side.read_text())
+        except (ValueError, OSError):
+            return {}
+        return out if isinstance(out, dict) else {}
+
+    @staticmethod
+    def skill_sensed(name: str) -> bool:
+        """Was this skill's ONNX trained with the ball in its four HEAD
+        command slots (roadmap 12as)? The sidecar says so with
+        `"sensed": true`. WITHOUT the field — every sidecar written before
+        2026-09-10, the vendored kicks included — this is False and the skill
+        gets the all-zero command block it was trained on, to the bit."""
+        return bool(World.skill_sidecar(name).get("sensed", False))
+
+    def _ball_tracker(self, d: WorldDuck):
+        """This duck's ball track, for a SENSED kick to read. The brain's own
+        `Tracker` (brain/tracker.py) over this duck's own detector frames and
+        its own odometry — the same class, the same uncertainty model off the
+        same detector preset, so what the kick reads is what a `Chase` on this
+        duck reads. Built on first use and kept WARM: a tracker started at the
+        swing has no memory to coast, and the sighting arrives on only 58% of
+        swings (12ak) — the other half is exactly what the held estimate is
+        for."""
+        trk = self._ball_trackers.get(d.id)
+        if trk is None:
+            from ..brain.tracker import Tracker, TrackerParams  # noqa: PLC0415
+            preset = next((s.detector for s in self.scenario.ducks if s.id == d.id), None)
+            trk = self._ball_trackers[d.id] = Tracker(TrackerParams.for_detector(preset))
+        return trk
+
+    def _sensed_head(self, d: WorldDuck) -> None:
+        """Write the ball into the four head slots in the recipe's units —
+        `behaviors/lastmetre.py`'s docstring, off the tracker instead of off
+        the truth:
+
+          [51] bearing in the DUCK's own yaw frame, psi / (pi/2), + = LEFT
+          [52] ground range / LM_RANGE_SCALE, clipped to 0..1
+          [53] 1.0 while the detector's last frame had the ball in it
+          [54] freshness: 1.0 on that frame, fading exp(-age / LM_MEM_TAU)
+
+        and all four zero while nothing is known, which is what the recipe
+        spawns with. The scale and the decay are IMPORTED from the recipe, so
+        the trained units and the played units cannot drift apart."""
+        from ..behaviors.lastmetre import LM_MEM_TAU, LM_RANGE_SCALE  # noqa: PLC0415
+        hc = d.head_cmd
+        hc[:] = 0.0
+        trk = self._ball_trackers.get(d.id)
+        tr = None if trk is None else trk.best(SENSED_BALL_CLS, self.t, min_hits=1)
+        if tr is None:
+            return
+        x, y, yaw = self.odom(d)
+        # Off `xy` whenever the track has a position (roadmap 12ar): `bearing`
+        # and `range` are the pose at the last HIT turned by yaw alone, so they
+        # stop meaning bearing the moment the duck WALKS — and a kick window is
+        # entered walking.
+        bearing = tr.bearing if tr.xy is None else tr.bearing_from((x, y), yaw)
+        rng = tr.range if tr.xy is None else tr.range_from((x, y))
+        hc[0] = float(np.clip(bearing / (math.pi / 2), -1.0, 1.0))
+        hc[1] = float(np.clip(rng / LM_RANGE_SCALE, 0.0, 1.0))
+        last = d.detector.last if d.detector is not None else None
+        seen = last is not None and tr.last_t == last.t     # the newest frame is the one that hit
+        hc[2] = 1.0 if seen else 0.0
+        hc[3] = 1.0 if seen else float(math.exp(-max(0.0, tr.age(self.t)) / LM_MEM_TAU))
+
     def start_skill(self, d: WorldDuck, name: str) -> bool:
         """Hand the reflex tier to a skill policy for one cycle (the robot's
         own pattern: hard swap in, auto swap back): ground_pick (a phase
@@ -958,6 +1050,7 @@ class World:
                 return False
             self.skills[name] = onnx_infer(path)
         d.skill, d.skill_t0, d.skill_infer = name, self.t, self.skills[name]
+        d.skill_sensed = self._skill_sensed.get(name, False)
         d._hold_yaw = None
         if name.startswith("kick"):
             self._set_gain_ratio(d, STANDING_GAIN_RATIO)
@@ -1030,12 +1123,15 @@ class World:
             return None
         if d.skill.startswith("kick"):
             if self.t - d.skill_t0 >= KICK_S:
-                d.skill, d.skill_infer = None, None
+                d.skill, d.skill_infer, d.skill_sensed = None, None, False
                 d.twist_cmd[:] = 0.0
                 self._set_gain_ratio(d, 1.0)
                 return None
             d.twist_cmd[:] = 0.0                  # the kick's observation carries an all-zero command
-            d.head_cmd[:] = 0.0
+            if d.skill_sensed:
+                self._sensed_head(d)              # …except the four the SENSED pair was trained to read
+            else:
+                d.head_cmd[:] = 0.0
             d.body_cmd[:] = 0.0
             return d.skill_infer
         phi = (self.t - d.skill_t0) / GROUND_PICK_PERIOD_S
@@ -1057,6 +1153,9 @@ class World:
         for d in self.ducks.values():
             if hold or d.down_until > self.t:  # kickoff, or lying where it fell: stand, whatever the brain asked
                 d.set_cmd(data, (0.0, 0.0, 0.0))
+            if self._sensed_kick and d.detector is not None:
+                ox, oy, oyaw = self.odom(d)       # the ball track a sensed kick reads, kept warm
+                self._ball_tracker(d).update(d.detector.last, self.t, oyaw, (ox, oy))
             skill = self._skill_cmd(d)
             obs = d.obs(data)
             # A duck that is DOWN is driven by the get-up policy when there is
