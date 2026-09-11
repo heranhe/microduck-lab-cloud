@@ -181,10 +181,19 @@ def test_the_list_and_the_columns_are_made_of_the_same_kicks():
     that would see them drift."""
     from microduck_local.eval_pitch import run_one
 
-    r = run_one(0, 90.0, per_side=2)
+    # Which seed produces kicks inside 90 s moves whenever the brain, the
+    # kick sidecars or the camera model move (seed 0 stopped kicking the day
+    # the left sidecar was corrected, 9ca8d9d); the identity under test does
+    # not care which seed, so take the first of a few that does.
+    r = None
+    for seed in (0, 1, 2, 3):
+        cand = run_one(seed, 90.0, per_side=2)
+        if sum(len(v) for v in cand["kickEvents"].values()) >= 2:
+            r = cand
+            break
+    assert r is not None, "no seed in 0-3 produced two kicks in 90 s of 2v2"
     ev = r["kickEvents"]
     assert set(ev) == set(r["kickCount"])
-    assert sum(len(v) for v in ev.values()) >= 2, "this seed is supposed to contain kicks"
     for t, kicks in ev.items():
         assert len(kicks) == r["kickCount"][t]
         assert sum(e[1] for e in kicks) == pytest.approx(r["kickCarry"][t], abs=2e-3)
