@@ -1460,7 +1460,14 @@ square up → kick is the whole argument for this behavior.
       0.8-1.9 m, not the aimer failing — exactly the "asserts *aimed*, never
       *in range*" gap. The aiming half of the soccer demo is done; the clip
       needs the approach behavior below.
-- [ ] **(Stretch) Approach.** Walking to the ball is a `forward_cmd` locomotion
+- [x] **(Stretch) Approach — superseded, not built (noted 2026-09-10).** The
+      prerequisite landed elsewhere: the fake detector reports box `width`
+      and `range_est = radius / tan(width/2)` (`sensors/detector.py`), and
+      walking to the ball is the chase brain's job in world mode — the
+      tracker's range and bearing steer `Chase` (Track 4, 12af/12ar), with
+      the shipped walker under a `forward_cmd`. A learned find_ball
+      approach stage would duplicate that, so nothing here to train.
+      Original text kept: Walking to the ball is a `forward_cmd` locomotion
       task steered by the bearing slot — a different recipe, not a stage of
       this one. Range needs the detector to report box size (distance ≈
       focal × real diameter / box height), which the sim's fake detector does
