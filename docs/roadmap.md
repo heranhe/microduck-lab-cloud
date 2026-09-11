@@ -11561,6 +11561,241 @@ slot ticks `runs/sensedplay/slots-{sr,sl}.jsonl`.
         --out runs/sensedplay/gym-sr-truth-b0.jsonl
     uv run python scripts/compare_gym.py ship=... sr-track=... sr-truth=... sl-track=... sl-truth=...
 
+**Follow-up I (d9ea93f, `MICRODUCK_SENSED_TRUTH=xy` / `=fresh`): the 28 points
+are the FRESHNESS slots, not the placement — and the fix is NOT in the tracker,
+because the tracker is already at its ceiling.**
+
+Follow-up H's "what settles it next", built and run. `=1` swaps three things at
+once, so the knob takes two more modes that cut it in half. Both are COMPOSED
+from the same two producers `=1` and the played path already use —
+`_sensed_head` keeps the track half (factored out as `_track_head`, the same
+arithmetic it had inline), `truth_slots` supplies the truth half, nothing is
+re-derived, so `xy` + `fresh` between them are exactly `all`:
+
+  * **`xy`** — the truth path's PLACEMENT (51/52) with the TRACK's own `seen`
+    and confidence (53/54).
+  * **`fresh`** — the TRACK's placement (51/52, off `bearing_from` /
+    `range_from` exactly as the played path reads it) with the truth path's
+    `seen`/conf.
+
+`=1` still means all four; off is still the only shipping value and still
+byte-identical (the env-gated digest A/B against a pre-edit package copy
+passes, and the track arm's gym block 0 re-ran EPISODE FOR EPISODE identical to
+`runs/sensedplay/gym-sl-track-b0.jsonl` by `kick_gym.outcome_key` after the
+refactor — the inertness control for everything below). A value that is none of
+the modes RAISES rather than falling back to one: a battery quoting an arm it
+did not mean to run is the expensive failure here.
+`tests/test_sensed_kick_world.py` locks the composition on a track poisoned in
+ONE half at a time — nonsense placement with a real hit on the newest frame,
+then the true ball's position on a 1.5 s stale track — because a tidy track
+would let a mode read the wrong producer and still pass.
+
+*What each arm's slots actually carried* (`probe_sensed_slots.py --mode`, left
+foot, 4 seeds x 40 episodes an arm, 1429-1726 window ticks; READ = what the
+kick received, which is the mix under a split mode):
+
+| left-foot window ticks | track (play) | `xy` | `fresh` | `all` |
+|---|---|---|---|---|
+| ticks with a ball in the READ slots | 93.6% | 100% | 100% | 100% |
+| READ `seen` slot[53] | **16.7%** | **21.4%** | **36.7%** | **39.4%** |
+| READ `conf` slot[54], median | **0.26** | **0.30** | **0.94** | **0.94** |
+| READ placement vs the true ball, median (p90) | **4.11 cm** (6.4) | **0.23 cm** (0.8) | **5.37 cm** (16.7) | **0.92 cm** (21.2) |
+| READ bearing error, median | 7.37° | 0.37° | 6.40° | 0.51° |
+| READ − TRUTH on slots 51/52 | 7.4° / 3.8 cm | **0.00 / 0.00** | 7.4° / 4.2 cm | **0.00 / 0.00** |
+| track age at the tick, median | 1.30 s | 1.20 s | 1.30 s | 1.48 s |
+
+Each mode carries exactly the mix it claims, in real windows and not only in
+the unit test: `xy` reads the truth's placement to the bit (READ − TRUTH = 0.00
+on 51/52) while its `seen`/conf stay the track's 21%/0.30; `fresh` reads the
+track's 5.4 cm placement while its `seen`/conf agree with the truth's on 100%
+of ticks. (The `seen` shares differ between arms because the arms produce
+different trajectories — an arm that CONNECTS spends its window watching a ball
+that is leaving. They are each arm's own number, not four reads of one world.)
+
+*The five-arm left foot* (`kick_gym.py --episodes 40 --seeds 12 --jobs 3`,
+blocks 0-11 and 100-111 pooled, 24 seeds; `MICRODUCK_SKILL_KICK_LEFT` pinned to
+the scratch `lastmetre-left-v1` copy with `{"sensed": true, "exit_rad":
+0.2993}`, the right foot vendored; `World.skill_path` / `skill_sensed` /
+`kick_exits()` AND `World.sensed_truth_mode` asserted off the CONSTRUCTED World
+before any compute. Travel and advance are medians over CONNECTED swings):
+
+| kick_left | swings | whiff | vs shipped | ±MDE | p | verdict | conn. travel | advance | fell |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped (base) | 433 | 8.5% | — | — | — | — | 1.13 m | 0.83 m | 0.5% |
+| sensed, track | 420 | 33.6% | +25.0% | 5.5% | 0.000 | effect | 0.21 m | 0.16 m | 0.0% (p 0.16) |
+| sensed, **`xy`** | 432 | **31.2%** | +22.7% | 5.3% | 0.000 | effect | 0.29 m | 0.19 m | 0.0% (p 0.16) |
+| sensed, **`fresh`** | 409 | **9.0%** | +0.5% | 3.8% | 0.797 | **null** | 1.00 m | 0.78 m | 0.0% (p 0.17) |
+| sensed, TRUTH | 408 | 5.6% | −2.9% | 3.5% | 0.102 | null | 1.22 m | 0.99 m | 0.0% (p 0.17) |
+
+Against the TRACK arm, which is the contrast that answers the question:
+
+| contrast | whiff | shift | ±MDE | p | verdict |
+|---|---|---|---|---|---|
+| track → **`xy`** (placement only) | 33.6 → 31.2% | **−2.3%** | 6.3% | 0.469 | **null** |
+| track → **`fresh`** (freshness only) | 33.6 → 9.0% | **−24.5%** | 5.6% | 0.000 | **effect** |
+| track → TRUTH (both) | 33.6 → 5.6% | −27.9% | 5.4% | 0.000 | effect |
+| `fresh` → TRUTH (placement, on top of freshness) | 9.0 → 5.6% | −3.4% | 3.6% | 0.062 | null |
+
+Both blocks agree and neither is carried by the other: block 0 reads track 29.6
+/ `xy` 26.4 / `fresh` 7.6 / truth 4.9%, block 100 reads 37.4 / 35.7 / 10.6 /
+6.4%. Falls are 0.0% on every sensed left arm against the shipped 0.5%.
+
+**The verdict is FRESHNESS, by 24.5 points of 27.9.** Handing the left foot a
+2 mm placement while leaving it the track's own `seen` and confidence buys
+NOTHING measurable (−2.3, and the MDE bounds placement's whole contribution
+below 6.3 points); handing it the track's 5.4 cm placement with the recipe's
+freshness recovers almost the entire gap. What placement does buy, once the
+freshness is right, is the CARRY: connected travel 1.00 m under `fresh` against
+1.22 m under truth, and the 3.4-point whiff residual between them — real in
+direction, a null at this power. So Follow-up H's headline stands and its
+attribution moves: the left-foot gap WAS the tracker's, but not the tracker's
+5.5 cm `_place` error — it was the tracker telling the kick that its estimate
+was a second and a half old.
+
+*The right foot, both split modes, one block pair each* (sensed right pinned,
+`{"sensed": true, "exit_rad": -0.1331}`, left vendored; base = its own track
+arm):
+
+| kick_right | swings | whiff | vs track | ±MDE | p | verdict | conn. travel | advance | fell |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped | 386 | 9.6% | — | — | — | — | 0.74 m | 0.37 m | 0.0% |
+| sensed, track | 363 | 5.0% | — | — | — | — | 0.98 m | 0.83 m | 0.0% |
+| sensed, **`xy`** | 337 | 5.0% | +0.1% | 3.2% | 0.958 | null | 1.00 m | 0.82 m | 0.0% |
+| sensed, **`fresh`** | 378 | **9.3%** | **+4.3%** | 3.7% | 0.023 | effect | 0.99 m | 0.89 m | 1.6% (6/378, p 0.016) |
+| sensed, TRUTH | 356 | 3.1% | −1.9% | 2.9% | 0.203 | null | 1.12 m | 0.97 m | 0.3% |
+
+**And the two halves are NOT additive — the right foot reverses the sign.**
+Placement alone is a dead null on this foot too (+0.1, MDE 3.2), but freshness
+alone makes it WORSE (5.0 → 9.3%), while both together are its best arm (3.1%).
+The reading that fits both feet: a CONFIDENT read of a WRONG place is the worst
+of the four inputs. The left foot, which is paralysed by a hedged read, is
+rescued by confidence even on a 5 cm-off position; the right foot, whose strike
+already survives the hedge, is misled by it into committing. Hold this one
+loosely: it is one arm, pooled just past its own MDE, carried by block 0 (+6.3,
+p 0.023) with block 100 a null (+2.2, p 0.391), and its falls are 6 events —
+by the event-counting rule that is a hint, not a result.
+
+**The fix is NOT in `brain/tracker.py`, and the probe's two new columns say why
+before anyone builds it.** Follow-up H named two candidate tracker changes;
+both are priced here and both are structural no-ops:
+
+| the reachable set of a tracker-side fix (left foot, play) | |
+|---|---|
+| `seen` the track reports | 16.7% of window ticks |
+| ticks whose NEWEST DETECTOR FRAME holds a ball at all | **16.7%** |
+| ticks where the track HOLDS a position | 93.6% |
+| …and calls that position AT REST | **19.2%** |
+| the track's own sigma at the tick, median (p90) | 12.94 cm (24.75) |
+| what the recipe trained against | `seen` 69.8%, conf 1.00 |
+
+Reading `seen` off the detector's last frame instead of off the track's
+association has a ceiling of **exactly the number the track already reports** —
+the association is losing nothing, the DETECTOR simply does not have the ball.
+A coast/refresh that lets slot[54] mean "this estimate is good" rather than "a
+frame hit just now" — a `Track.trusted(t, rest_vel, sigma_max)` gate that
+`_sensed_head` would write 1.0/1.0 on — has a ceiling of 19.2%, and the tracker
+does not even believe its own estimate: 12.9 cm of declared sigma against a
+measured 4.1 cm of error. Neither reaches 70%. **No re-anchoring, coasting or
+re-gating inside the tracker can produce the freshness this recipe trained on.**
+
+**What CAN, measured: the camera's vertical field of view.** The recipe's
+sensing (`behaviors/ball.py::_BALL_KNOBS`) models 60° ACROSS the robot's view
+and 116° UP it, on the stated claim that the module is mounted rotated 90°. The
+detector that actually runs does not: asserted off the constructed duck,
+`d.detector.spec.fov_h_deg = 116.0, fov_v_deg = 60.0, rate_hz = 10.0,
+partial_min = 0.25` — and `docs/camera-hardware.md` §3b computes its near-field
+blind-radius table from V = 60° too. Re-running the play probe with the
+detector at the RECIPE's orientation (`MICRODUCK_CAMERA="fov_h_deg=60.0,
+fov_v_deg=116.0"`, one env var, NO code change — Follow-up G's pattern):
+
+| left-foot window ticks, track arm | detector as it ships (116 × 60) | at the recipe's orientation (60 × 116) |
+|---|---|---|
+| newest frame holds a ball | 16.7% | **41.4%** |
+| `seen` slot[53] | 16.7% | **41.3%** |
+| `conf` slot[54], median | **0.26** | **0.85** |
+| track age at the tick, median (p90) | **1.30 s** (2.20) | **0.16 s** (0.52) |
+| track sigma, median | 12.94 cm | **2.54 cm** |
+| track held a position | 93.6% | 99.4% |
+| track placement vs the true ball, median | 4.11 cm | 6.26 cm |
+
+So the freshness gap is the VERTICAL FOV, nearly all of it, and it is upstream
+of the tracker: the sensed kicks were trained looking through a camera 116° tall
+and are played through one 60° tall, which at kick range is the difference
+between having the ball in frame and not. (Note the last row: seeing it more
+often makes the PLACEMENT worse, not better — more sightings arrive near the
+edge of a very wide lens. Another reason placement is not the lever.)
+
+**Nothing ships.** The ablation defaults off and is byte-identical off,
+`policies/kick/` is still the w12 pair, the sensed pair is still out of play,
+and no camera default was changed — the orientation probe is a reachable-set
+measurement run under an env var, not an arm.
+
+*Honesty note on registration:* Follow-up H registered the question ("if
+freshness is the lever the fix is in `brain/tracker.py`; if placement, it is
+`_place`") but not a directional prediction, and block 0 of the `xy` arm was
+read before the `fresh` blocks had finished. The result is not a close call —
+24.5 points against 2.3, reproduced in both blocks — but the two right-foot
+contrasts are 2 extra reads on top of the 2 registered ones and the sr-`fresh`
+row should be Bonferroni-read at 0.0125, which it does not clear.
+
+→ **What settles it next.** The chain ends at a question this repo cannot
+answer from inside itself: **which way round is the camera actually mounted?**
+`behaviors/ball.py` says 116° up the robot's view; `sensors/detector.py` and
+`docs/camera-hardware.md` say 116° across it. One of them is wrong and it is a
+hardware fact (the module drawing, or one photograph of the head), not a knob.
+The two branches are not symmetric:
+
+  * **If the detector is right (116 across, 60 up)** — then the sensed recipe
+    has been trained against a camera the robot does not have, and no tracker,
+    gaze or reward change can close the freshness gap. The fix is a RETRAIN with
+    `MICRODUCK_BALL_HFOV_DEG=116 / MICRODUCK_BALL_VFOV_DEG=60` in the stage (a
+    one-line stage change, not a reward change), plus a last-metre gaze re-tune
+    that keeps the ball inside a 60° vertical frame at kick range. That is the
+    only honest route to a sensed kick whose in-play freshness matches its
+    training, and it is one training chain.
+  * **If the recipe is right (60 across, 116 up)** — then every near-field
+    detector number in this repo, 12as's play blocks and `camera-hardware.md`
+    §3b's blind-radius table included, is measured through a camera turned 90°
+    from the robot's, and the correction is a one-field default change with a
+    re-measurement behind it.
+
+Only after that is settled does the confirmatory gym arm mean anything, and it
+is then cheap and already scripted: the left-foot TRACK arm plus the shipped
+pair as its own control, both blocks, under the corrected orientation. If
+33.6% collapses toward the 9.0% the `fresh` ablation bought, the freshness
+chain is closed end to end without any sim-only flag. It was deliberately NOT
+run here: flipping the world's camera to match the recipe before knowing which
+is right would be making the sim wrong to make a policy look good.
+
+Reviewer's re-read (independent) of the row files: left 33.6 / 31.2 / 9.0 /
+5.6 %, right 5.0 / 5.0 / 9.3 % with 6 falls on the right `fresh` arm — the
+tables reproduce; `behaviors/ball.py` carries HFOV 60 / VFOV 116 and
+`sensors/detector.py` 116 × 60, with `docs/camera-hardware.md` quoting the
+module's own table (H 116°, V 60°) as supplied by the owner.
+Agent's re-read of the row files: left 8.5 / 33.6 / 31.2 / 9.0 / 5.6%, right
+9.6 / 5.0 / 5.0 / 9.3 / 3.1%, falls 0-6 per arm — every table above reproduces,
+and the track and truth rows reproduce Follow-up H to the decimal.
+Rows: `runs/sensedplay/gym-sl-{xy,fresh}-b{0,100}.jsonl`,
+`runs/sensedplay/gym-sr-{xy,fresh}-b{0,100}.jsonl`, slot ticks
+`runs/sensedplay/slots-sl-{track,all,xy,fresh}.jsonl` and
+`runs/sensedplay/slots-sl-track-portrait.jsonl`.
+
+    # one gym arm (mode in {xy,fresh}; repeat with --seed0 100; the RIGHT-foot
+    # arms pin MICRODUCK_SKILL_KICK_RIGHT instead and leave the left vendored)
+    MICRODUCK_SKILL_KICK_LEFT=<sensed left>.onnx MICRODUCK_SENSED_TRUTH=xy \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 0 --jobs 3 \
+        --out runs/sensedplay/gym-sl-xy-b0.jsonl
+    uv run python scripts/compare_gym.py ship=... sl-track=... sl-xy=... sl-fresh=... sl-truth=...
+
+    # the slot table under each arm (--mode, new; omit it for the play arm)
+    uv run python scripts/probe_sensed_slots.py --left <sensed left>.onnx --mode fresh \
+      --seeds 4 --episodes 40 --jobs 3 --out runs/sensedplay/slots-sl-fresh.jsonl
+
+    # the reachable set of the vertical FOV (one env var, no code change)
+    MICRODUCK_CAMERA="fov_h_deg=60.0,fov_v_deg=116.0" \
+      uv run python scripts/probe_sensed_slots.py --left <sensed left>.onnx \
+      --seeds 4 --episodes 40 --jobs 3 --out runs/sensedplay/slots-sl-track-portrait.jsonl
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
