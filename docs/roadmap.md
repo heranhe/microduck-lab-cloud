@@ -4002,6 +4002,77 @@ this stack has none of them.
       gate. Caveat as always: this is the local CPU harness under the BAM
       actuator model, a subset of upstream's DR — a get-up that survives
       here is a prototype, not a hardware claim.
+      **And the population it was all measured on was designed, not observed
+      (2026-09-10, commit aa11a20).** Everything above — the recipe's ladder,
+      the bench, the 36-of-36 — scores a SYNTHETIC lie: `_getup_spawn` draws
+      a tilt from a window, picks back/front/side from a declared 45/30/20
+      mix, and folds both legs by one shared scalar drawn U(0,1). Nothing had
+      asked what a duck that actually falls ends up in.
+      `scripts/probe_fall_poses.py` does (five fall modes, settled to rest,
+      the recipe's own spawns passed through the same instrument as the
+      control arm; 252 unique falls, honest BAM):
+
+      | mode | falls | resting pose |
+      |---|---|---|
+      | limp / zero / squat (unforced) | 72 | **front 100%** |
+      | walk_push (shoved, walker still driving) | 84 | back 35%, right 31%, front 18%, left 17% |
+      | walk_cut (shoved, gait cut) | 96 | right 33%, left 32%, front 25%, back 9% |
+      | **shoved pooled** | 180 | **side 57%, front 22%, back 21%** |
+
+      The one axis somebody parameterised is the one the recipe got right —
+      tilt, measured 61–113° against its 80–115 window. The three nobody
+      did, it got wrong: **every unforced fall lands face-down**, the back
+      only exists when a walking duck is shoved (and then at 21%, against the
+      recipe's 45–50%), **side is the commonest shoved pose at 57% and the
+      least-trained at 15–20%**, leg asymmetry runs 0.41 rad median (p90
+      1.20, max 1.57) against the single-fold spawns' 0.10, and **83% of
+      shoved falls have negative fold, which U(0,1) never samples**.
+
+      **It did not change the verdict.** `scripts/probe_getup.py` replays
+      the recorded poses into the recipe's own env and scores them with the
+      recipe's own four-gate stand, so the two benches differ in nothing but
+      the population — 252 falls × 8 s, honest BAM, observation noise + DR +
+      action delay, deterministic exported ONNX, rendered and read:
+
+      | policy | front (111) | right (58) | left (45) | back (38) | ALL | head up |
+      |---|---|---|---|---|---|---|
+      | limp (null control) | 0% | 0% | 0% | 0% | **0%** | — |
+      | **`getup-l2`** | **100%** | **90%** | **100%** | **92%** | **96%** | **96%** |
+      | `alpha_stand` | 100% | 97% | 100% | 100% | 99% | 99% |
+      | `getup-l5` (ladder tip, 116-fall subset) | 100% | 100% | 100% | 80% | 99% | **13%** |
+
+      Median 0.24–1.22 s to stand, held 3 s in 86–100% of cases. The null
+      stands 0 of 252, so the replay installs genuinely fallen ducks and no
+      recovery is gravity's. Both of the block above's findings reproduce
+      independently on the real population: `alpha_stand` already does the
+      get-up, and rung 5 keeps the recovery while losing the head. **No
+      retraining was needed** — the shipped `getup-l2` clears a 100%/90% bar
+      on the poses ducks actually fall into.
+
+      Two things only the real population could show, both for the next
+      revision: all **9 `getup-l2` failures are shoved poses that never
+      reached a stand at all** (best streak 0.00 s — total failures, not
+      bounces), with higher leg asymmetry than the successes (0.44 vs 0.33
+      median) but n=9, a hypothesis and not a result; and `getup-l2` is
+      **left/right asymmetric** — 45/45 from the left against 52/58 from the
+      right, z=2.22, p=0.026 over 130 side falls, where `alpha_stand` is not
+      (p=0.22). EXPLORATORY: the contrast was suggested by the table, not
+      registered in advance. If the recipe is revisited, the two spawn
+      changes the measurement asks for are **per-leg folds spanning negative
+      values** and a **side-heavy mix**, alongside the head-height term the
+      block above already identified. `tests/test_fall_poses.py` locks the
+      instrument (each test checked to fail when its guard is broken).
+
+      **What remains on this item is unchanged and is not a training
+      problem:** the controller switch in `world/arena.py` — hand a fallen
+      duck to `alpha_stand` (or `getup-l2`) for ~1.5 s and clear `down_until`
+      when it stands, behind an `eval-pitch` flag that swaps
+      `World.getup_s`'s stand-in lie-down for the real recovery. The
+      measurement above prices it: **0.2–1.2 s, not the assumed 10–20 s.**
+      Re-read from disk: `probe_fall_poses.py --seeds 24 --dump falls.json`,
+      `--seeds 96 --modes walk_push,walk_cut --dump falls_walk.json`, then
+      `probe_getup.py --falls falls_walk.json --policy runs/getup-l2/policy.onnx --noise --sheet sheet.png`
+      (and `--policy limp`, `--policy ../microduck/policies/alpha_stand.onnx`).
 - [x] **B.2 A goalkeeper — BUILT, and measured off in 2v2 (2026-09-07).**
       A fourth static role, `keeper`: its zone is the last fifth in front of
       its own mouth (`Team.ROLE_ZONES`, the field players share the rest as
