@@ -5075,11 +5075,11 @@ this stack has none of them.
       5.9 s/min was the loss; a striker that reaches the ball as often as
       `Chase` is the gate.
 - [x] **E.2 RL for the decision layer only — built, refitted on pitch
-      line-ups and run to 161 paired seeds (2026-09-10/11): the learned
-      ranking carries +0.14 m more per kick on the pitch (resolved), backward
-      lines 27 → 11 %, falls flat — and ballAdvance stays a null, so the gate
-      is not met and `kick_select_learned` ships "" pending the owner's call
-      (below).** WisTex United (SPL Challenge
+      line-ups and run to 472 paired seeds (2026-09-10/11): the learned
+      ranking carries +0.10 m more per kick on the pitch and cuts backward
+      lines 24 → 12 %, but ballAdvance is a RESOLVED null (+0.005 ± 0.046)
+      and the per-match columns evaporate on fresh seeds, so the gate is not
+      met; `kick_select_learned` ships "" and the item is closed (below).** WisTex United (SPL Challenge
       Shield 2024, 7 wins of 8, 39–7 on goals) kept B-Human's perception,
       localisation and motion and replaced only the high-level behaviour
       with four RL sub-policies (mid-field walk-and-kick angle, ball duel,
@@ -6062,6 +6062,241 @@ this stack has none of them.
       (null), carry per kick +0.140 ± 0.048 (p < 1e-4), kickCarry +0.583 ±
       0.376, back-line 184/691 → 62/546, falls 34 → 27, possession +0.62 ± 0.61
       (unregistered) — the table reproduces.
+
+      **THE GATE'S SECOND COLUMN, PAID FOR IN FULL AND NOW RESOLVED: AT 472
+      SEEDS ballAdvance IS +0.005 ± 0.046 — NOT SHORT OF POWER, MEASURED OFF,
+      AND THE +0.065 IT WAS SIZED ON IS EXCLUDED (2026-09-11).** The step above
+      closed with "nothing on this arm"; the owner asked for the ~472-seed price
+      to be paid anyway. Registered at **08:08:05 PDT**, before a single row past
+      seed 160 existed in either file (`REGISTERED.md` in scratch; `wc -l`
+      161/161 and both whole-file sha256s recorded first, byte copies kept).
+      Both arms then extended 161 → 472 on ONE frozen snapshot and read once.
+
+      **What was registered.** Primary **ballAdvance**, predicted **+0.065
+      m/min** — stated in the registration as *the observed point estimate being
+      re-tested, not an independent prediction*, and noting that the previous
+      re-test moved the estimate 16 % DOWN rather than up. Expected half-width
+      from the 161-seed spread (sd of the paired per-seed differences = 0.5057):
+      t(.975, 471) x 0.5057 / sqrt(472) = **±0.0457**, i.e. d/half = 1.43 and
+      ~**80 % power** at a true +0.065 — which is how 472 was derived,
+      (1.96 + 0.8416)² x 0.5057² / 0.0652² = 472. Registered as the LAST sizing
+      this arm gets. The 311 new seeds alone were registered as a **sign and
+      drift check** (half-width ±0.0564, 0.87x the effect). Gate unchanged:
+      carry per kick AND ballAdvance pay, falls flat. Possession was registered
+      **out** in advance as exploratory.
+
+      **THE SNAPSHOT COULD NOT BE REUSED, AND THE REASON WAS NOT IN `src/`.**
+      `World.kick_exits()` reads `exit_rad` out of the sidecar `.json` beside
+      each kick ONNX — a DATA file, which the 161-seed agent's snapshot reached
+      by symlinking `policies/` straight at the live tree. Commit 9ca8d9d (the
+      owner's call, 06:47 the same morning) had changed
+      `policies/kick/kick_left.json: exit_rad −0.225 → +0.209`. Preflight on
+      that snapshot printed `kick_exits (0.209, −0.036)` where the 161-seed
+      ledger recorded `(−0.225, −0.036)`: **the world had moved under the
+      file**, and `load_done` guarded `perSide / seconds / ballOutS / getupS /
+      getupPolicy` and knew nothing about a sidecar, so the resume would have
+      appended 311 rows of a different experiment onto 161 rows of this one in
+      silence. (Another session found the same hole from the other end the same
+      morning and closed it in code: `cec252c` + `4199243`, the resume guard now
+      covers the kick sidecars. Two independent routes to one bug, which is the
+      only kind of mechanical check AGENTS.md says to trust.)
+      Fix, registered before the run: a fresh snapshot with `src/`, `scripts/`
+      and `tests/` rsynced **byte-identical** from the 161-seed snapshot
+      (`diff -r` clean) and both kick sidecars written from
+      `git show 16ae117:` — the state the first 161 rows were made on.
+      **Verified by reproduction, not by argument:** frozen snapshot, arm A,
+      seeds 0-2 → all three rows **byte-identical** to `pitch-ship-2.jsonl`;
+      and the complement, the same run UNFROZEN, seed 0 → **differs** (kicks
+      9 → 5, kickCarry 3.93/4.93 → 1.47/1.54, ballAdvance 1.249/1.357 →
+      0.831/0.511). The freeze is load-bearing and all 472 seeds are one world.
+      Preflight per arm then read `kick_select_learned` off all four
+      CONSTRUCTED brains (A `''`, B the abs path, `Chooser` kind=ridge
+      lam_back=0.5 rows=3076), printed `kick_exits (−0.225, −0.036)`, asserted
+      `behaviors.ball` is NOT on the `eval_pitch` import path (the other
+      session was editing it), and measured the reachable set at **615 ranking
+      calls over 60 s of seed 0** — the same 615 the 161-seed preflight read.
+      `--jobs 8` (a training run had the rest of the machine), 62 min + 67 min.
+      **The first 161 rows of each file are byte-identical to the
+      pre-extension copies** (asserted on the bytes: head sha256 `73dffbc2…` /
+      `41f6c145…` = the whole files' sha256 at registration), so the 120-, 161-
+      and 472-seed ledgers all nest exactly.
+
+      | 472 seeds, 2v2 x 300 s | ship | `model-pitch-b1` | Δ ± MDE (MDE %) | p | verdict |
+      |---|---|---|---|---|---|
+      | **ballAdvance m/min (PRIMARY, gate)** | 1.224 | 1.228 | **+0.005 ± 0.046 (4 %)** | **0.848** | **null — RESOLVED OFF** |
+      | carry PER KICK | +0.318 m / 3 206 | **+0.416 m / 2 752** | **+0.098 ± 0.028 (9 %)** | **<1e-4** | **effect** (totals 1 019.5 → **1 145.7 m**) |
+      | kickCarry m/run | 2.160 | 2.427 | +0.267 ± 0.219 (10 %) | 0.017 | effect, but **halved** from 161 (+0.583) |
+      | `kicksBack`, of kicks | 916/3 206 = 28.6 % | **521/2 752 = 18.9 %** | **−9.6 pp** | **<1e-4** | **effect** |
+      | `kicksBackLine`, of lines | 476/2 029 = 23.5 % | **190/1 586 = 12.0 %** | **−11.5 pp** | **<1e-4** | **effect** |
+      | kicks | 3 206 | 2 752 | — | — | **FEWER, −14 %** |
+      | falls (VETO) | 89 | 80 | −0.019 ± 0.057 (30 %) | 0.511 | NO RESULT, favourable sign |
+      | goals | 447 | 415 | −0.068 ± 0.120 (13 %) | 0.269 | null — **and the sign has flipped adverse** |
+      | own goals | 100 | 80 | — | — | favourable, not quotable |
+      | possession s/min | 40.188 | 40.684 | +0.496 ± 0.346 (1 %) | 0.005 | **NOT REGISTERED — but see below** |
+      | spread / crowd | 0.591 / 0.294 | 0.583 / 0.304 | −0.007 / +0.009 (1 % / 2 %) | 0.032 / 0.011 | resolved, 1-2 %, unregistered |
+      | depth / ballOwnHalf | flat | flat | 0-1 % | 0.93 / 1.00 | null |
+      | ballProgress m/min | 0.520 | 0.614 | +0.094 ± 0.062 | 0.003 | **UNQUOTABLE by rule** |
+
+      Per-seed signs at 472: ballAdvance **248 up / 224 down** (sign p 0.290),
+      kickCarry 257 / 215 (p 0.059), possession 253 / 219 (p 0.129),
+      goals 148 / 179 / 145 tie (p 0.097), own goals 64 / 78 / 330,
+      falls 57 / 63 / 352.
+
+      | ballAdvance | registered | realised |
+      |---|---|---|
+      | effect | +0.0652 (the 161-seed observation) | **+0.0045** |
+      | half-width at 472 | ±0.0457 | **±0.0462** |
+      | d / half | 1.43 (~80 % power) | **0.10** |
+
+      **The sizing was right for the third time running, and the effect was
+      never there.** Predicted half-width ±0.0457, realised ±0.0462 — 1 %.
+      What moved, again, was the estimate: **+0.078 (120 seeds) → +0.065 (161)
+      → +0.005 (472)**, 93 % of the way to zero. The 95 % CI is now
+      **[−0.042, +0.051]** and **does not contain the +0.065 this battery was
+      sized on**. This is the first reading of this column that is a *resolved
+      null* rather than a shortage of power: at 4 % MDE the battery could have
+      seen a fifteenth of the baseline, and there is nothing to see. The price
+      of resolving what is left (+0.005) is **~100 000 seeds**. The column is
+      finished.
+
+      **The increment alone, as registered (sign and drift check).** Seeds
+      161-471, 311 paired and fresh: ballAdvance **−0.027 ± 0.057** (p 0.355,
+      161 up / 150 down) — **the sign does not agree with the first 161**, which
+      is the drift check failing and the direct explanation for where +0.065
+      went. `kickCarry` on the fresh block is **+0.104 ± 0.269 (p 0.448, NULL)**
+      — the run-level carry effect that read as an effect at 161 seeds **does
+      not replicate**. What does replicate, cleanly and on its own 311 seeds:
+      carry per kick **+0.077 ± 0.035 (p <1e-4** over 2 107 → 1 794 kicks),
+      back-kicks 27.3 % → 19.3 % and back-line 21.8 % → 12.3 % (both p <1e-4).
+      **The per-EVENT columns replicate; the per-MATCH columns evaporate.**
+      That split is the finding of this block.
+
+      **The rival selection story is no longer killed — it is now the leading
+      explanation.** At 120 and 161 seeds the test was: if the arm had simply
+      declined the shipped arm's worst kicks, the best mean it could reach was
+      +0.4281 / +0.4189 and the observed mean **beat** it (+0.4383 / +0.4227).
+      At 472 seeds it does not: dropping the shipped arm's 454 worst of 3 206
+      kicks gives **+0.4596**, and the observed arm-B mean is **+0.4163** —
+      *below* the best-case selection bound. The distribution still moves
+      (median +0.178 → +0.282, q10 −0.308 → −0.052, share of kicks nearer the
+      kicker's own goal 2 s later 28.3 % → 18.8 %) and the total still rises
+      (+126.2 m on 454 FEWER kicks), but the 120- and 161-seed claim that
+      *selection cannot account for the per-kick gain* **does not survive its
+      own test at 3x the events, and is withdrawn.** Taking 14 % fewer, better
+      swings is a real and possibly desirable behaviour; it is not evidence of a
+      better ranking, and at 472 seeds it is the whole of what the per-kick
+      column shows. (Note also what the aim columns are: proportions **of the
+      kicks taken**, so declining marginal swings moves them too.)
+
+      **Possession, registered out, replicated anyway.** It reads +0.496 ±
+      0.346 (p 0.005) at 472 — and, unlike at 161, the 0.05 does not come from
+      the seeds that produced it: on the **fresh** 311 it is +0.432 ± 0.421
+      (p 0.044), an independent block. That promotes it from "one of ten printed
+      rows" to a candidate worth its own registered primary; it does **not**
+      promote it into this gate, which was written before the run and does not
+      contain it. A 1 % shift in possession with ballAdvance flat and goals
+      adverse is not a case for shipping anything.
+
+      **And goals turned.** 447 → 415 at 472 (p 0.269, 13 % MDE, null) with
+      **148 up / 179 down**; on the fresh 311 alone, 306 → 262 with 91 up / 127
+      down, **sign p 0.018**. Still NO RESULT by the MDE rule and still not
+      quotable as a number — but the earlier blocks' favourable direction
+      (141 → 153 at 161) did not hold, and an arm whose only resolved
+      whole-match column is a 1 % possession gain while goals lean the other way
+      is not an arm with a case.
+
+      **VERDICT: the gate is NOT MET and `kick_select_learned` STAYS OFF — and
+      for the first time the refusal rests on a resolved measurement rather than
+      on a missing one.** carry per kick pays (+0.098 ± 0.028, p <1e-4, 5 958
+      events) and the aim columns pay on 3 615 lines, falls are flat with a
+      favourable sign (89 → 80, MDE 30 %), and **ballAdvance is measured off**
+      (+0.005 ± 0.046, 4 % MDE, p 0.848, CI excluding the +0.065 it was sized
+      on). The gate is a conjunction, so: OFF. **No default was changed by this
+      step**, and none should be.
+
+      **Recommendation to the owner: stop here, and do not ship this knob.**
+      One step ago the recommendation was "leave it off, but every carry column
+      is a resolved effect in the right direction and nothing is broken" — the
+      472-seed reading is weaker than that in three specific ways, all of which
+      the extra seeds bought: (a) the whole-match benefit is not unresolvable,
+      it is **absent**; (b) the per-kick gain **no longer beats the pure
+      selection bound**, so the ranking has not been shown to do anything a
+      "take 14 % fewer swings" rule would not; (c) goals lean adverse on fresh
+      seeds. E.2's three shipping questions — **(i)** the weights would need a
+      home that ships before a default could name a path under gitignored
+      `runs/`; **(ii)** the model has never been asked to price an opponent it
+      did not train against (`p_block` / `p_pass` are dead on a default pitch);
+      **(iii)** `range` is confirmed dead for ranking (zero within-line-up
+      spread in 1 682 of 1 682 calls) and is still an input — are all moot while
+      the gate is shut, and are recorded here only so the next person does not
+      re-derive them.
+      **One caveat that belongs to the owner, not to the model.** These 472
+      seeds run the kick pair as it was at 16ae117 (**left exit −0.225**),
+      because that is the only way to extend a ledger whose first 161 rows were
+      made there. The owner's +0.209 correction lands on exactly the columns
+      this gate reads (48-seed block: backward lines 22.1 → 5.8 %, carry per
+      kick 0.33 → 0.51 m, ~24 % fewer swings) — i.e. **the corrected default
+      already takes most of the aim error the learned ranking was selling.**
+      So the honest statement is: the learned ranking does not pay on the
+      whole-match column against the OLD kick pair, and against the NEW one it
+      has less left to win. Nothing here argues for re-running it against the
+      corrected pair.
+
+      → **What settles it next: nothing on this arm, and this time that is a
+      measurement.** ballAdvance has been priced three times from its own
+      spread and paid for once in full; at 472 seeds it is a resolved null whose
+      interval excludes every estimate that motivated an extension. The live
+      question is unchanged and cheap: follow-up (3)'s feature surgery — drop
+      the line-up-constant columns from `FEATURES` and refit — judged in the
+      gym and the box probe, in minutes. Anything that wants a pitch ledger
+      again should first show a per-swing gain that **beats the selection
+      bound**, because that is the test this block failed.
+
+      Reviewer's re-read of `pitch-ship-2.jsonl` vs `pitch-pitchmodel-1.jsonl`
+      (472 seeds each): ballAdvance +0.005 ± 0.046 (p 0.848, null), carry per
+      kick 0.318 → 0.416 m over 3 206 → 2 752 kicks (Δ +0.098 ± 0.028, totals
+      1 019.5 → 1 145.7 m), kickCarry +0.267 ± 0.219, back-line 476/2 029 →
+      190/1 586, falls 89 → 80, own goals 100 → 80, goals 447 → 415 (null,
+      adverse sign), possession +0.496 ± 0.346; the first 161 rows of both files
+      are byte-identical to the 161-seed ledger and that table reproduces
+      unchanged. Run on the frozen snapshot (`src/` byte-identical to the
+      161-seed snapshot; kick sidecars pinned to 16ae117); the live tree moved
+      from 42e8a89 to 5756093 DURING the run, which is what the snapshot is for.
+      Row files (gitignored): `runs/kickchoice/pitch-ship-2.jsonl` and
+      `runs/kickchoice/pitch-pitchmodel-1.jsonl`, both now 472 rows (seeds
+      0-471), extending the 161-seed ledger in place.
+      Commands:
+        # REGISTER FIRST — scratch REGISTERED.md, timestamped, with both files'
+        # sha256 and line counts recorded before either arm was extended.
+        SNAP=<scratch>/kickchoice6/snap-frozen-20260911-0810   # src/scripts/tests rsynced from
+          # <scratch>/kickchoice4/snap-20260911-013416; microduck/ microduck_rl/ .cache brains
+          # clips pyproject.toml symlinked; policies/ a REAL dir with the kick ONNX symlinked and
+          # both sidecars from `git show 16ae117:microduck_local/policies/kick/kick_*.json`
+        export PYTHONPATH=$SNAP/microduck_local/src MICRODUCK_RL_DIR=<abs>/microduck_rl
+        M=$PWD/runs/kickchoice/model-pitch-b1.json
+        # the freeze, verified by reproduction AND by its complement
+        uv run --no-sync python -m microduck_local.eval_pitch --seeds 3 --seed0 0 --seconds 300 \
+            --per-side 2 --ball-out-s 5 --jobs 3 --tag ship --out <scratch>/repro-frozen-ship.jsonl
+            # -> rows 0-2 byte-identical to pitch-ship-2.jsonl; the same run on the UNFROZEN
+            #    snapshot differs on seed 0
+        [MICRODUCK_CHASE="kick_select_learned=$M"] uv run --no-sync python \
+            <scratch>/kickchoice6/preflight.py --expect {"",$M} --seconds 60 --seed 0
+        [MICRODUCK_CHASE="kick_select_learned=$M"] uv run --no-sync python -m microduck_local.eval_pitch \
+            --seeds 472 --seed0 0 --seconds 300 --per-side 2 --ball-out-s 5 --jobs 8 \
+            --tag {ship,pitchmodel1} --out runs/kickchoice/pitch-{ship-2,pitchmodel-1}.jsonl
+        uv run --no-sync python scripts/compare_pitch.py runs/kickchoice/pitch-ship-2.jsonl \
+            runs/kickchoice/pitch-pitchmodel-1.jsonl --label ship pitchmodel1
+        # the increment alone (sign/drift check): split seeds >= 161 out of each file, same compare
+        # the selection bound: <scratch>/kickchoice6/kickstats.py (mean of the shipped arm's best
+        #   2 752 of 3 206 kicks vs arm B's observed mean)
+
+      Reviewer's re-read of the two 472-row files: ballAdvance +0.005 ± 0.046
+      (null), carry per kick +0.098 ± 0.028 over 3206 → 2752 kicks, kickCarry
+      +0.267 ± 0.219, back-line 476/2029 → 190/1586, falls 89 → 80, goals 447 →
+      415, possession +0.50 ± 0.35 (p 0.005 on all 472; registered out of the
+      gate) — the table reproduces. These rows run the pre-correction left
+      sidecar (−0.225), pinned on the snapshot for continuity with the first
+      161 seeds.
 
 - [ ] **E.3 Learning from recordings.** SoccerDiffusion (2025) learns joint
       trajectories from RoboCup gameplay logs (vision + proprioception +
