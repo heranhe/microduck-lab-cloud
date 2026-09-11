@@ -203,7 +203,8 @@ def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: P
            rng: np.random.Generator, n: int = 30, t_own: float = 0.0,
            models: dict[str, KickModel] | None = None, shoot: float = 0.0,
            mates: list[tuple[float, float]] | None = None, pass_reach: float = 0.4,
-           pass_bonus: float = 0.0, obstacles=None, obs_r: float = 0.15) -> Verdict | None:
+           pass_bonus: float = 0.0, obstacles=None, obs_r: float = 0.15,
+           chooser=None) -> Verdict | None:
     """The best of `candidates` (line, action). Mellmann's two-step rule:
     discard anything with more than `t_own` of its samples in our own net,
     then take the most likely to score, ties (within one sample) broken by
@@ -217,7 +218,14 @@ def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: P
     measured +3.2 s/min of possession against the kick (roadmap A.4) —
     so with `shoot` = 0 a kick with ANY scoring chance outranks it, and on
     a 3 m pitch that is nearly everywhere. None when every candidate is
-    too risky — the caller keeps what it had."""
+    too risky — the caller keeps what it had.
+
+    `chooser` (roadmap E.2) replaces the RANKING and nothing else: the same
+    fan, the same roll-outs, the same own-goal veto, and then
+    `chooser(ball, pitch, safe)` picks instead of Mellmann's rule. None
+    (the default) is the shipped path, bit for bit — this function does not
+    evaluate the argument otherwise. `brain/kickchoice.py` builds one from
+    a weights file fitted on the gym's realised outcomes."""
     if not candidates:
         return None
     per = dict(models or {})
@@ -227,6 +235,8 @@ def select(ball, candidates: list[tuple[float, str]], model: KickModel, pitch: P
     safe = [v for v in verdicts if v.p_own <= t_own]
     if not safe:
         return None
+    if chooser is not None:
+        return chooser(ball, pitch, safe)
     pushes = [v for v in safe if v.foot == PUSH]
     kicks = [v for v in safe if v.foot != PUSH]
     if shoot > 0 and pushes and not any(v.p_goal >= shoot for v in kicks):

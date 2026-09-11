@@ -1206,6 +1206,14 @@ class ChaseParams:
     # duck (p=0.021). The flowing pitch did not rescue it. Stays off.
     kick_select_opps: bool = False
     kick_select_obs_r: float = 0.15
+    # THE LEARNED SCORER (roadmap E.2): a path to the weights fitted by
+    # `scripts/kick_choice_data.py` on the kick gym's own realised
+    # outcomes. "" (the default) is the shipped roll-out ranking, bit for
+    # bit — `kickselect.select` does not look at its `chooser` argument
+    # when it is None. When set, the candidate fan, the roll-outs and the
+    # own-goal veto are all unchanged and only the choice among the SAFE
+    # candidates is the model's (brain/kickchoice.py).
+    kick_select_learned: str = ""
     # THE SHARED BALL (roadmap Track 4 s6 C.3): with `fuse_ball` on, the
     # team board's ball is the inverse-variance mean of every live
     # sighting, each weighed by its sender's sigma (C.1) grown by its age
@@ -2692,6 +2700,7 @@ class Chase:
         self.gait = GaitWatch()
         self.blocker = Interceptor()
         self._kick_rng = None              # kick_select's generator, seeded from the duck id on first use
+        self._kick_choice = None           # kick_select_learned's Chooser (E.2), built on first use; survives reset()
         self._field = None                 # the supporter's potential field, built on first use (support_field)
         self.last_select = None            # kick_select's last Verdict, for probes and the /sim page
         self.reset()
@@ -4146,10 +4155,17 @@ class Chase:
                           p_whiff=p.kick_select_p_whiff)
         pitch = Pitch(self.bounds[0], self.bounds[1], self.goal_w, 1.0 if self.goal[0] >= 0 else -1.0)
         opps = self._opponents(self._senses.t) if (p.kick_select_opps and self._senses is not None) else None
+        # THE LEARNED RANKING (E.2). `_kick_choice` may also be installed
+        # directly by a probe (scripts/kick_choice_data.py), which is why the
+        # knob only builds it when it is still None.
+        if self._kick_choice is None and p.kick_select_learned:
+            from .kickchoice import Chooser  # noqa: PLC0415  (only a learned arm pays for it)
+            self._kick_choice = Chooser.load(p.kick_select_learned)
+        chooser = None if self._kick_choice is None else self._kick_choice.bind(odom, los, self.goal)
         v = select((bx, by), lines, model, pitch, self._kick_rng, n=p.kick_select_n, t_own=p.kick_select_t_own,
                    models=models, shoot=p.kick_select_shoot if p.kick_select_push else 0.0,
                    mates=mates_xy, pass_reach=p.pass_reach, pass_bonus=p.pass_bonus if p.kick_select_pass else 0.0,
-                   obstacles=opps, obs_r=p.kick_select_obs_r)
+                   obstacles=opps, obs_r=p.kick_select_obs_r, chooser=chooser)
         self.last_select = v
         return None if v is None else (v.heading, v.foot)
 
