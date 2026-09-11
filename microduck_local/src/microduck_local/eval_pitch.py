@@ -303,7 +303,8 @@ def _seed_line(r: dict) -> str:
     own = r.get("ownGoals")
     return (f"seed {r['seed']}: goals left {r['left']} · right {r['right']} ({r['kickGoals']} kicked, {r['bumpGoals']} bumped)"
             f" · own {'—' if own is None else int(sum(own.values()))}"
-            f" · kicks {sum(r['kicks'].values())} (back {_ratio(r.get('kicksBack'), r.get('kickCount'))})"
+            f" · kicks {sum(r['kicks'].values())} (back {_ratio(r.get('kicksBack'), r.get('kickCount'))}"
+            f", back-line {_ratio(r.get('kicksBackLine'), r.get('kickLineCount'))})"
             f" · pushes {sum(r['pushes'].values())} · falls {r['falls']}"
             f" · progress {_fmt(r.get('ballProgress'), 'm/min')}"
             f" · possession {_fmt(r.get('possession'), 's/min')}")

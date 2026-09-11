@@ -401,6 +401,25 @@ def test_an_old_row_resumes_with_the_new_metrics_missing_not_zero(tmp_path):
     for field in METRIC_FIELDS:
         assert done[0][field] is None and _total(done[0], field) is None
     assert "progress —" in _seed_line(done[0])                    # and it prints as unmeasured
+    assert "back —, back-line —" in _seed_line(done[0])           # both shares, both unmeasured
+
+
+def test_the_seed_line_reads_each_back_share_out_of_its_own_denominator(tmp_path):
+    """`kicksBack` is out of every kick; `kicksBackLine` is out of the kicks
+    that moved the ball far enough to HAVE a line, which is a SMALLER number.
+    Printing the second over the first's denominator is exactly the confusion
+    the second column was added to prevent (12at), so the line carries both
+    ratios whole — and a `—` for a row written before the column existed,
+    rather than a 0 that would read as "no backward lines"."""
+    r = _row(0, kickCount={"left": 5, "right": 2}, kicksBack={"left": 1, "right": 0},
+             kickLineCount={"left": 4, "right": 1}, kicksBackLine={"left": 2, "right": 0})
+    assert "kicks 9 (back 1/7, back-line 2/5)" in _seed_line(r)
+
+    f = tmp_path / "before-the-column.jsonl"
+    f.write_text(json.dumps(_row(1, "shipped", kickCount={"left": 5, "right": 2},
+                                 kicksBack={"left": 1, "right": 0})) + "\n")
+    old = load_done(str(f), "shipped", 1, 300.0)[1]
+    assert "kicks 9 (back 1/7, back-line —)" in _seed_line(old)
 
 
 def test_the_ledger_summary_says_nothing_rather_than_zero_over_rows_that_predate_it(capsys, tmp_path):
