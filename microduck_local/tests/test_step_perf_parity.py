@@ -193,9 +193,10 @@ def test_rollout_fingerprint_matches_pre_optimization_golden(key):
     # or library is named before that.
     stale = gs.check_provenance(golden)
     assert len(got_episodes) == len(episodes), stale or "the episode count moved"
-    gs.close(got_episodes, episodes, stale or key)
-    if gs.same_cpu(golden):
-        # The CPU that recorded it: to the bit.
+    gs.close(got_episodes, episodes, stale or key, *gs.tol(golden))
+    if gs.bit_exact(golden):
+        # The machine that recorded it, on a platform whose bits are a
+        # contract (golden_store): to the bit.
         assert got_first == first_ep, stale or "a per-term sum moved (same model, same libraries, same CPU)"
         assert got_digest == digest, stale or "the rollout digest moved"
 

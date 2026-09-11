@@ -259,22 +259,27 @@ def test_full_bam_rollout_matches_pre_optimization_golden_bits():
     env, _ = _rollout()
     got = {"qpos": env.data.qpos, "qvel": env.data.qvel, "tau_last": env.bam.applied_torque,
            "fl_last": env.bam.last_frictionloss}
-    if gs.same_cpu(golden):
+    if gs.bit_exact(golden):
         for k, v in got.items():
             np.testing.assert_array_equal(v, _hex(g[k]), err_msg=stale or k)
         assert env.bam.last_vin == float.fromhex(g["vin_last"]), stale
     else:
-        # Another CPU of this platform: the same rollout, within ULP noise.
+        # Any host whose bits are not a contract (every hosted x86 runner —
+        # golden_store): the same rollout, within the measured cross-host
+        # noise and far inside anything the physics moving would produce.
+        rtol, atol = gs.tol(golden)
         for k, v in got.items():
-            np.testing.assert_allclose(v, _hex(g[k]), rtol=gs.RTOL, atol=gs.ATOL, err_msg=stale or k)
-        np.testing.assert_allclose(env.bam.last_vin, float.fromhex(g["vin_last"]), rtol=gs.RTOL, atol=gs.ATOL)
+            np.testing.assert_allclose(v, _hex(g[k]), rtol=rtol, atol=atol, err_msg=stale or k)
+        np.testing.assert_allclose(env.bam.last_vin, float.fromhex(g["vin_last"]), rtol=rtol, atol=atol)
 
 
 def test_full_bam_rollout_torque_sum_matches_golden():
     """Every applied torque over the rollout, not just the final state.
 
     The sum was accumulated as sum-per-step-then-add in capture order, so it
-    is reproducible exactly (same additions in the same order)."""
+    is reproducible exactly (same additions in the same order) — on the one
+    machine that did them: the additions are the same, the rollout feeding
+    them is a host's arithmetic (golden_store)."""
     import golden_store as gs
     golden = _golden()
     if golden is None:
@@ -282,10 +287,11 @@ def test_full_bam_rollout_torque_sum_matches_golden():
     _, taus = _rollout()
     total = float(sum(float(np.sum(t)) for t in taus))
     want = float.fromhex(golden["data"]["tau_sum"])
-    if gs.same_cpu(golden):
+    if gs.bit_exact(golden):
         assert total == want, gs.check_provenance(golden)
     else:
-        np.testing.assert_allclose(total, want, rtol=gs.RTOL, atol=gs.ATOL, err_msg=gs.check_provenance(golden))
+        rtol, atol = gs.tol(golden)
+        np.testing.assert_allclose(total, want, rtol=rtol, atol=atol, err_msg=gs.check_provenance(golden))
 
 
 # ------------------------------------------------- the fused substep kernel
