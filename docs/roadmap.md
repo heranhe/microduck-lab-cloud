@@ -11227,7 +11227,9 @@ strikes, then marches in place while the range slot sits pinned at 1.00.
 That is the vendored kick's failure mode, in the vendored kick's places.
 
 **Verdict: 12as's follow-up (2) is ANSWERED, and the answer is that the two
-routes bracket the trade rather than close it.** The left foot's nudge was
+routes bracket the trade rather than close it.** *(Superseded by Follow-up H:
+the from-scratch left foot strikes at 5.6 % whiff on the TRUE ball — it was
+reading the tracker, not failing to strike.)* The left foot's nudge was
 the STRIKE and not the observation: restore the strike and the play numbers
 come back exactly (7.9 % against the vendored 8.5 %, 1.06 m against 1.13 m),
 with the bench box coverage, the blindfold row and the slot-sensitivity all
@@ -11472,6 +11474,92 @@ by accident: **a 25 Hz detector takes the BLIND left foot from 8.5 % to
 4.8 % whiff (p 0.025) with the shipped policies unchanged** — a perception
 knob, not a policy, and the cheapest kick win measured on this line so far.
 It needs a second pair of blocks and a falls read before it can be quoted.
+
+**Follow-up H (56f8866, `scripts/probe_sensed_slots.py`, `MICRODUCK_SENSED_TRUTH=1`):**
+the last mismatch on the list — the tracker's ~5.5 cm placement error
+(`brain/tracker.py::_place`) — is **not** exonerated. It is the WHOLE of the
+sensed left foot's gap, and the next cut is the tracker, not the recipe.
+
+*What the slots actually carry inside a kick window* (4 seeds x 40 episodes a
+foot; 1387 right-foot and 1697 left-foot window ticks; TRACK = what the kick
+read, TRUTH = the recipe's own projection of the true ball, the same code the
+ablation runs):
+
+| | right foot | left foot |
+|---|---|---|
+| ticks with a ball in the slots (track / truth) | 98% / 100% | 94% / 100% |
+| `seen` slot[53] (track / truth / agree) | 34% / 70% / 48% | 17% / 70% / 44% |
+| `conf` slot[54] median (track / truth) | 0.80 / 1.00 | 0.26 / 1.00 |
+| track age at the tick, median (p90) | 0.22 s (1.60) | **1.30 s** (2.20) |
+| TRACK−TRUTH bearing, median (p90) | 6.1° (13.8°) | 7.4° (16.4°) |
+| TRACK−TRUTH range, median (p90) | 4.9 cm (8.7) | 3.8 cm (5.8) |
+| track placement vs the true ball, median (p90) | **5.1 cm** (9.2) | **4.1 cm** (6.4) |
+| truth placement vs the true ball, median (p90) | 0.27 cm (2.5) | 0.21 cm (0.7) |
+
+So the recipe's own projection is good to ~2 mm and the track is twenty times
+worse, exactly the 5.5 cm `_place` already documents — but the FRESHNESS slots
+are the louder mismatch: training showed `seen` on 70% of ticks and the track
+manages 17% on the left foot, which swings on an estimate a median 1.30 s old.
+
+*The five-arm gym* (`scripts/kick_gym.py --episodes 40 --seeds 12 --jobs 3`,
+blocks 0-11 and 100-111 pooled, 24 seeds; each sensed arm pins ONE foot and
+leaves the other the shipped pair, so the pinned row is the treatment and the
+whiff verdicts are `kick_gym`'s own two-proportion z + MDE):
+
+| kick_right | swings | whiff | vs base | ±MDE | p | verdict | conn. travel | advance | fell |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped (base) | 386 | 9.6% | — | — | — | — | 0.74 m | 0.24 m | 0.0% |
+| sensed, track | 363 | 5.0% | −4.6% | 4% | 0.015 | effect | 0.98 m | 0.78 m | 0.0% (p 1.00) |
+| sensed, TRUTH | 356 | 3.1% | −6.5% | 4% | 0.000 | effect | 1.12 m | 0.94 m | 0.3% (p 0.30) |
+
+| kick_left | swings | whiff | vs base | ±MDE | p | verdict | conn. travel | advance | fell |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped (base) | 433 | 8.5% | — | — | — | — | 1.13 m | 0.72 m | 0.5% |
+| sensed, track | 420 | 33.6% | +25.0% | 5% | 0.000 | effect | 0.21 m | 0.12 m | 0.0% (p 0.16) |
+| sensed, TRUTH | 408 | 5.6% | −2.9% | 3% | 0.102 | null | 1.22 m | 0.94 m | 0.0% (p 0.17) |
+
+*The verdict.* The prediction registered before the block was: "if the left foot
+with truth still whiffs ~34%, the placement error is exonerated and the left-foot
+gap is entirely the strike (follow-up F)". It came back the other way. On a clean
+estimate the left foot whiffs 5.6%, and its connected travel (1.22 m) and advance
+(0.94 m) BEAT the shipped left foot's 1.13 / 0.72 — the network can strike; what
+it could not do was strike at where the track said the ball was. Follow-up F's
+bracket ("from scratch = reads, can't strike") was measuring the tracker, not the
+policy. The right foot, which already won in play, wins again with truth
+(5.0 → 3.1%, travel 0.98 → 1.12 m), so the placement error costs both feet — it
+is merely survivable for the foot whose strike is robust to it. Falls are flat on
+every arm (0.0–0.9%, every p > 0.15) and nothing ships: the ablation defaults off
+and is byte-identical off, `policies/kick/` is still the w12 pair, and the sensed
+pair is still out of play.
+
+*What the ablation does NOT separate, and what settles it next.* The truth arm
+swaps three things at once — placement (5.1 / 4.1 cm → 0.2 cm), `seen`
+(17–34% → 70%) and the held estimate's age (1.30 s → fresh). The probe table
+prices each, but only a gym arm can say which one the kick is paying for. The
+next cut is a second ablation mode that keeps the TRACK's `xy` and gives it the
+recipe's `seen`/`conf`, and its mirror (truth `xy`, the track's freshness), run
+as two more 24-seed arms on the left foot where the effect is 25 points and
+therefore cheap to resolve at this MDE. If freshness is the lever, the fix is in
+`brain/tracker.py` (coast/refresh at line-up range) and is a real robot change;
+if placement is, it is the detector's bearing and range noise, which `_place`
+already says is the dominant term and which no re-anchoring fixes.
+
+Reviewer's re-read of the ten row files: right 9.6 / 5.0 / 3.1 %, left 8.5 /
+33.6 / 5.6 %, falls 0-2 per arm — the tables reproduce.
+Row files: `runs/sensedplay/gym-{ship,sr-track,sr-truth,sl-track,sl-truth}-b{0,100}.jsonl`,
+slot ticks `runs/sensedplay/slots-{sr,sl}.jsonl`.
+
+    # the slot error (per foot)
+    MICRODUCK_SKILL_KICK_RIGHT=<sensed right>.onnx uv run python scripts/probe_sensed_slots.py \
+        --right <sensed right>.onnx --seeds 4 --episodes 40 --jobs 3 --out runs/sensedplay/slots-sr.jsonl
+    uv run python scripts/probe_sensed_slots.py \
+        --left <sensed left>.onnx --seeds 4 --episodes 40 --jobs 3 --out runs/sensedplay/slots-sl.jsonl
+
+    # one gym arm (repeat with --seed0 100; drop the env vars for the shipped arm)
+    MICRODUCK_SKILL_KICK_RIGHT=<sensed right>.onnx MICRODUCK_SENSED_TRUTH=1 \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 0 --jobs 3 \
+        --out runs/sensedplay/gym-sr-truth-b0.jsonl
+    uv run python scripts/compare_gym.py ship=... sr-track=... sr-truth=... sl-track=... sl-truth=...
 
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
