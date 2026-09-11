@@ -9876,6 +9876,133 @@ seed-1 and approach runs are grouped `lastmetre` while 12as's v1 runs are
 show one experiment. Commit fbe84de; runs `lastmetre-{right,left}-s1` (+ `-rung1`, `-rung2`),
 `lastmetre-{right,left}-v1-approach`, `lastmetre-{right,left}-approach-far`.
 
+**It is in play now, behind a sidecar flag (built 2026-09-10, commit 59cda79).**
+The three things this item said the wiring needed, built and defaulted OFF:
+`World.skill_sidecar` / `World.skill_sensed` read a new `"sensed": true` key
+out of the same `policies/<skill>/*.json` that `kick_exits` already reads
+`exit_rad` from; `_skill_cmd` writes the duck's ball track into `head_cmd[0:4]`
+every tick of the kick window when the swinging skill is sensed; `set_cmd`'s
+`head=None -> 0.0` default and every other skill are untouched. The encoding is
+this recipe's, imported from it - `LM_RANGE_SCALE` and `LM_MEM_TAU` come out of
+`behaviors/lastmetre.py`, so the trained units and the played units cannot drift
+apart. The track is `brain/tracker.py`'s own `Tracker` over THIS duck's detector
+frames and odometry with `TrackerParams.for_detector(<its preset>)`, kept warm
+every tick (a tracker started at the swing has no memory to coast, and the
+sighting arrives on 58 % of swings - 12ak), read off `xy` through
+`bearing_from` / `range_from` whenever the track has a position (12ar: a kick
+window is ENTERED walking), and forgotten with the duck (respawn, kickoff,
+reset) and on a throw-in. `Chase` is not reachable from the World - every
+driver hands `apply_intent` an `Intent` and nothing else - so this is the
+brain's tracker CLASS over the same sensors, not the brain's instance.
+A sidecar WITHOUT the field is the blind world to the bit: no tracker is built,
+no tick is spent, and a 12 s 2v2 rollout with two forced kick windows digests
+identically (`qpos` per tick) against a PYTHONPATH copy of the pre-edit package.
+Locked by `tests/test_sensed_kick_world.py` (8 tests: the units, the mirror, the
+clip, the decay, the coast off `xy`, the all-zero default, the respawn, and that
+an old three-field sidecar still loads).
+
+**Measured with the per-swing instrument.** `kick_gym --episodes 40 --seeds 12`
+on two blocks (seeds 0-11, 100-111), both pairs pinned through
+`MICRODUCK_SKILL_KICK_*` and asserted on the CONSTRUCTED World before any
+compute (`World.skill_path` / `skill_sensed` / `kick_exits` printed per arm).
+The shipped arm reproduces 12at's `w12` blocks swing for swing (188/132 and
+197/120 left/right exits, medians +14/+0 and +11/+3 deg), which is the check
+that the edit did not move the blind path.
+
+**The exit was calibrated first** - 12at's failure was a wrong sidecar, and the
+sensed pair has no bench-to-play mapping at all. One block at `exit_rad` 0.0
+(`runs/sensedplay/gym-sensedcal-b0.jsonl`, 408 swings, whiff 20 %) gave the
+in-play medians **left +0.2993 rad (+17.1 deg, n = 51, 95 % CI +14.3..+20.3) and
+right -0.1331 rad (-7.6 deg, n = 142, CI -10.2..-3.9)**. Written into the scratch
+sidecar, the real blocks read the aim error back as -0 deg / +1 deg, so the
+arms below are not measuring a mis-aimed selector.
+
+| block | arm | swings | whiff | conn | fell | ledger back | backward LINE | within 45 deg | advance med |
+|---|---|---|---|---|---|---|---|---|---|
+| 0-11 | shipped | 414 | 10.4 % | 371 | 0.5 % | 20.3 % | 5.3 % | 82.8 % | 0.405 m |
+| 0-11 | **sensed pair** | 409 | **17.1 %** | 339 | 0.0 % | 12.2 % | 0.0 % | 97.8 % | 0.236 m |
+| 100-111 | shipped | 405 | 7.7 % | 374 | 0.0 % | 21.0 % | 8.5 % | 80.4 % | 0.503 m |
+| 100-111 | **sensed pair** | 408 | **23.5 %** | 312 | 0.0 % | 12.3 % | 1.0 % | 92.4 % | 0.147 m |
+
+whiff +6.7 pp (MDE 4.7, p 0.005, worse on 11/12 seeds, sign p 0.001) and
++15.8 pp (MDE 4.9, p 0.000, worse on 12/12, sign p 0.000). Pooled over the 24
+seeds: 9.0 -> 20.3 % (MDE 3.4), connected kicks 745 -> 651, advance median
+0.456 -> 0.161 m and 423 -> 309 m of it in total, backward LINES 6.9 -> 0.5 %
+(MDE 2.1), touches within 45 deg of the mouth 82 -> 95 %, fell-in-window
+0.2 -> 0.0 % (MDE 0.6: NO RESULT). Body turn is not a gym column - that bar is
+`probe_kick_recover.py`'s and was not run.
+
+**The pair's loss is ONE FOOT, and the isolating arm says so.** Pooled per foot
+against the same shipped blocks:
+
+| foot | shipped whiff | sensed whiff | shift | shipped travel | sensed travel |
+|---|---|---|---|---|---|
+| left | 8.5 % (n 433) | **34.5 %** (n 412) | +25.9 pp, MDE 5.3, p 0.000 | 1.13 m | **0.19 m** |
+| right | 9.6 % (n 386) | 5.9 % (n 405) | -3.7 pp, MDE 3.7, p 0.054 | 0.74 m | 0.94 m |
+
+So a third arm, which the per-skill sidecar makes free: the sensed RIGHT foot
+only, the vendored left untouched (`runs/sensedplay/gym-sensedright-b{0,100}.jsonl`).
+The left foot is then the control - 8.5 -> 7.1 % (MDE 3.5, p 0.424), i.e.
+nothing else in the pipeline moved - and the right foot is a **win**:
+**9.6 -> 5.0 % whiff (MDE 3.7, p 0.015)**, connected travel 0.74 -> 0.98 m,
+advance median per right swing 0.239 -> 0.777 m. Whole-arm: whiff 10 -> 5 %
+on seeds 0-11 (p 0.006, better on 11/12 seeds, sign p 0.006) and 8 -> 7 % on
+100-111 (p 0.764, MDE 3.6 - a null, not an effect); pooled 9.0 -> 6.2 %
+(MDE 2.6, p 0.028), connected kicks 745 -> 776, advance median 0.456 -> 0.749 m
+(total 423 -> 499 m), backward LINES 6.9 -> 4.0 % (p 0.018), fell-in-window
+0.2 -> 0.5 % (2 -> 4 swings, MDE 0.6, p 0.42: NO RESULT, and the one column
+that could still bite).
+
+**It is not the observation and it is not the aim - it is the STRIKE.** The
+slots have a reachable set: over the gym's own episodes the four carry a ball on
+**97 % of kick-window ticks** (median range slot 0.615 = 0.154 m, median
+|bearing| 0.244 = 22 deg). The belief at the swing is the same in both arms
+(median error of the brain's predicted ball against truth 0.042 m shipped vs
+0.039 m sensed), and whiff does not sort by that error in either. The sensed
+pair's aim is BETTER than the shipped pair's by every direction column. What is
+worse is the contact: **on the sweet spot, where the plan puts the ball, the
+sensed pair whiffs 11 % against 2 % and its connected touches travel 0.65 m
+against 1.00 m**; only 20 % of sensed LEFT swings move the ball far enough in
+0.5 s to have a direction at all, against 89 % of shipped left swings. That is
+12b's own finding in play - "a random swing at a ball spread over 12 x 12 cm is
+paid a little everywhere and the optimiser settles on the nudge" - which 12b
+fixed by warm-starting the vendored strike, the route this recipe could not take
+(the strike's `VecNormalize` was fitted with these four slots carrying
+keep-alive noise). The bench's coverage metric asks whether the ball MOVES; the
+gym asks how far, and the left foot of this pair moves it 0.19 m.
+
+Reviewer's re-read of the seven row files: whiff reproduces to the decimal
+(pair 9.0 → 20.3 %, per foot left 8.5 → 34.5 %, right 9.6 → 5.9 %; right-only
+arm 6.2 %, left control 7.1 %, right 5.0 %).
+
+**Verdict.** The wiring stands and is the right shape: default off, byte-identical
+without the field, exit calibrated, and it turns the blindfolded row into a
+sighted one (97 % of window ticks). `lastmetre-right-v1` in play BEATS the
+vendored right foot on whiff, travel and advance; `lastmetre-left-v1` is a nudge
+in play despite 95-99 % box coverage on the bench; the pair together is worse
+than the shipped pair and must not ship. `policies/kick/` is unchanged.
+
+**Known mismatches between the recipe's world and the arena's, both unmeasured
+levers.** The recipe's detector runs at 25 Hz (`LM_DETECT_EVERY`, find_ball's
+cadence); the arena's camera is `DetectorSpec.rate_hz = 10`, so `seen` reads 1
+on 23 % of window ticks here and the confidence slot's median is 0.39 (an
+estimate ~0.94 s old) where training had the ball in frame 40-76 % of steps. And
+the played slots come from a smoothed, associated, odometry-coasted TRACK with
+the detector's real placement error (~5.5 cm at line-up range, `Tracker._place`),
+not from the recipe's own per-step re-projection of a jittered detection.
+
+-> **What settles it next:** (1) the right foot alone on a 2v2 ledger - 24 paired
+`eval-pitch` seeds with only `MICRODUCK_SKILL_KICK_RIGHT` sensed, primary
+registered as ballAdvance (19 % MDE at 24 seeds), because the gym says the win is
+in advance (+0.29 m a right swing) and whiff is only powered on one block;
+(2) the left foot is a TRAINING problem, not a wiring one - rerun it with a
+rung 0 that holds the strike (or distil the vendored left strike into the sensed
+obs, 250x120 epochs per the distill note) and re-measure here before anything
+else; (3) close the two mismatches above one at a time - a 25 Hz detector preset
+for the pitch, and the `seen`/`conf` distribution measured against the recipe's
+own - since either could be the whole left-foot gap and neither costs a
+retrain to test.
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
