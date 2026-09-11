@@ -4696,6 +4696,96 @@ this stack has none of them.
       `tests/test_kick_gym_duel.py`). Row files: `runs/duelgym/off-b0.jsonl`,
       `d03-b0.jsonl`, `d015-b0.jsonl` and the same three at `-b100`.
 
+      **The arm that answers it, BUILT and MEASURED (2026-09-10): the block's
+      first touch is the COLLISION on the way in, so moving the block spot off
+      the own-goal line throws the touch away instead of turning it forward.
+      `duel_side` ships off.** C.4's open question was whether the goal-side
+      touch can be turned FORWARD so the 0.029 m is not handed straight back.
+      The d015 rows answer a prior one first, and it is not where the item
+      assumed. A duck standing ON the block spot touches the ball away from our
+      goal by construction — but at the moment of our first touch the duck is a
+      median **0.317 m from its own spot and has NEVER reached it** (0 of 42
+      within `intercept_tol`), and its state is `retreat` 33%, `chase` 26%,
+      `duel` only 17%. Every touch we win is made EN ROUTE, on a straight servo
+      line to a spot on the FAR side of the ball: the duck is up-pitch of the
+      ball on 50% of its own first touches, the ball leaves with a negative
+      x-velocity on 64%, and that velocity predicts the 2 s advance at r=0.87.
+      The metres are a PATH problem, not a stance problem.
+
+      That also retires the turn-and-shield variant before it is built (rule
+      0's reachable set): `dueling` is true at only 26% of our first touches,
+      so a contact-gated turn acts on ~4% of episodes against an 0.012 m MDE on
+      our advance — `contest_margin`'s population mistake in a new place.
+
+      So the arm is the path fix. `ChaseParams.duel_side` offsets the block spot
+      off the ball-to-own-goal line, on the side of it the duck is ALREADY on,
+      so the walk goes round the ball rather than across it. (The duck's own
+      side and not the nearer board's on purpose: a board-side sign helps on the
+      half of draws where the duck is already board-side and steers the walk
+      further across the ball on the other half — a coin flip against the
+      mechanism.) 0 = off, and byte-identical row for row to the shipped chain
+      AND to the `duel=0.15` arm it is measured against; `tests/test_duel.py`.
+
+      Measured, 40 episodes x 12 seeds an arm a block, discovery seeds 0-11 and
+      fresh 100-111, 960 episodes an arm pooled (`runs/duelgym/`):
+
+      | b0 / b100 | shipped | duel=0.15 | +side 0.15 | +side 0.25 |
+      |---|---|---|---|---|
+      | we touch first | 9.4 / 7.9% | **14.8 / 17.1%** | 4.6 / 6.5% | 1.0 / 0.8% |
+      | our duck touched it AT ALL | 10.6 / 11.5% | **21.0 / 21.9%** | 8.1 / 10.6% | 5.0 / 3.3% |
+      | our advance | +.094 / +.040 | −.093 / −.111 | +.028 / −.075 | −.015 / −.015 |
+      | their advance | +.060 / +.049 | **+.002 / +.005** | +.018 / +.030 | +.020 / +.041 |
+      | net ball m/ep | −.026 / −.026 | −.021 / −.027 | −.010 / −.028 | −.016 / −.030 |
+      | the rule computed / the branch RAN | 0 / 0% | 62.6-63.9 / 36.6-36.8% | 68.3-69.3 / 49.4-51.0% | 71.1-72.3 / 59.0-61.1% |
+      | our duck fell | 0 of 480 | 0 of 480 | 1 / 0 of 480 | 0 of 480 |
+
+      Against the arm it exists to improve (`duel=0.15`, 24 seeds pooled): first
+      touch 15.9% → **5.5%** (−10.4 pp, MDE 2.8, p=0.0000) and → **0.9%**
+      (−15.0 pp, p=0.0000), WORSE on 0 of 24 seeds in both cases. Against
+      shipped it is −3.1 pp (p=0.008) and −7.7 pp (p=0.0000) — the offset arms
+      win the ball LESS OFTEN THAN THE SHIPPED BRAIN. The net moves on neither
+      block and is not resolvable at this size on any arm (MDE 76-118% of
+      baseline): read every net row as "nothing suggests a gain", not as a null.
+
+      **It does not trade the touch for the metres; it throws the touch away**,
+      and the touched-at-all row is the mechanism in one number. The block's
+      first touch is not a stance — it is the collision on the way in, and it
+      exists ONLY because the spot sits inside `duck_touch` (0.22). An offset of
+      0.15 puts the spot 0.21 m off the ball and 0.25 puts it 0.29, so the walk
+      that used to end in the ball now ends beside it, and the opponent's touch
+      rate and advance both climb back (65.8/64.4% → 74.8/72.9%, +.002/+.005 →
+      +.020/+.041). Note the shape of the failure: the `duel` branch RUNS more
+      as the offset grows (37% → 51% → 61% of contest ticks, because a spot
+      further from the ball is preempted by `avoid` less often) and wins the
+      ball less. A knob can fire harder and do worse — a firing rate is a
+      licence to read a null, never evidence of a gain.
+
+      **The pitch block was NOT run**, by the plan's own gate: it was conditional
+      on the net advance moving on both blocks, and the net moved on neither.
+      Falls stay untested by this instrument as before — 1 fall episode in the
+      1,920 new ones, and a 6 s event has no run-up to fall in.
+
+      `duel_side` ships OFF at 0.0, and `duel` still ships off at 0.0. What this
+      closes: the touch's DIRECTION is not a spot knob's to fix. Any variant
+      that keeps the touch must keep the spot inside `duck_touch`, and then the
+      contact direction is set by where the duck STARTED, not by where the spot
+      is. What is left for anyone re-opening it is therefore the approach
+      (route round the ball to a spot inside `duck_touch`, which is a path
+      planner rather than a geometry constant) or the walker (roadmap B: it can
+      do nothing against another body except stand still).
+
+      Two columns the instrument wants if this is re-opened: the state at the
+      touch and at +0.5 / +2.0 s, and `touch_ux` — the cosine of the duck-to-ball
+      direction on the own-goal axis at our first touch, which predicts the 2 s
+      advance at r=0.87 and would turn the advance column from an outcome into
+      a diagnosis. Both came from a scratch probe here; the row file has only
+      `state05`, which is the state at 0.5 s of the EPISODE.
+
+      Reviewer's re-read of the eight row files: first touch, touched-at-all and
+      both advances reproduce per arm and block. Commit 314dd74 (`ChaseParams.duel_side`, `tests/test_duel.py`). Row files:
+      `runs/duelgym/d015s15-b0.jsonl`, `d015s15-b100.jsonl`, `d015s25-b0.jsonl`,
+      `d015s25-b100.jsonl` (with the existing `off-` and `d015-` pairs as base).
+
 #### D. Team play — after C, not before
 
 - [x] **D.1 Passing — BUILT and MEASURED (2026-09-07): a kick cannot pass
@@ -10233,6 +10323,134 @@ Reviewer's reproduction (4 seeds, right foot, 4 s): far v1 moves the ball on
 all three. Commit 45d3a81; runs `lastmetre-far-{right,left}-{rung1,rung2,v1,approach}`
 (the finding is written into each `behavior.json`). Full suite green (1260
 passed, 14 skipped).
+
+**Follow-up D: the second training seed says the slot PERMITS the approach
+and does not buy it — one seed walks to the ball, the other leans at it
+(2026-09-10).**
+
+Follow-up C's own "honest next cut", run. The same chain at `--seed 1`, both
+feet, rungs 1-3 only (no approach rung — C measured that it costs falls and
+buys only reach): `lastmetre-far-{right,left}-s1-{rung1,rung2}` and
+`lastmetre-far-{right,left}-s1`, 4M steps a foot, 32 envs, `face_line` 12.0,
+group `lastmetre`. 13 min a chain; `log_std` flat, std 0.609 → 0.582-0.587,
+no ratchet. Final `ep_rew` 501.9 / 415.8 against seed 0's 566.4 / 431.9 at
+matched `ep_len` — the curve saw something, at 11 % and 4 %, which is nowhere
+near enough to have called what the probe found.
+
+Every `far-v1` and `shipped` row below re-ran identical to Follow-up C and to
+Follow-up A (right v1 96/100/100, falls 0/1/0, turn 36/25/24, approach
+0.344/0.363 m and 100/100 % at 0.35 m; left v1 100/100/100, falls 3/10/14) —
+the positive control for everything else here.
+
+**The near game** (`grid_kick_bench_sensed.py`, 2 seeds a cell, level /
+line-up gaze / neck split; poses at 12 seeds; env named per row):
+
+| arm | env | box | sweet | falls /180 | \|turn\| | pose whiff | pose falls /60 | travel |
+|---|---|---|---|---|---|---|---|---|
+| `lastmetre-far-right-v1` (seed 0) | `kick_right_sensed_far` | 96/100/100 % | 100 % | 0/1/0 | 36/25/24° | 0 % | 0 | 1.22-1.55 m |
+| **`lastmetre-far-right-s1` (seed 1)** | `kick_right_sensed_far` | **93/92/94 %** | 100 % | **0/1/4** | **19/18/23°** | 0 % | **0** | 1.06-1.27 m |
+| the same policy, BLINDFOLDED | `kick_right` | 30/79/73 % | 50/100/100 % | 0/3/2 | 8/47/30° | 42/42/0/0/0 % | 7 | 0.13-1.09 m |
+| shipped `kick_right.onnx` | `kick_right` | 69/67/77 % | 100 % | 7/6/6 | 13/21/14° | 0 % | 1 | 1.09-1.32 m |
+| `lastmetre-far-left-v1` (seed 0) | `kick_left_sensed_far` | 100/100/100 % | 100 % | 3/10/14 | 23/24/27° | 0 % | 0 | 1.00-1.27 m |
+| **`lastmetre-far-left-s1` (seed 1)** | `kick_left_sensed_far` | **99/99/99 %** | 100 % | **3/0/2** | 23/21/26° | 0 % | **0** | 0.70-1.15 m |
+| the same policy, BLINDFOLDED | `kick_left` | 17/35/50 % | 22/72/100 % | 0/0/0 | 14/9/2° | 100/92/25/0/0 % | 2 | 0.00-0.51 m |
+| shipped `kick_left.onnx` | `kick_left` | 82/79/82 % | 100 % | 5/5/8 | 7/9/5° | 0 % | 0 | 1.01-1.21 m |
+
+**Trunk advance and ball travel vs ball distance** (`probe_kick_approach.py`,
+8 seeds a cell, 4 s horizon, ball 0.042 m to the kicking foot's side; advance
+at 4 s / `moved` = share of seeds the ball travelled ≥ 0.10 m, level gaze /
+neck −0.30 + head +0.60):
+
+| foot | ball ahead | **far v1** (seed 0) | **far s1** (seed 1) |
+|---|---|---|---|
+| right | 0.16 m | 0.22/0.11 m, 100/100 % | 0.15/0.14, 100/100 |
+| | 0.22 m | 0.21/0.16, 100/100 | 0.11/0.13, **75/38** |
+| | **0.28 m** | **0.26/0.24, 100/100** | 0.11/0.12, **0/0** |
+| | **0.35 m** | **0.34/0.36, 100/100** | 0.10/0.12, **0/0** |
+| | 0.45 m | 0.25/0.28, 0/12 | 0.09/0.12, 0/0 |
+| | **0.60 m** | **0.01/0.04, 0/0** | **0.10/0.10, 0/0** |
+| left | 0.16 m | 0.16/0.17, 100/100 | 0.14/0.07, 100/100 |
+| | 0.22 m | 0.21/0.19, 100/100 | 0.19/0.17, 100/100 |
+| | **0.28 m** | **0.23/0.26, 100/100** | 0.18/0.20, **62/62** |
+| | **0.35 m** | **0.28/0.30, 75/88** | 0.18/0.18, **0/0** |
+| | 0.45 m | 0.21/0.23, 0/12 | 0.18/0.16, 0/0 |
+| | 0.60 m | 0.02/0.04, 0/0 | 0.10/0.05, 0/0 |
+
+**The right seed-1 tip's advance is FLAT, and that is the tell.** 0.09-0.13 m
+at every distance *including 0.60 m*, where the seed-0 tip collapses to
+0.01-0.04 m. A policy that walks toward a ball advances less as the ball gets
+further out of reach; a policy whose "advance" is the same 10 cm whether the
+ball is at 0.16 m or 0.60 m is not walking at all. **The render says the same
+thing without arithmetic**: `render-rollout` on the right s1 tip, far window
+pinned to 0.30-0.45 m, 3 episodes — it drops into a crouched forward lean at
+0.36 s and holds it for the remaining 3.6 s (both feet on the floor 86 % of
+frames, airborne 2 %, trunk_z 0.099 against the 0.120 STAND reference, tilt
+16-18°, zero reversals), the range slot falls 0.57 → 0.42 in the first 1.8 s
+and then does not move again, and the ball is never touched. The LEFT s1 tip
+genuinely walks — both feet down only 22-25 % of frames, trunk at stand
+height, the slot falling 0.57 → 0.26 and 0.73 → 0.40 over the clip — it is
+simply slower than seed 0 and runs out of clip.
+
+**What survives the seed and what does not.** Box coverage spread is 3/8/6 pp
+(right) and 1/1/1 pp (left) against a gap over the shipped blind pair of
++17..+25 pp and +17..+20 pp — so the near-game claim reproduces, as it did in
+Follow-up A for the 0.25 recipe, and `far v1`'s "96-100 %" reads 92-94 % on
+the right at the second seed. 0 % pose whiff at all five poses and 0
+pose-bench falls reproduce on both feet. Everything else in Follow-up C's
+verdict is seed: the |turn| median goes 36/25/24 → **19/18/23** on the right
+(better, and the 36° cell does not reproduce — a 17° swing on one cell), falls
+go 0/1/0 → 0/1/4 on the right and 3/10/14 → **3/0/2** on the left (opposite
+directions on the two feet, at an n where a fall count is not an instrument),
+pose travel drops 1.22-1.55 → 1.06-1.27 and 1.00-1.27 → 0.70-1.15, and C's
+"the far recipe leans less on the observation" evaporates — the right
+blindfold row reads **30/79/73 %** against C's 80/90/80.
+
+**Verdict: the 0.60 m range slot is NECESSARY for the approach and not
+SUFFICIENT for it, so the approach cannot be credited to the slot.** Both
+0.25 m arms move the ball on 0 % of seeds at every distance past 0.25 m on
+both training seeds — that part of Follow-up B/C stands. But of the two seeds
+trained under the wider slot, one walks to a ball at 0.35 m on both feet and
+the other leans at it on the right and stops at 0.28 m on the left. The
+difference between the two runs is not a measurement question (0/16 against
+16/16 draws at 0.28 and 0.35 m on the right); it is run-to-run variance, and
+at n = 2 training seeds neither run is known to be the typical one. The
+20° turn bar is still missed at the neck split on both right seeds and at all
+three gazes on both left seeds. **Recommended: keep the recipe, do NOT promote
+anything into `policies/kick/` (unchanged from C, now on two seeds), and stop
+quoting the far v1 approach row as a property of `kick_{side}_sensed_far`.**
+The honest next cut is to stop hoping the approach emerges: it appears in one
+seed of two from the near box alone, which by the playbook's own rule is an
+exploration lottery, and the thing that would make it reliable is a rung that
+SPAWNS the far ball (the approach rung, whose cost C already measured at
+12/13/6 and 40/87/109 falls per 180) — so the question worth the next 4M steps
+is whether the approach rung's falls are themselves a seed, not whether the
+slot alone can be trusted.
+
+    # the chain (both feet, seed 1, 32 envs, ~13 min a foot on this Mac)
+    MICRODUCK_KICK_BOX_AHEAD=0.075,0.105 MICRODUCK_KICK_BOX_SIDE=0.027,0.057 \
+    MICRODUCK_LM_GAZE_NECK=-0.30,-0.15 MICRODUCK_LM_GAZE_HEAD=0.45,0.60 MICRODUCK_LM_GAZE_YAW=0.30,0.50 \
+      uv run train-behavior kick_right_sensed_far --run-name lastmetre-far-right-s1-rung1 --envs 32 \
+      --steps 1000000 --seed 1 --weights-json '{"face_line": 12.0}' --group lastmetre --title ... --description ...
+    # rung 2: same gaze, BOX 0.06,0.12 / 0.03,0.09, --init-from runs/lastmetre-far-right-s1-rung1
+    # tip:    BOX 0.04,0.16 / 0.01,0.13, GAZE -0.3,0.0 / 0.0,0.6 / 0.0,0.0, 2M, --init-from ...-s1-rung2
+    uv run python scripts/grid_kick_bench_sensed.py --foot right --seeds 2 \
+      far-s1:kick_right_sensed_far=runs/lastmetre-far-right-s1/policy.onnx \
+      far-v1:kick_right_sensed_far=runs/lastmetre-far-right-v1/policy.onnx \
+      far-s1-BLIND:kick_right=runs/lastmetre-far-right-s1/policy.onnx \
+      shipped=policies/kick/kick_right.onnx
+    # ...and the same with --mode poses --seeds 12
+    uv run python scripts/probe_kick_approach.py --foot right --seeds 8 --seconds 4.0 \
+      --distances 0.16,0.22,0.28,0.35,0.45,0.60 \
+      far-s1:kick_right_sensed_far=runs/lastmetre-far-right-s1/policy.onnx \
+      far-v1:kick_right_sensed_far=runs/lastmetre-far-right-v1/policy.onnx
+    uv run render-rollout --policy runs/lastmetre-far-right-s1/policy.onnx \
+      --behavior kick_right_sensed_far --out /tmp/rr --episodes 3 --seed 40 --camera side \
+      --env MICRODUCK_LM_FAR_PROB=1.0 --env MICRODUCK_LM_FAR_AHEAD=0.30,0.45 --env MICRODUCK_EPISODE_S=4.0
+
+Reviewer's reproduction (4 seeds, right s1): advance 0.09-0.12 m at 0.28,
+0.35 and 0.60 m alike, ball moved 0 % — the flat lean, not a walk.
+Runs `lastmetre-far-{right,left}-s1{,-rung1,-rung2}` (the finding is written
+into each tip's `behavior.json`). No new code; nothing promoted.
 
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
