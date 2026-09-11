@@ -10798,6 +10798,202 @@ numbers to compare against: on the pitch `seen` fires on **31 %** of sensed
 window ticks and the confidence slot's median is **0.787**, against the recipe's
 40–76 % in frame — a 25 Hz pitch detector preset is the one-line test.
 
+**Follow-up F: the left foot's nudge WAS the strike — cloning the vendored
+strike into the sensed observation restores the play numbers exactly, and
+loses the observation doing it (2026-09-10).**
+
+12as's open follow-up (2), taken by **route (b), distillation**, and the
+choice is itself a result: route (a)'s stated bar — "until it strikes like
+the vendored kick (bench travel >= 1.0 m, 0 % whiff)" — is ALREADY MET by
+`lastmetre-left-v1` (pose bench 0 % whiff at all five poses, travel
+1.10-1.55 m), and this recipe's stage 1 already IS the point-strike spot
+(`LM_BOX_STAGE0` = `BALL_OFFSET` +- `BALL_NOISE`). A rung 0 built to that bar
+cannot discriminate between the arm that works in play and the arm that does
+not, because the bench cannot tell them apart. Route (b) can: it produces the
+one thing the recipe is on record as unable to build.
+
+**Built: `scripts/distil_kick.py`** (new; `behaviors/lastmetre.py` is
+UNMODIFIED, allowlist test untouched). It rolls the BLIND teacher out inside
+the SENSED recipe's env and takes two views of every step: the teacher is fed
+the arena's own all-zero command block (`_skill_cmd`: "the kick's observation
+carries an all-zero command" — the distribution the vendored 8.5 % was
+measured under), and the student is fitted on the SAME step's sensed
+observation. Because the teacher is blind, its action is a function of
+proprioception only, so the four slots carry no information about the targets
+in the fitting set — the clone starts out ignoring them, with a
+`VecNormalize` whose statistics are the sensed distribution's. That is
+precisely the warm start 12b had and 12as could not take (the vendored
+normalizer was fitted with obs[51:55] carrying keep-alive noise, std
+0.009-0.029 at a 2M count). The fit is `distill.fit` UNCHANGED — same
+optimiser, same critic head on the teacher's own discounted returns, same
+log_std scaling — so the only new idea is the collection. Locked by
+`tests/test_lastmetre.py::test_the_distillation_sees_what_the_recipe_sees_and_shows_the_teacher_zeros`:
+the blanked slice must be the slice `_lm_sense` writes, and a collection must
+carry a MOVING ball in all four slots (a blind collection fits the degenerate
+normalizer this route exists to avoid, and still reports a fine MSE).
+
+The chain, seed 0, 32 envs, `face_line` 12.0, group `lastmetre`:
+`lastmetre-left-distil-rung0` (the clone: 1600 teacher episodes = 151 415
+transitions x 120 epochs, action MSE **0.00093 rad^2**, ~2.5 min) ->
+`-rung2` (1M on the 6 x 6 cm box with the gaze down, 86 s, ep_rew 1158 at
+ep_len 99.9) -> `-v1` (2M on the full box at any gaze, 160 s). `log_std`
+flat at **0.118-0.121 over the whole chain** — no ratchet.
+
+**The near game** (`grid_kick_bench_sensed.py`, left foot, 2 seeds a cell,
+level / line-up gaze / neck split; poses at 12 seeds; env named per row):
+
+| arm | env | box | sweet | falls /180 | \|turn\| | pose whiff | pose falls /60 | travel |
+|---|---|---|---|---|---|---|---|---|
+| shipped `kick_left.onnx` | `kick_left` | 82/79/82 % | 100 % | 5/5/8 | 7/9/5° | 0 % | 0 | 1.01-1.21 m |
+| `lastmetre-left-v1` (12as) | `kick_left_sensed` | 95/95/99 % | 100 % | 0/6/4 | 29/22/21° | 0 % | 0 | 1.10-1.55 m |
+| **`-distil-rung0` (the clone)** | `kick_left_sensed` | **75/79/80 %** | 100 % | 3/4/7 | 17/13/10° | 0 % | **0** | 1.03-1.22 m |
+| **`lastmetre-left-distil-v1`** | `kick_left_sensed` | **82/90/70 %** | 100 % | 3/5/4 | **8/8/5°** | 0 % | **0** | 0.89-1.02 m |
+| the same policy, BLINDFOLDED | `kick_left` | 82/88/68 % | 100 % | 2/5/4 | 8/8/7° | 0 % | 0 | 0.88-1.04 m |
+
+(The shipped and `lastmetre-left-v1` rows re-ran identical to 12as and to
+Follow-up A — 82/79/82 and 95/95/99, falls 5/5/8 and 0/6/4 — the positive
+control for everything new here.)
+
+**The clone IS the vendored strike, to the decimal.** Pose travel
+1.03/1.08/1.16/1.22/1.22 m against the shipped 1.01/1.07/1.13/1.20/1.21,
+exits within 1 deg at every pose, 0 % whiff, 0 falls — with ZERO PPO steps.
+Route (a)'s bar is cleared by the clone itself.
+
+**How much of the action the four slots carry** (the same ONNX run over ~39 000
+steps of the recipe's own finished world, each step scored twice: with the
+slots as the recipe writes them, and with the four blanked):
+
+| arm | mean \|ΔAction\| when the slots are blanked | as a share of \|action\| |
+|---|---|---|
+| `-distil-rung0` (the clone) | 0.0026 rad | **0.6 %** |
+| `lastmetre-left-distil-v1` (after 3M PPO) | 0.0220 rad | **4.5 %** |
+| `lastmetre-left-v1` (12as, from scratch) | 0.4545 rad | **94.6 %** |
+
+**In play** — the test that matters. `kick_gym --episodes 40 --seeds 12` on
+blocks 0-11 and 100-111, `MICRODUCK_SKILL_KICK_LEFT` pinned to a scratch copy
+of the tip (ONNX md5 identical) with a sidecar `{"sensed": true, "exit_rad":
+0.2142}`, `MICRODUCK_SKILL_KICK_RIGHT` unset so the right foot stays vendored.
+`World.skill_path` / `skill_sensed` / `kick_exits()` asserted on the
+CONSTRUCTED World AND off the constructed chase brain before any compute:
+path = the scratch copy, sensed True/False, exits `(0.2142, -0.036)`.
+**The exit was calibrated first**, as 12as/12at do: one block at `exit_rad`
+0.0 gave the in-play left median **+0.2142 rad (+12.3 deg, n = 195, 95 % CI
++5.9..+18.7)**; the vendored right read +0.5 deg on the same file, which is
+the control saying nothing else moved. Every arm ran against ONE frozen
+PYTHONPATH copy of `src/` + `scripts/` (HEAD `6c1b64c` plus three other
+agents' uncommitted edits), `policies` / `runs` / `.cache` symlinked.
+**The shipped arm re-run on that snapshot is identical EPISODE FOR EPISODE
+to `runs/sensedplay/gym-ship-b{0,100}.jsonl`** (`kick_gym.outcome_key`), so
+the blind path has not moved and 12as's rows stay comparable.
+
+| block | arm | swings | whiff | conn | fell | backward LINE | within 45 deg | advance med | advance total |
+|---|---|---|---|---|---|---|---|---|---|
+| 0-11 | shipped | 414 | 10.4 % | 371 | 0.5 % | 5.3 % | 82.8 % | 0.405 m | 211.4 m |
+| 0-11 | **left strike** | 421 | **6.4 %** | 394 | 0.2 % | 2.3 % | 89.8 % | 0.700 m | 246.9 m |
+| 100-111 | shipped | 405 | 7.7 % | 374 | 0.0 % | 8.5 % | 80.4 % | 0.503 m | 211.8 m |
+| 100-111 | **left strike** | 403 | **7.7 %** | 372 | 0.2 % | 3.9 % | 89.0 % | 0.527 m | 211.9 m |
+
+Whole-arm whiff -4.0 pp (MDE 3.8, p 0.038, better on 9/12 seeds, sign p 0.146)
+and +0.0 pp (MDE 3.7, p 0.984, better on 8/12, sign p 0.388). Pooled over the
+24 seeds: 9.0 -> 7.0 % (MDE 2.6, p 0.137 — a null), connected 745 -> 766,
+advance median 0.456 -> 0.600 m and 423 -> 459 m of it in total, backward
+LINES 6.9 -> 3.1 %, touches within 45 deg of the mouth 81.6 -> 89.4 %,
+fell-in-window 0.2 -> 0.2 %.
+
+**Per foot, pooled over both blocks, against 12as's own sensed pair:**
+
+| foot / arm | swings | whiff | shift vs shipped | connected travel |
+|---|---|---|---|---|
+| left, shipped | 433 | 8.5 % | — | 1.13 m |
+| left, **12as sensed pair** | 412 | **34.5 %** | +25.9 pp, MDE 5.5, p 0.000 | **0.19 m** |
+| left, **this arm** | 458 | **7.9 %** | **-0.7 pp, MDE 3.6, p 0.710** | **1.06 m** |
+| right (vendored in both) | 386 -> 366 | 9.6 -> 6.0 % | -3.6 pp, MDE 3.8, p 0.068 | 0.74 -> 0.74 m |
+
+Per block the left foot reads 10.3 -> 7.2 % (MDE 5.2, p 0.246) and
+6.8 -> 8.5 % (MDE 5.0, p 0.501) — two nulls in opposite directions, which is
+what a null looks like at this size.
+
+**Two confounds, named.** (1) The right foot is NOT a clean control here:
+its policy is byte-identical in both arms, yet it moves -3.6 pp at p 0.068,
+because changing the left foot's sidecar changes the selector and therefore
+which foot swings from where. Unlike Follow-up (1)'s right-only arm (whose
+left control was a flat p 0.424), this arm cannot isolate per foot.
+(2) This arm carries a CORRECTLY CALIBRATED left exit as well as a new
+policy: median aim error goes +27.3 deg (shipped) -> +0.3 deg, and 12au
+already measured that the corrected sidecar alone moves backward LINES. The
+backward-LINE and within-45-deg gains above belong mostly to the calibration,
+not to the policy.
+
+**The render is a strike, and a march** (`render-rollout`, 3 episodes, seed
+40, side camera, no falls): ball on the sweet spot (0.08 m ahead / 0.04 m
+left) -> struck inside 0.4 s and 1.334 m away at the whistle; 0.10/0.02 ->
+0.630 m; and the box's far corner (0.14 m ahead / 0.12 m left) -> the ball
+ends 0.215 m BEHIND and 0.382 m to the side, sprayed rather than struck, with
+the duck never stepping to it. Trunk 0.107-0.126 m against the 0.120 STAND
+reference throughout, rotation 0 deg, both feet down 10-14 % of frames — it
+strikes, then marches in place while the range slot sits pinned at 1.00.
+That is the vendored kick's failure mode, in the vendored kick's places.
+
+**Verdict: 12as's follow-up (2) is ANSWERED, and the answer is that the two
+routes bracket the trade rather than close it.** The left foot's nudge was
+the STRIKE and not the observation: restore the strike and the play numbers
+come back exactly (7.9 % against the vendored 8.5 %, 1.06 m against 1.13 m),
+with the bench box coverage, the blindfold row and the slot-sensitivity all
+saying the policy is the vendored swing with a 4.5 % perturbation on top. The
+20 deg turn bar is met (8/8/5 deg) for the first time by any sensed LEFT arm
+— because this one turns like the vendored kick. So: from scratch the left
+foot READS the ball and cannot strike (34.5 %, 94.6 % slot-sensitive); from
+the clone it STRIKES and barely reads (7.9 %, 4.5 %). Note what this rules
+OUT: the gap is not the wiring, not the aim, not the `VecNormalize`
+obstruction — all three are now removed and the combination still does not
+appear at 3M steps. Note also what shows it is reachable: the RIGHT foot's
+`lastmetre-right-v1` already has both (5.0-5.9 % whiff in play with the
+observation load-bearing), which makes the left foot's failure a training
+lottery of the kind Follow-ups D/E have now measured four times, not a
+property of the recipe. **Nothing is promoted; `policies/kick/` is unchanged
+(now on three routes as well as two seeds).** The honest next cut is not a
+fourth route through the same 3M steps: it is either more PPO on THIS clone
+(the slot sensitivity rose 0.6 -> 4.5 % over 3M and was still rising, so the
+question is whether it reaches 94 % before it loses the strike — one curve,
+two numbers, both already instrumented), or the two unmeasured mismatches
+12as lists (the 10 Hz arena detector against the recipe's 25 Hz, and the
+tracker's ~5.5 cm placement error), either of which could be why a policy
+that reads the ball perfectly on the bench reads it badly enough in play to
+be worth less than ignoring it.
+
+    # the chain (left foot, seed 0, 32 envs; headless via the CLI, NOT the farm —
+    # these runs are not visible in the viewer. ~2.5 min clone + 86 s + 160 s)
+    uv run python scripts/distil_kick.py --recipe kick_left_sensed \
+      --teacher policies/kick/kick_left.onnx --run-name lastmetre-left-distil-rung0 \
+      --episodes 1600 --epochs 120 --seed 0 --weights-json '{"face_line": 12.0}' \
+      --group lastmetre --title ... --description ...
+    MICRODUCK_KICK_BOX_AHEAD=0.06,0.12 MICRODUCK_KICK_BOX_SIDE=0.03,0.09 \
+    MICRODUCK_LM_GAZE_NECK=-0.30,-0.15 MICRODUCK_LM_GAZE_HEAD=0.45,0.60 MICRODUCK_LM_GAZE_YAW=0.30,0.50 \
+      uv run train-behavior kick_left_sensed --run-name lastmetre-left-distil-rung2 --envs 32 \
+      --steps 1000000 --seed 0 --weights-json '{"face_line": 12.0}' --group lastmetre \
+      --init-from runs/lastmetre-left-distil-rung0 --title ... --description ...
+    # tip: BOX 0.04,0.16 / 0.01,0.13, GAZE -0.3,0.0 / 0.0,0.6 / 0.0,0.0, 2M,
+    #      --init-from runs/lastmetre-left-distil-rung2
+    uv run python scripts/grid_kick_bench_sensed.py --foot left --seeds 2 \
+      shipped=policies/kick/kick_left.onnx \
+      v1:kick_left_sensed=runs/lastmetre-left-v1/policy.onnx \
+      distil-tip:kick_left_sensed=runs/lastmetre-left-distil-v1/policy.onnx \
+      distil-tip-BLIND:kick_left=runs/lastmetre-left-distil-v1/policy.onnx
+    # ...and the same with --mode poses --seeds 12
+    # in play: calibrate the exit on ONE block at exit_rad 0.0, write the median in, then
+    MICRODUCK_SKILL_KICK_LEFT=<scratch copy of the tip, beside a {"sensed":true,"exit_rad":0.2142} sidecar> \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 0 --jobs 6 \
+      --out runs/sensedplay/gym-leftstrike-b0.jsonl        # ...and --seed0 100
+    uv run render-rollout --policy runs/lastmetre-left-distil-v1/policy.onnx \
+      --behavior kick_left_sensed --out /tmp/rr --episodes 3 --seed 40 --camera side
+
+Reviewer's re-read of the four row files (copied from scratch into
+`runs/sensedplay/`): pair whiff 9.0 → 7.0 %, left 8.5 → 7.9 %, right 9.6 → 6.0 %
+— the table reproduces. Commit ef6dd65; runs `lastmetre-left-distil-{rung0,rung2,v1}` (the finding is
+written into each `behavior.json`); rows under
+`runs/sensedplay/gym-leftstrike-b{0,100}.jsonl`. No recipe, stage or reward
+changed; nothing promoted.
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
