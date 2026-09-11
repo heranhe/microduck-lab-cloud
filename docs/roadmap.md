@@ -9149,6 +9149,44 @@ is the old pair on seeds 200–223 on today's tree, one paired `eval-pitch`
 block. The ledger's falls are noise, as the per-swing instrument said:
 4 → 9 on seeds 0–23 and 2 on 200–223.
 
+**Item 2, the paired arm (2026-09-10, evening).** The old pair on seeds
+200–223 on the same tree, `MICRODUCK_SKILL_KICK_{LEFT,RIGHT}` pinned to
+`runs/kick-*-headdown-v1/policy.onnx` (sidecar exits 0.26 / 0.0, asserted
+through `World.kick_exits()`), `runs/kickseed1/pitch-oldpair-200.jsonl`
+against `pitch-ship-200.jsonl`, `compare_pitch.py`:
+
+| seeds 200–223, 2v2 × 300 s | old pair | shipped w12 pair | |
+|---|---|---|---|
+| goals | 23 | 18 | NO RESULT (MDE 62 %) |
+| own goals, of goal events | 3 / 23 | 4 / 18 | Fisher p 0.68 |
+| kicks (back toward own goal) | 120 (16, 13 %) | 173 (50, 29 %) | back share p 0.002 on the events |
+| falls | 5 | 2 | NO RESULT (MDE 91 %) |
+| possession s/min | 40.8 | 39.8 | null (−0.99 ± 1.47) |
+| advance / progress / shape | flat | flat | null / unquotable |
+
+So the own-goal rate was the coin the block was run to catch: on the fresh
+seeds the two pairs put in 3 of 23 and 4 of 18. Pooled over the 48 paired
+seeds it is 3 of 47 against 10 of 42 (Fisher p 0.033), a lean that rests
+entirely on the discovery block's 0 / 6 — the 1-in-32 draw already noted
+above. **Not a regression the ledger can see; the pair stays.**
+
+What the paired arm did surface is the **back-kick share**: the w12 pair
+kicks more (112 → 147 and 120 → 173) and more of those go back toward the
+kicker's own goal — 21 → 24 % on seeds 0–23 (p 0.53) and 13 → 29 % on
+200–223 (p 0.002), pooled 17 → 27 % (p 0.007). The old arm disagrees with
+itself across blocks (21 % against 13 %), the new arm does not (24, 29 %),
+so this is a lean and not a result — but it has a mechanism that has never
+been measured: the sidecar exit the selector aims with is the **bench**
+median (−0.225 / −0.036) and the sidecar itself says the previous pair's
+left exit read 0.26 in play after a bench −0.16. No instrument here records
+the in-play exit per kick (`kick_gym` has no exit column; the ledger has
+only `kicksBack`). → **what settles it:** a per-kick in-play exit column
+(ball travel direction over the first 0.5 s after the touch, in the body
+frame at swing start), both pairs, two gym blocks; if the w12 sidecar is
+off by more than the ± 35° scatter the selector already assumes, re-set
+`policies/kick/*.json` `exit_rad` from play and re-read `kicksBack` on the
+same ledger seeds. Built as 12at, below, when done.
+
 ### 12ar. The coasting track's bearing (12af, built): the estimate gets better and the behaviour does not (2026-09-10)
 
 12af's second "recorded, not built", built: `Track.bearing_from(pos, yaw)` and
