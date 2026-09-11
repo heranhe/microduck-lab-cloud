@@ -13411,6 +13411,17 @@ lift, and the 29 % drop in kick events. `kicksBack` should not be quoted alone
 again; quote `kicksBackLine` beside it, and read each out of its own
 denominator.
 
+**Resume guard, 2026-09-11 (cec252c).** The eval-pitch resume guard now covers
+the kick sidecars, not just the flags: every row records `kickExits` (the
+sidecar exit angles the brain aims with) and `kickSkills` (each resolved kick
+ONNX by basename + md5), and `load_done` refuses to append to a ledger whose
+kicks differ from the ones running now, naming both. This closes the hole that
+let `kick_left.json`'s `exit_rad` move −0.225 → +0.209 (9ca8d9d) mid-ledger
+with every command-line flag identical — caught by the E.2 472-seed agent's
+preflight, which pinned the old sidecar on its snapshot so that pair stays
+clean. Ledgers written before the fields existed still resume, with one line
+saying their kick provenance is unverified.
+
 → **What settles it next:** (1) the fresh block above; (2) **done, a304b5e:** the eval-pitch seed line now prints both shares out
 of their own denominators (`kicks 9 (back 1/7, back-line 2/5)`, `—` for rows
 resumed from a file written before the column) — it previously showed only `kicksBack`
