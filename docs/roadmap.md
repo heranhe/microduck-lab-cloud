@@ -10127,3 +10127,96 @@ console (that file was mid-edit by another session and was left alone);
 `test_striker.py::test_the_chase_arm_reproduces_eval_pitch_exactly` is red in
 the working tree — unrelated to this item, but it will bite the next person
 who runs the suite.
+
+**The fresh block (300–323), run — 2026-09-10.** A NEW frozen snapshot of
+`src/` (`snap-20260910-191327`: HEAD 14d08c3 plus four other agents'
+uncommitted edits to `behaviors/lastmetre.py`, `brain/controllers.py`,
+`eval_pitch.py`, `world/arena.py`), `policies`/`microduck_rl`/`microduck`
+symlinked to the real checkouts, the same scratch w12fix pair (ONNX md5
+identical to `policies/kick/*.onnx`; sidecars +0.209 / −0.036), the same
+preflight asserting `World.kick_exits()` AND the exits read back off all four
+CONSTRUCTED chase brains. `policies/kick/kick_left.json` is still −0.225.
+
+| 24 fresh seeds, 2v2 × 300 s | w12 | w12fix | Δ ± MDE (MDE %) | p | verdict |
+|---|---|---|---|---|---|
+| possession s/min | 40.99 | 40.41 | −0.59 ± 1.29 (3 %) | 0.359 | **null** |
+| ballAdvance m/min | 1.298 | 1.265 | −0.033 ± 0.212 (16 %) | 0.749 | NO RESULT |
+| ballProgress m/min | 0.584 | 0.587 | — | — | unquotable |
+| spread / crowd / depth / ballOwnHalf | flat | flat | MDE 0–11 % | 0.44–1.0 | null |
+| goals | 29 | 32 | +0.13 ± 0.66 /run (55 %) | 0.700 | **NO RESULT**, 10 up / 6 down / 8 tied (sign p 0.45) |
+| own goals | 5 | 2 | −0.13 ± 0.31 (150 %) | 0.417 | NO RESULT |
+| falls | 9 | 7 | −0.08 ± 0.30 (81 %) | 0.575 | NO RESULT (1566 seeds) |
+| kicks | 154 | 127 | −1.13 ± 1.49 /run (23 %) | 0.132 | NO RESULT, 15 of 24 down |
+| kicks with a line | 100 | 79 | −0.88 ± 1.18 (28 %) | 0.138 | NO RESULT |
+| carry per kick | +0.340 m | +0.540 m | totals 52.4 → 68.6 m | 0.123 | total: NO RESULT |
+| `kicksBack`, of kicks | 47/154 = **30.5 %** | 17/127 = **13.4 %** | −17.1 pp | **0.0007** | **effect** |
+| `kicksBackLine`, of lines | 18/100 = **18.0 %** | 3/79 = **3.8 %** | −14.2 pp | **0.0034** | **effect** |
+
+Both sides again move together: `kicksBackLine` cream 17 → 4 %, graphite
+19 → 3 %.
+
+**Pooled over both blocks, 48 seeds (200–223 + 300–323).** Two internally
+paired blocks on two DIFFERENT frozen snapshots, so this is a fixed-effects
+pool of two agreeing batteries, not 48 exchangeable seeds — the w12 baseline
+itself moved between them (goals 18 → 29, falls 2 → 9, possession 39.84 →
+40.99), which is the size of drift a shared checkout produces in an afternoon.
+
+| 48 seeds | w12 | w12fix | Δ ± MDE (MDE %) | p | verdict |
+|---|---|---|---|---|---|
+| possession s/min | 40.41 | 40.37 | −0.05 ± 1.03 (3 %) | 0.924 | **null** |
+| ballAdvance m/min | 1.270 | 1.221 | −0.050 ± 0.128 (10 %) | 0.442 | **null** |
+| spread / crowd / depth / ballOwnHalf | flat | flat | MDE 0–7 % | 0.14–1.0 | null |
+| goals | 47 | 64 | +0.35 ± 0.42 /run (43 %) | 0.094 | **NO RESULT**, 21 up / 10 down / 17 tied (sign p 0.071) |
+| own goals | 9 | 7 | −0.04 ± 0.23 (124 %) | 0.719 | NO RESULT |
+| falls | 11 | 7 | −0.08 ± 0.16 (68 %) | 0.290 | NO RESULT (2241 seeds) |
+| kicks | 327 | 249 | −1.63 ± 0.94 /run (14 %) | **0.001** | **effect**, 31 of 48 down (sign p 0.016) |
+| kicks with a line | 213 | 156 | −1.19 ± 0.80 (18 %) | **0.004** | **effect** |
+| carry per kick | +0.332 m | +0.511 m | totals 108.5 → 127.2 m | 0.205 | total: NO RESULT |
+| `kicksBack`, of kicks | 97/327 = **29.7 %** | 41/249 = **16.5 %** | −13.2 pp | **0.0002** | **effect** |
+| `kicksBackLine`, of lines | 47/213 = **22.1 %** | 9/156 = **5.8 %** | −16.3 pp | **<0.0001** | **effect** |
+
+**The two open questions, scored.**
+
+*The goal lift does NOT replicate.* 29 → 32 on the fresh seeds is NO RESULT
+(p 0.700, MDE 55 %) and splits 10 up / 6 down / 8 tied. Pooled it is 47 → 64
+at p 0.094 with an MDE of 43 % — still NO RESULT, and the battery's own
+spread asks 871 seeds to resolve 10 %. The decisive tell is that the w12
+baseline moved 18 → 29 goals between the blocks, more than the effect 12au
+credited at p 0.036. **Do not quote a goal lift for this sidecar.**
+
+*The kick-count drop DOES replicate, and is smaller than 29 %.* Fresh:
+154 → 127 = −17.5 %, down on 15 of 24 seeds, but NO RESULT on its own
+(MDE 23 %). Pooled: 327 → 249 = −23.8 %, p 0.001, **effect**, down on 31 of
+48 (sign p 0.016). Carry per kick rises in both blocks (0.340 → 0.540 fresh,
+0.332 → 0.511 pooled) and total carry holds or rises (108.5 → 127.2 m,
+unresolved at p 0.205). The selector really does decline swings; the honest
+number is **−24 % ± 14 pp**, and "fewer, better touches" survives the fresh
+seeds intact.
+
+**And one thing 12at predicted the wrong way.** On the pitch `kicksBack`
+FALLS — −17.1 pp fresh (p 0.0007), −13.2 pp pooled (p 0.0002) — where 12at's
+gym block had it RISE (20.6 → 23.5 %) and 12au could not resolve it (p 0.072).
+The rule has not changed sign; the population under it has. A gym episode
+re-presents the ball after every swing, so declining a swing does not remove a
+weak touch from the denominator; on the pitch it does, and the weak-touch
+fraction falls with the swing count. **`kicksBack`'s direction in the gym does
+not transfer to the ledger.** Read each out of its own denominator, in its own
+arena, and never predict one from the other.
+
+Reviewer's re-read of the four row files: fresh and pooled tables reproduce
+(back-line 18/100 → 3/79 fresh, 47/213 → 9/156 pooled).
+
+**Recommendation to the owner, unchanged and now on 48 seeds: set
+`policies/kick/kick_left.json` `exit_rad` to +0.209.** Backward LINES fall
+22.1 → 5.8 % (p < 0.0001) with both colourways moving together, the ledger's
+own `kicksBack` falls with it, and nothing measurable is paid: possession,
+advance, shape, own goals and falls are flat or better and total carry holds.
+The one real behaviour change is the selector declining about a quarter of its
+swings for harder touches. The goal lift 12au saw was a coin and must not be
+used as part of the case.
+
+→ **What settles it next:** (1) nothing further is needed to ship the sidecar;
+(2) the console line: done, a304b5e; (3) the −24 % swing decline is
+the only open behaviour question: it is a `kick_select` pricing effect, and
+`kick_gym.py` (19× cheaper per event) is where to ask whether the declined
+swings were ones worth taking.
