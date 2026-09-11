@@ -162,7 +162,29 @@ def _ball_xy(w: World, q: int) -> tuple[float, float]:
     return (float(w.data.qpos[q]), float(w.data.qpos[q + 1]))
 
 
-def run(seed: int, episodes: int, spread: float, at_boards: float,
+def _uninstall() -> None:
+    """Put the PRISTINE `Chase._select_kick_line` back and forget the patch.
+
+    The wrapper runs the selector twice per call when a counterfactual is
+    asked for; left installed after a `run` it doubles the fan for every
+    later `Chase` in the process — which is how `tests/test_spot_reach.py`
+    went red on CI after this probe's tests ran before it (2026-09-11)."""
+    if _CF["orig"] is not None:
+        Chase._select_kick_line = _CF["orig"]
+    _CF["orig"] = None
+    _CF["exits"] = None
+    _CF["log"] = None
+
+
+def run(*args, **kwargs):
+    """One seed of the probe; the selector patch never outlives the call."""
+    try:
+        return _run_patched(*args, **kwargs)
+    finally:
+        _uninstall()
+
+
+def _run_patched(seed: int, episodes: int, spread: float, at_boards: float,
         cf_exits: tuple[float, float] | None, knobs: str = "", opponents: int = 0) -> list[dict]:
     """One seed. One row per EVENT (a swing or a decline) plus one row per
     episode, so a rate has the denominator its numerator came from."""

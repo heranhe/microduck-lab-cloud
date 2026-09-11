@@ -55,6 +55,15 @@ def pair():
     return plain, with_cf
 
 
+def test_the_patch_does_not_outlive_a_run(pair):
+    """After `run`, the class method is the pristine one — a leaked wrapper
+    doubles the selector fan for every later brain in the process (CI went
+    red on `test_spot_reach` for exactly this)."""
+    from microduck_local.brain.controllers import Chase
+    assert probe._CF["orig"] is None
+    assert Chase._select_kick_line.__name__ == "_select_kick_line"
+
+
 def test_the_counterfactual_consumes_no_randomness(pair):
     plain, with_cf = pair
     assert _events(plain) == _events(with_cf)
