@@ -2389,7 +2389,14 @@ LONGER lost: **a longer line-up is a staler plan.**
       Three aim-side fixes have now died on this (`kick_deflect_*`, the
       line-up arms, and the lead), which is what turns the question into a
       question about the HEAD — below.
-- [ ] **The remaining way out: stop going blind.** (1) Arrive sooner —
+- [x] **The remaining way out: stop going blind — all three measured, none
+      pays (ticked 2026-09-10).** (1) arrive sooner: measured above, fails;
+      (2) the predict horizon: 12aj, `predict_s` 2.5 null on whiff, 15 % of
+      swings fired on a plan the ball had left; (3) refuse a stale swing:
+      12aj, the freshness gate has no reachable set — the belief is wrong on
+      exactly the balls it would gate. The lever that did move whiff was the
+      kick itself (12ai, 18 → 9 %). Original text kept below.
+      (1) Arrive sooner —
       `lineup_range` 0.6 → 0.35 or `lineup_s` 4.0 → 1.5, measuring now and
       judged on the on-spot fraction and the whiff rate, never on goals.
       (2) Aim where the ball WILL be — the tracker's `predict` with the decel
@@ -2503,7 +2510,14 @@ reporting nothing. Every one of the owner's three observations, as a number.
       **58% of the touches gone** (193 kicks → 84). The duck re-plans
       instead of swinging: possession bought with touches, the ball no
       further forward. Ships at 0.35, with the numbers.
-- [ ] **What is left, in order.** (1) `gaze_yaw` — wired, unit-tested,
+- [x] **What is left, in order — all three since measured (ticked
+      2026-09-10).** (1) `gaze_yaw`: measured off 2026-09-06 (item 8 of the
+      knob ledger below, +12.4° of bias); (2) a kick that fires on the ToF:
+      12am, `lineup_tof_stop` ships on — the line-up stops on the bumper past
+      the plan; (3) `refresh_min` 0.20 re-plan: 12aj, whiff 13 → 19 %
+      (p < 0.001, worse 10 / 12) — the placement gain does not survive the
+      re-plan. Original text kept below.
+      (1) `gaze_yaw` — wired, unit-tested,
       **never run in a battery**: the only thing that can reach a ball 37°
       off the nose, and the ToF is in the HEAD, so a yawed head points the
       bumper sideways (which is how `look_aim` died). Unknown, not measured
