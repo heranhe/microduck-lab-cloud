@@ -12486,6 +12486,235 @@ Rows: `runs/sensedplay/gym-sl-{xy,fresh}-b{0,100}.jsonl`,
       uv run python scripts/probe_sensed_slots.py --left <sensed left>.onnx \
       --seeds 4 --episodes 40 --jobs 3 --out runs/sensedplay/slots-sl-track-portrait.jsonl
 
+**Follow-up J: the retrain at the camera the robot HAS — the left foot's 28
+points are gone, the freshness chain closes end to end, and the bill is falls
+(2026-09-11).**
+
+Follow-up I's prescribed arm, run on the owner's answer (*landscape, probably:
+116° across, 60° up*). Both feet, seed 0, the Follow-up A/C ladder (rung 1 the
+strike spot 1M, rung 2 the 6 × 6 box 1M, tip the full 4-16 × 1-13 cm box 2M),
+recipe `kick_{foot}_sensed` (the 0.25 m range slot), `face_line` 12.0, 32 envs,
+with `MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60` exported for
+**every stage** — an env override, not a default change: `behaviors/ball.py`
+still ships portrait and waits on the photograph. `log_std` flat at 0.583-0.613
+over all 4M steps a foot, no ratchet. Runs `lastmetre-land-{right,left}-{rung1,rung2,v1}`
+(group `lastmetre`). ~70 s a million steps on this Mac; both chains, six runs,
+under six minutes.
+
+**The reachable set first, and it is why the gaze had to move.** The recipe's own
+projection (`lastmetre._lm_sense`, `seen` at spawn), ball swept over the box,
+gaze sampled uniformly from the window (400 draws a cell, right foot; the left
+is within 2 pp of every cell):
+
+| gaze window (offsets on HOME: neck / head / \|yaw\|) | ball box | portrait 60 × 116 | **landscape 116 × 60** |
+|---|---|---|---|
+| the recipe's DRILL (−0.30,−0.15 / +0.45,+0.60 / 0.30,0.50) | strike spot | 100 % | **0 %** |
+| " | 6 × 6 (rung 2) | 98 % | **0 %** |
+| " | full 4-16 × 1-13 cm | 91 % | **16 %** |
+| the recipe's TIP (−0.30,0 / 0,+0.60 / 0) | full box | 25 % | **1 %** |
+| **NEW drill** (−0.45,−0.30 / **+0.90,+1.05** / 0.30,0.50) | strike spot | 100 % | **100 %** |
+| " | 6 × 6 | 100 % | **100 %** |
+| " | full box | 99 % | **97 %** |
+| **NEW tip** (**−0.60,0.0** / **+0.10,+1.20** / 0) | full box | 44 % | **43 %** |
+
+(Single-pose control, the form Follow-up A quoted: under portrait this
+computation returns **0 % level / 47 % straight down / 86 % at the drill pose's
+midpoint** against A's 0 / 47 / 96 — the level and straight-down cells
+reproduce exactly. Under landscape the same three are 0 / 43 / **22 %**.)
+
+**So the gaze re-tune is a pitch re-tune, and the yaw is now free.** A 60°-tall
+frame needs the optical axis within 30° of the ball's depression, and the box
+sits at 50-81° below the camera: the window has to put the camera 60-80° down,
+which is head ≈ +0.90..+1.20 with neck −0.30..−0.60 (`head_pitch` tops out at
++1.22 off HOME, so this is near the joint's own limit). The horizontal half-FOV
+goes 30° → 58°, so the drill's head-yaw term stops mattering — it is kept only
+to hold the pair otherwise identical to Follow-up A's. **Both stated bars are
+met: stage 1/2 see the ball on 100 % of spawns, the tip on 43 %** — and 43 % is
+not a taste: it is the share the arena's own landscape detector delivers in play
+(41 %, Follow-up I's table). **No recipe change was needed**; all six knobs are
+`MICRODUCK_LM_GAZE_*` / `MICRODUCK_BALL_*FOV_DEG` env overrides.
+
+**The bench, with the bench's env ALSO at landscape** (`grid_kick_bench_sensed.py`,
+2 seeds a cell, level / line-up gaze / neck split; poses at 12 seeds; env named
+per row). The shipped rows reproduce 12as **to the point** (69/67/77 right,
+82/79/82 left) — the blind path is FOV-independent and is the positive control
+for everything else here. The `v1` rows are the PORTRAIT tips driven through the
+landscape bench, so they are not comparable with Follow-up A's table:
+
+| arm | env | box | sweet | falls /180 | \|turn\| | pose whiff | pose falls /60 | pose travel |
+|---|---|---|---|---|---|---|---|---|
+| shipped `kick_right.onnx` | `kick_right` | 69 / 67 / 77 % | 100 % | 7/6/6 | 13/21/14° | 0 % | 1 | 1.09-1.32 m |
+| `lastmetre-right-v1` (portrait) | `kick_right_sensed` | 99 / 93 / 95 % | 100 % | 6/1/0 | 21/16/20° | 0 % | 0 | 0.99-1.39 m |
+| **`lastmetre-land-right-v1`** | `kick_right_sensed` | **71 / 98 / 96 %** | 100 % | **25**/9/2 | **12/24/24°** | **0 %** | 9 | 0.57-1.11 m |
+| the same policy, BLINDFOLDED | `kick_right` | 19 / 15 / 7 % | 33/17/0 % | 0/0/0 | 11/8/8° | **100 %** | 8 | 0.00 m |
+| shipped `kick_left.onnx` | `kick_left` | 82 / 79 / 82 % | 100 % | 5/5/8 | 7/9/5° | 0 % | 0 | 1.01-1.21 m |
+| `lastmetre-left-v1` (portrait) | `kick_left_sensed` | 92 / 87 / 95 % | 100/94/100 % | 0/2/4 | 19/15/20° | 0 % | 0 | 0.89-1.54 m |
+| **`lastmetre-land-left-v1`** | `kick_left_sensed` | **94 / 94 / 94 %** | 100 % | **20**/8/8 | 15/13/18° | **0 %** | 7 | 0.68-1.17 m |
+| the same policy, BLINDFOLDED | `kick_left` | 82 / 88 / 76 % | 94/100/100 % | 0/0/6 | 3/7/13° | 8/0/0/0/0 % | 2 | 0.33-0.82 m |
+
+Two things to read off it. **The right landscape tip is the most
+observation-dependent arm on this page** — blindfolded it whiffs 100 % from every
+pose and holds 7-19 % of the box — while **the left one is the least**: blind it
+still covers 76-88 % of the box, i.e. its landscape training put more of the
+strike into the body and less into the sighting. And **the falls concentrate in
+the LEVEL row** (25 and 20 per 180, against 2-9 at the two pitched poses), which
+is the whole cost of this retrain and is explained below.
+
+**The slots in play, against Follow-up I's table** (`probe_sensed_slots.py`,
+4 seeds × 40 episodes an arm, no FOV override — the arena's detector is already
+116 × 60; the portrait rows are Follow-up I's own arms re-run on today's tree):
+
+| left-foot window ticks | portrait `lastmetre-left-v1` | **landscape tip** | (follow-up I) |
+|---|---|---|---|
+| newest DETECTOR frame holds a ball | 18.4 % | **25.8 %** | 16.7 % |
+| `seen` slot[53] | 18.4 % | **25.8 %** | 16.7 % |
+| `conf` slot[54], median | 0.28 | **0.77** | 0.26 |
+| track age at the tick, median (p90) | 1.22 s (2.10) | **0.26 s** (1.82) | 1.30 s (2.20) |
+| track sigma, median | 12.49 cm | **2.54 cm** | 12.94 cm |
+| track held a position | 96.8 % | 94.6 % | 93.6 % |
+| track placement vs the true ball, median | 4.49 cm | 5.47 cm | 4.11 cm |
+
+| right-foot window ticks | portrait `lastmetre-right-v1` | **landscape tip** | (follow-up H) |
+|---|---|---|---|
+| `seen` slot[53] | 30.5 % | 25.5 % | 34 % |
+| `conf` slot[54], median | 0.80 | 0.77 | 0.80 |
+| track age, median | 0.22 s | 0.26 s | 0.22 s |
+| track sigma, median | 2.46 cm | 2.54 cm | — |
+
+**The mechanism Follow-up I could only price, now doing the work.** Freshness is
+not a property of the world alone: it is produced by where the kick points the
+head, and the landscape-trained LEFT foot points it down. `seen` 18 → 26 %,
+confidence 0.28 → 0.77, the estimate a quarter of a second old instead of a
+second and a quarter, and the tracker's declared sigma five times tighter. The
+right foot already had that (it was never the broken one) and does not move.
+Note the last row: placement gets slightly WORSE, exactly as Follow-up I
+predicted — more sightings, more of them near the edge of a very wide lens.
+
+**In play, the test that matters** (`kick_gym.py --episodes 40 --seeds 12 --jobs 3`,
+blocks seed0 0 and 100, 24 seeds pooled; each arm pins ONE foot through
+`MICRODUCK_SKILL_KICK_{LEFT,RIGHT}` to a scratch copy beside
+`{"sensed": true, "exit_rad": <calibrated>}`, the other foot vendored;
+`World.skill_path` / `skill_sensed` / `kick_exits()` and the duck's own
+`detector.spec` (116 × 60 @ 10 Hz) asserted off the CONSTRUCTED World before any
+compute. **The shipped blocks were re-run, not reused**: `kick_left.json`'s
+`exit_rad` moved −0.225 → +0.209 this morning (9ca8d9d), so
+`runs/sensedplay/gym-ship-b{0,100}.jsonl` are NOT `outcome_key`-identical to the
+current tree — checked, and they are not. Exits calibrated first, one block at
+0.0 a foot: landscape right **+0.0382**, landscape left **+0.1184**, portrait
+right −0.1041, portrait left **+0.2953** (Follow-up I measured +0.2993 for that
+same policy — the calibration reproduces).
+
+| kick_left | swings | whiff | vs shipped | ±MDE | p | verdict | conn. travel | advance | back line | fell |
+|---|---|---|---|---|---|---|---|---|---|---|
+| shipped (base) | 450 | 7.6 % | — | — | — | — | 1.03 m | 0.83 m | 4.9 % | 0.4 % |
+| `lastmetre-left-v1` (portrait) | 421 | **35.9 %** | +28.3 | 5.4 | 0.000 | effect | 0.17 m | 0.15 m | 0.0 % | 0.0 % |
+| **`lastmetre-land-left-v1`** | 464 | **5.2 %** | −2.4 | 3.2 | 0.140 | null | 0.87 m | 0.73 m | 1.5 % | **8.8 %** |
+
+| kick_right | swings | whiff | vs shipped | ±MDE | p | verdict | conn. travel | advance | back line | fell |
+|---|---|---|---|---|---|---|---|---|---|---|
+| shipped (base) | 368 | 9.5 % | — | — | — | — | 0.87 m | 0.56 m | 0.8 % | 0.0 % |
+| `lastmetre-right-v1` (portrait) | 385 | 6.0 % | −3.5 | 3.8 | 0.069 | null | 0.93 m | 0.83 m | 0.0 % | 0.0 % |
+| **`lastmetre-land-right-v1`** | 369 | **4.9 %** | −4.6 | 3.7 | 0.015 | effect | 0.89 m | 0.80 m | 0.0 % | 0.0 % |
+
+The contrasts that answer the question, and the falls column that vetoes it:
+
+| contrast | shift | ±MDE | p | verdict |
+|---|---|---|---|---|
+| LEFT whiff, portrait tip → landscape tip | 35.9 → **5.2 %**, −30.7 pp | 5.3 | 0.000 | **effect** |
+| LEFT whiff, vendored → landscape tip | 7.6 → 5.2 %, −2.4 pp | 3.2 | 0.140 | null |
+| LEFT **falls**, vendored → landscape tip | 0.4 → **8.8 %**, +8.4 pp | 2.7 | 0.000 | **effect** |
+| LEFT falls, portrait tip → landscape tip | 0.0 → 8.8 %, +8.8 pp | 2.8 | 0.000 | **effect** |
+| RIGHT whiff, vendored → landscape tip | 9.5 → 4.9 %, −4.6 pp | 3.7 | 0.015 | **effect** |
+| RIGHT whiff, portrait tip → landscape tip | 6.0 → 4.9 %, −1.1 pp | 3.2 | 0.507 | null |
+| RIGHT falls, vendored → landscape tip | 0.0 → 0.0 % (0 of 369) | — | 1.000 | NO RESULT |
+
+Both blocks agree on every row and neither is carried by the other: left whiff
+reads 31.7 / 40.5 % portrait against 5.1 / 5.2 % landscape, left falls 9.7 /
+8.1 %, right whiff 5.6 / 6.4 % portrait against 3.3 / 6.4 % landscape. The
+non-pinned foot is the control in each arm and stays put (left foot under the
+right-pinned arm 7.6 → 7.9 %, p 0.83).
+
+**The bill, rendered and named: from a level head the duck does not nod, it
+DIVES.** `render-rollout` at a pinned level spawn gaze, landscape FOV, left tip,
+seed 40: 1 of 4 episodes terminates at 0.68 s with trunk pitch climbing
++13 → +33 → +48 → **+74°** and `head_z` 0.237 → 0.081 m while `seen` reads 0 on
+94 % of the steps — it puts the whole body down to get a ball at its feet inside
+a 60°-tall frame and lands on its face. The right tip does the same and falls in
+**3 of 4** level-spawn episodes. This is the 25/20-per-180 level row of the grid,
+and in play it is the left foot's 8.8 %: the brain's own handover pose is head
++0.55 / neck −0.10 at the swing (p10 +0.03 / −0.17, measured over 818 shipped
+swings), i.e. the shallow end of the tip window — which is exactly where a
+landscape camera shows nothing and this policy learned to lunge.
+
+**The range slot stays at 0.25 m and the measurement says so.** Over these window
+ticks the true ground range to the ball is a median **0.12 m** and is past 0.25 m
+on 3-5 % of ticks, so obs[52] reads a median 0.55-0.58 and clips at 1.0 on 1-2 %.
+The 0.60 m recipe (`kick_{foot}_sensed_far`) would compress the whole in-play
+line-up into a fifth of the slot's travel for a band that barely occurs; it is
+the right id for the APPROACH (Follow-up C), not for the last metre.
+
+**Verdict: Follow-up I's diagnosis is CONFIRMED causally, and the fix it
+prescribed is two thirds of a policy.** The camera's orientation was the whole
+freshness gap: trained through the robot's own lens, the left foot's in-play
+`seen` rises 18 → 26 %, its estimate stops being a second old, and the 28-point
+whiff catastrophe that survived five follow-ups **disappears** — 35.9 → 5.2 %,
+with no sim-only flag, no tracker change and no reward change. The right foot
+reproduces the portrait tip's in-play win (4.9 % against the vendored 9.5 %,
+p 0.015) without beating it. But the re-tuned gaze bought the sighting with a
+dive, and the dive costs **8.8 % of left-foot swings** and 0.16 m of connected
+travel (0.87 m against the vendored 1.03 m and the stated 0.9 m bar). The
+stated bars: left whiff passes (5.2 % against 8.5 %), left travel misses by
+0.03 m, left falls veto; right whiff passes (4.9 % against 5.0 %).
+
+**Recommendation: promote nothing into `policies/kick/`** — the vendored w12 pair
+stays. The case for the right foot would be "4.9 % against 9.5 %, zero falls,
+advance 0.56 → 0.80 m" — but the portrait tip already delivers that in play
+(6.0 %, a null against it), so the landscape retrain is not the reason to ship
+it, and the turn bar is still missed at two of three grid poses (12/24/24°)
+even though the pose bench finally meets it (4-11°, the first sensed arm to do
+so). The left foot must not ship at 8.8 % falls. **The honest next cut is one
+knob and is already located: cut the SHALLOW half out of the tip's gaze window
+(train the tip on head +0.60..+1.20 only, where the landscape frame can actually
+hold the box) and make the brain guarantee that pitch before the handover — it
+already pitches the head at the remembered ball (`track_pitch`, shipped
+2026-09-11), so the handover pose is a brain constant, not a fact of nature.**
+A policy that never sees a level spawn in training cannot learn the dive. After
+that, the second training seed a foot, before any of these numbers is credited
+to the lens rather than to luck (one seed an arm, as every arm on this page).
+
+Reviewer's re-read of the ten row files: left 7.6 / 35.9 / 5.2 % whiff with
+falls 0.4 / 0.0 / 8.8 %, right 9.5 / 6.0 / 4.9 % with no falls — the tables
+reproduce. Runs: `lastmetre-land-{right,left}-{rung1,rung2,v1}` (group `lastmetre`).
+Rows: `runs/sensedplay/gym-J-{ship,landright,landleft,portright,portleft}-b{0,100}.jsonl`,
+calibration `runs/sensedplay/gym-J-{landright,landleft,portright,portleft}-cal-b0.jsonl`,
+slot ticks `runs/sensedplay/slots-J-{landright,landleft,portright,portleft}.jsonl`.
+
+    # the chain, one foot (both feet, seed 0, 32 envs, ~5 min a chain on this Mac)
+    export MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60     # the robot's camera, every stage
+    MICRODUCK_KICK_BOX_AHEAD=0.075,0.105 MICRODUCK_KICK_BOX_SIDE=0.027,0.057 \
+    MICRODUCK_LM_GAZE_NECK=-0.45,-0.30 MICRODUCK_LM_GAZE_HEAD=0.90,1.05 MICRODUCK_LM_GAZE_YAW=0.30,0.50 \
+      uv run train-behavior kick_right_sensed --run-name lastmetre-land-right-rung1 --envs 32 \
+      --steps 1000000 --seed 0 --weights-json '{"face_line": 12.0}' --group lastmetre --title ... --description ...
+    # rung 2: same gaze, BOX 0.06,0.12 / 0.03,0.09, --init-from runs/lastmetre-land-right-rung1
+    # tip:    BOX 0.04,0.16 / 0.01,0.13, GAZE -0.60,0.0 / 0.10,1.20 / 0.0,0.0, 2M, --init-from ...-rung2
+
+    # the bench, with the bench's env at landscape TOO (the recipe reads the FOV at construction)
+    MICRODUCK_BALL_HFOV_DEG=116 MICRODUCK_BALL_VFOV_DEG=60 \
+      uv run python scripts/grid_kick_bench_sensed.py --foot right --seeds 2 \
+        land=runs/lastmetre-land-right-v1/policy.onnx \
+        land-BLIND:kick_right=runs/lastmetre-land-right-v1/policy.onnx \
+        v1=runs/lastmetre-right-v1/policy.onnx shipped=policies/kick/kick_right.onnx
+    # ...and the same with --mode poses --seeds 12
+
+    # the slots in play (NO override: the arena's detector is already 116 x 60)
+    uv run python scripts/probe_sensed_slots.py --left <scratch left>.onnx \
+        --seeds 4 --episodes 40 --jobs 3 --out runs/sensedplay/slots-J-landleft.jsonl
+
+    # one gym arm (pin ONE foot; repeat with --seed0 100; no env vars for the shipped arm)
+    MICRODUCK_SKILL_KICK_LEFT=<scratch left>.onnx uv run python scripts/kick_gym.py \
+        --episodes 40 --seeds 12 --seed0 0 --jobs 3 --out runs/sensedplay/gym-J-landleft-b0.jsonl
+    uv run python scripts/compare_gym.py ship=... port-left=... land-left=...
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
