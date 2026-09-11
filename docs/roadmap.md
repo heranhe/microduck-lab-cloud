@@ -5370,6 +5370,233 @@ this stack has none of them.
         uv run --no-sync python <scratch>/kickchoice2/probe_feat.py --seeds 3 --seconds 120 \
             --model runs/kickchoice/model-b0.json --data runs/kickchoice/data-b0.jsonl   # the input box
 
+      **FOLLOW-UP (1), RUN — THE PITCH-FITTED RANKING, AND WHY THE BOX
+      DIAGNOSIS WAS HALF WRONG (2026-09-11).** E.2 prescribed "fit it on
+      PITCH line-ups, the box probe is the acceptance test". Done, and the
+      probe answered a different question than the one it was asked.
+
+      **The pitch dataset.** `scripts/kick_choice_data.py collect --pitch`
+      (e9371a2, additive) drives `eval_pitch`'s own world — `make_pitch(
+      per_side=2)` under `--ball-out-s 5`, all four `chase` brains, the same
+      Senses loop, kickoff and throw-in handling — instead of `kick_gym`'s
+      scenario. The outcome definitions are imported, never re-typed:
+      `advance` is `world/metrics.py`'s own `kickCarry` rule (signed toward
+      the mouth THAT team attacks — the gym's "+x is the attacked mouth"
+      shorthand cannot express a two-team pitch), `whiff` is
+      `kick_gym.WHIFF_M` over `SETTLE_S`, the backward line is
+      `kick_gym.exit_angle` over `EXIT_S`. A match has no episodes, so a
+      LINE-UP is defined in time: a run of ranking calls with no gap over
+      0.5 s, ended by a swing or a restart, the exploring pick drawn once
+      and held. A swing whose carry window is cut by a goal or the referee
+      is written UNLABELLED rather than scored against a teleported ball.
+      The instrument was controlled first: at `--explore 0` the collector
+      reproduces `eval_pitch.run_one` KICK FOR KICK PER DUCK (seeds 900-901)
+      and its per-duck `advance` sums equal the row's `kickCarry` to 4 dp.
+
+      `data-pitch-b0.jsonl`: **60 seeds (200-259) x 1200 s = 72 000 sim-s,
+      19 585 line-ups, 467 493 ranking calls, 1 491 kicks, 1 378 LABELLED
+      swings** (782 exploring, 90 cut by the referee, 23 unlatched, median
+      candidate set 16, `latch_age` median 3.12 s — the brain stops
+      re-planning once it commits to the spot). **The rate is the news:
+      0.0191 labelled swings a sim-second.** The gym buys 3 000 line-ups for
+      a tenth of that compute, so the gym dataset's 2 513 swings would cost
+      ~6 CPU-hours on the pitch; 1 378 is where the budget line was drawn.
+      The pitch is a harder arena than the gym on its own terms: mean
+      advance +0.225 m against the gym's +0.550, whiff 12.3 %, `back` 37.4 %
+      against 21 %. Seeds 200-259 and NOT 0-11 on purpose — the ledger
+      scores seeds 0-47, and fitting on seeds it then scores is training on
+      the test set (E.2's gym dataset used 0-11 with no overlap because that
+      was a different arena).
+
+      **The box probe: the arena fixed everything EXCEPT the one feature no
+      arena can fix.** `scripts/probe_model_box.py --seeds 3 --seed0 100
+      --seconds 120`, 40 530 pitch candidate rows:
+
+      | feature | gym fit (E.2) | pitch fit | |
+      |---|---|---|---|
+      | `ball_board` | 31.0 % | **2.4 %** | fixed by the arena |
+      | `goal_off` | 7.1 % | 5.4 % | in |
+      | every other live column | ≤ 3.4 % | **≤ 2.4 %** | in |
+      | `range` | 47.4 % | **69.3 %** | FAIL, and WORSE |
+
+      `range` cannot be fixed by any arena, and this is the finding. A label
+      exists only where a SWING happened, and a duck only swings when it is
+      over the ball, so the labelled `range` is bounded into [0.147, 0.424] m
+      BY CONSTRUCTION while the chooser is asked to rank at every tick of the
+      walk-in (pitch mean 0.478). Collecting from the pitch made the box
+      NARROWER, not wider.
+
+      **So is it a problem? Measured, not assumed.** Over 1 837 real line-up
+      calls (2 pitch seeds x 120 s), `range`, `ball_ax`, `ball_ay`,
+      `ball_board` and `pot` have **EXACTLY ZERO spread across the candidates
+      of a line-up, in 100 % of calls** — they are properties of the ball and
+      the body, not of the candidate. A feature identical for every candidate
+      adds the same number to every candidate's LINEAR score, so a ridge's
+      argmax is invariant to it; it is live only through an MLP's
+      interactions. Clamping `range` into each model's own training box and
+      re-ranking the same 1 837 line-ups:
+
+      | model | `range` out of box | line-ups whose PICK changes |
+      |---|---|---|
+      | `model-b0` (E.2's gym **MLP**) | 61.1 % | **493/1837 = 26.8 %** |
+      | `model-pitch-b0` (this **ridge**) | 70.2 % | **0/1837 = 0.0 %** |
+      | control: a random ridge with `range` zeroed outright | — | 0/1837 |
+
+      **E.2's ledger was run with a model that let an out-of-box column
+      rewrite more than a quarter of its decisions on the pitch.** That is a
+      sharper statement of what went wrong than "the gym's placement does not
+      cover the pitch", and it is the reason the model class was pinned to
+      RIDGE here, registered before the fit (scratch `REGISTERED.md`,
+      01:02): the acceptance test is read as "every feature that CAN change
+      the ranking is inside its box", which the pitch fit passes at 5.4 %
+      worst, with the raw `range` FAIL reported beside it.
+
+      **The fit.** 1 378 labelled swings, 19 features, held-out R2 on advance
+      **ridge +0.463** against MLP +0.318 (backward-line +0.328 / +0.194) —
+      the ridge wins on its own merits as well as by registration, the
+      opposite of the unopposed gym fit. `lam_back` swept to 0.0.
+
+      **Gym sanity — the ranking transfers the other way too.** Fresh seeds
+      100-111, 12 x 150 episodes, in the gym it was NOT fitted in:
+
+      | gym 100-111 | shipped | `model-pitch-b0` | Δ ± MDE | p | verdict |
+      |---|---|---|---|---|---|
+      | swings of 1 800 | 1 507 | 1 535 | more, not fewer | | |
+      | advance a swing (m) | +0.550 | **+0.692** | **+0.143 ± 0.048** | <1e-3 | effect |
+      | `back` | 20.7 % | **10.8 %** | −9.9 ± 2.6 | <1e-3 | effect |
+      | back-LINE | 7.6 % | **3.3 %** | −4.3 ± 1.8 | <1e-3 | effect |
+      | whiff | 8.0 % | 7.4 % | −0.6 ± 1.9 | 0.534 | null (6/12 seeds) |
+      | travel (m) | +0.867 | +0.883 | +0.015 ± 0.039 | 0.440 | null |
+      | fell in the window (VETO) | 0.5 % | 0.3 % | −0.2 ± 0.5 | 0.386 | null |
+
+      Half the gym-fitted MLP's +0.283 — expected: it is linear and it was
+      fitted somewhere else — but on the same side, on more swings, with the
+      veto quiet.
+
+      **THE PREDICTION, registered off that MEAN at 01:02, before a single
+      ledger row existed.** Carry PER KICK: shipped 0.291 m, predicted
+      **0.434 m (+0.143)**, expected half-width **±~0.11** at ~300 events an
+      arm from the gym's own per-swing spread — 1.3x the effect, so a NO
+      RESULT was called as possible in advance. kickCarry per run: +0.143 x
+      the shipped arm's 6.58 kicks = **+0.94 m/run, +45 m over 48 seeds**
+      against E.2's measured ±0.678. Gate: ships on only if carry per kick
+      AND ballAdvance pay with falls flat.
+
+      **THE LEDGER.** 48 paired seeds (0-47), 2v2 x 300 s, `--ball-out-s 5`,
+      both arms on ONE frozen snapshot (`snap2-20260910-231750`: HEAD ae66b27
+      plus the in-flight `kickEvents` work), arm B differing only by
+      `MICRODUCK_CHASE="kick_select_learned=<abs>/runs/kickchoice/
+      model-pitch-b0.json"`. The preflight read the knob off all four
+      CONSTRUCTED brains per arm and loaded the `Chooser` (ridge, 1 378 rows,
+      seeds 200-259) before any compute; the reachable set is 1 409 chooser
+      calls over 120 s of seed 0. **The shipped arm was RE-RUN** (
+      `pitch-ship-1.jsonl`) because E.2's `pitch-ship-0.jsonl` predates
+      `kickEvents`, the per-kick list follow-up (2) added for exactly this
+      column — and the re-run reproduces E.2's 48 rows **row for row, field
+      for field, with `kickEvents` the only addition**, so the tree is inert
+      and the two ledgers are directly comparable.
+
+      | 48 seeds, 2v2 x 300 s | ship | pitch model | Δ ± MDE (MDE %) | p | verdict |
+      |---|---|---|---|---|---|
+      | **carry PER KICK (primary)** | +0.291 m / 316 | **+0.349 m / 315** | **+0.058 ± 0.091 (31 %)** | 0.214 | **NO RESULT, right sign** |
+      | kickCarry m/run | 1.919 | 2.291 | +0.372 ± 0.689 (36 %) | 0.282 | NO RESULT (totals 92.1 → **110.0 m**) |
+      | ballAdvance m/min | 1.188 | 1.233 | +0.045 ± 0.124 (10 %) | 0.468 | **null** |
+      | possession s/min | 40.69 | 40.10 | −0.58 ± 1.13 (3 %) | 0.305 | null |
+      | kicks | 316 | 315 | −0.02 ± 1.04 (16 %) | 0.968 | **flat** (E.2 was −20 %) |
+      | `kicksBack`, of kicks | 94/316 = 29.7 % | 77/315 = 24.4 % | −5.3 pp | 0.134 | not resolved |
+      | **`kicksBackLine`, of lines** | 60/215 = 27.9 % | **33/199 = 16.6 %** | **−11.3 pp** | **0.0058** | **effect, the right way** |
+      | goals | 46 | 40 | −0.125 ± 0.377 (39 %) | 0.508 | NO RESULT |
+      | own goals | 10 | 13 | — | — | not resolved |
+      | falls (VETO) | 8 | 11 | +0.062 ± 0.174 (104 %) | 0.473 | NO RESULT (5 212 seeds) |
+      | spread / crowd / depth / ballOwnHalf | flat | flat | 0-7 % | 0.21-1.0 | null |
+
+      Per-seed signs: kickCarry 31 up / 17 down / 0 tied (sign p 0.059),
+      carry per kick 30 / 18, ballAdvance **24 / 24 / 0** (p 1.000),
+      possession 19 / 29, kicks 19 / 24 / 5, falls 8 / 6 / 34, own goals
+      9 / 7 / 32.
+
+      | prediction | carry per kick | per run | against this battery |
+      |---|---|---|---|
+      | the gym's **mean** (registered) | +0.143 | +0.94 | **inside** [−0.033, +0.149] — NOT excluded |
+      | **observed** | **+0.058 ± 0.091** | +0.372 ± 0.689 | right sign, unresolved against zero |
+
+      **This is a different failure from E.2's, and the difference is the
+      whole result.** There the point estimate was NEGATIVE and the
+      registered size was OUTSIDE the interval — a refutation. Here every
+      carry column has the right sign, the registered +0.143 sits inside the
+      interval (barely, 0.006 from its edge), the observed point estimate is
+      40 % of it, and the kick-count distortion that drove E.2's total is
+      gone (316 → 315 against 316 → 254). The one column with enough events
+      to resolve anything, the AIM column, **pays and is quotable**: the
+      gym's back-line win (7.6 → 3.3 %) reaches the pitch as 27.9 → 16.6 %,
+      p 0.006 on 414 lines. What is NOT resolved is the metres.
+
+      **VERDICT: `kick_select_learned` STILL SHIPS OFF**, on the gate
+      registered in advance: carry per kick is a NO RESULT (+0.058 ± 0.091)
+      and ballAdvance is a null (+0.045 ± 0.124, 24/24 seeds). Nothing is
+      broken — falls, possession, kicks, shape and own goals are all flat —
+      and nothing is refuted either. Goals 46 → 40 at p 0.508 with a 39 % MDE
+      is the coin 12aq, 12au and E.2 have now caught three times and must NOT
+      be quoted in the case.
+
+      **Recommendation to the owner.** Leave `kick_select_learned` at "".
+      Two things are worth keeping. The first is the box lesson, corrected:
+      **a box FAIL is only evidence against a model if the failing feature
+      can move the ranking** — check the within-line-up spread before
+      believing the probe, and prefer the linear head, which is immune to
+      every ball-only column by construction. The second is that the pitch
+      collector exists and its rate is known, so the next attempt is a
+      budget question and not a design one.
+
+      → **What settles it next:** (1) the primary is short of power, not of
+      sign. To resolve the observed +0.058 m a kick needs (0.091/0.058)^2 =
+      2.46x the events — **~1 550 kicks, ~118 seeds an arm** against this
+      battery's 48. That is the honest price of the question, and it is now
+      quotable because `kickEvents` exists. (2) The dataset is 1 378 swings
+      against the gym's 2 513 and the ridge's held-out R2 is still climbing
+      (+0.418 at 275 swings, +0.463 at 1 378); the pitch yields 0.0191
+      labelled swings a sim-second, so doubling it is ~5 more CPU-hours.
+      Fit a second model on 3 000 pitch swings before spending 118 seeds on
+      the 1 378-swing one. (3) `range` is a dead input for a ridge and a
+      dangerous one for anything else: the honest fix is to score the
+      candidates on features that VARY across them and let the line-up's
+      context in only through interactions that were fitted at the range they
+      will be used at.
+
+      Reviewer's re-read of the rows: carry per kick 0.291 → 0.349 m over 316 →
+      315 kicks, kickCarry +0.372 ± 0.689, ballAdvance +0.045 ± 0.124, back-line
+      60/215 → 33/199 (p 0.006), falls 8 → 11; the re-run shipped arm is identical
+      to E.2's 48 rows on every field but `kickEvents`. Commit e9371a2.
+      Row files (gitignored): `runs/kickchoice/data-pitch-b0.jsonl`,
+      `model-pitch-b0.json`, `gymp-{shipped,pitchmodel}-b100.jsonl`,
+      `pitch-ship-1.jsonl` (the re-run shipped arm, with `kickEvents`) and
+      `pitch-pitchmodel-0.jsonl`. Collector commit e9371a2.
+      Commands:
+        uv run python scripts/kick_choice_data.py collect --pitch --seeds 12 --seed0 200 \
+            --seconds 1200 --explore 0.6 --jobs 4 --out runs/kickchoice/data-pitch-b0.jsonl
+            # repeated for --seed0 212 224 236 248, appending
+        uv run python scripts/kick_choice_data.py fit runs/kickchoice/data-pitch-b0.jsonl \
+            --kind ridge --out runs/kickchoice/model-pitch-b0.json
+        uv run python scripts/probe_model_box.py --model runs/kickchoice/model-pitch-b0.json \
+            --data runs/kickchoice/data-pitch-b0.jsonl --seeds 3 --seed0 100 --seconds 120 --jobs 3
+        M=$PWD/runs/kickchoice/model-pitch-b0.json
+        for A in 'shipped=' "pitchmodel=kick_select_learned=$M"; do \
+          uv run python scripts/kick_gym.py --seeds 12 --seed0 100 --episodes 150 --jobs 3 \
+            --arm "$A" --out runs/kickchoice/gymp-${A%%=*}-b100.jsonl; done
+        uv run python scripts/compare_gym.py shipped=... pitchmodel=...
+        uv run python scripts/kick_choice_data.py report shipped=... pitchmodel=...
+        SNAP=<scratch>/kickchoice3/snap2-20260910-231750   # rsync src+scripts; ln -s the upstreams
+        export PYTHONPATH=$SNAP/microduck_local/src MICRODUCK_RL_DIR=<abs>/microduck_rl
+        [MICRODUCK_CHASE="kick_select_learned=$M"] uv run --no-sync python \
+            <scratch>/kickchoice3/preflight.py --expect {"",$M} --seconds 120 --seed 0
+        [MICRODUCK_CHASE="kick_select_learned=$M"] uv run --no-sync python -m microduck_local.eval_pitch \
+            --seeds 48 --seed0 0 --seconds 300 --per-side 2 --ball-out-s 5 --jobs 3 \
+            --tag {ship,pitchmodel} --out runs/kickchoice/pitch-{ship-1,pitchmodel-0}.jsonl
+        uv run --no-sync python scripts/compare_pitch.py runs/kickchoice/pitch-ship-1.jsonl \
+            runs/kickchoice/pitch-pitchmodel-0.jsonl --label ship pitchmodel
+        uv run --no-sync python <scratch>/kickchoice3/spread.py $SNAP   # the within-line-up spread
+        uv run --no-sync python <scratch>/kickchoice3/clamp.py  $SNAP   # picks changed by clamping `range`
+
 - [ ] **E.3 Learning from recordings.** SoccerDiffusion (2025) learns joint
       trajectories from RoboCup gameplay logs (vision + proprioception +
       game state) and runs on hardware after distillation, with "high-level
