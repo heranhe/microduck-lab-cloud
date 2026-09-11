@@ -204,3 +204,113 @@ def test_the_dataset_columns_land_in_the_verdict_fields_they_name():
     assert Y[0, 0] == 0.7 and Y[0, 1] == 0.0                    # 0.1 rad off +x is not a backward line
     row2 = {**row, "exit_world": 3.0}                           # ...and 3.0 rad is
     assert design([row2])[1][0, 1] == 1.0
+
+
+# --- THE PITCH COLLECTOR (E.2 follow-up (1)) ---------------------------------
+# The first cut was fitted in `kick_gym` and lost on the ledger because 47% of
+# the pitch's line-ups sit outside the gym's `range` box. `--pitch` collects
+# the rows from the ledger's own world instead, and these lock the two things
+# that mode adds: the line-up bookkeeping a match needs (the gym has episodes,
+# a match does not) and the fact that adding it left the GYM path alone.
+
+
+def _verdicts(los: float = 0.0, k: int = 3) -> list[Verdict]:
+    from microduck_local.brain.kickselect import evaluate
+    return [evaluate((0.2, 0.0), los + i * 0.3, foot, MODEL, PITCH, np.random.default_rng(5), 30)
+            for i in range(-k, k + 1) for foot in ("kick_left", "kick_right")]
+
+
+def test_the_gym_recorder_does_no_lineup_bookkeeping():
+    """A Recorder with no clock is the one every gym dataset was collected
+    with: the caller owns `explore`, nothing re-draws it, and `new_lineup` is
+    never reached — so `--pitch` cannot have moved a gym number."""
+    from kick_choice_data import Recorder
+    rec = Recorder()
+    rec.explore = (0.5, "kick_left")
+    choose = rec.bind((0.0, 0.0, 0.0), 0.0, (1.5, 0.0))
+    safe = _verdicts()
+    for _ in range(5):
+        choose((0.2, 0.0), PITCH, safe)
+    assert rec.lineups == 0 and rec.explore == (0.5, "kick_left")
+    assert rec.last is not None and rec.last_t is None
+    assert rec.calls == 5
+
+
+def test_a_pitch_lineup_holds_its_exploring_pick_and_a_gap_redraws_it():
+    """A match has no episodes, so a LINE-UP is a run of ranking calls with no
+    gap longer than `LINEUP_GAP_S`. Inside one the exploring pick is held
+    fixed — a pick that jitters tick to tick is a spot the duck can never
+    reach, and would measure the jitter (the gym's own reason). A gap, or an
+    explicit `end_lineup` after a swing, starts a new one."""
+    from kick_choice_data import LINEUP_GAP_S, Recorder
+    t = [0.0]
+    rec = Recorder(clock=lambda: t[0], rng=np.random.default_rng(0), explore=1.0)
+    choose = rec.bind((0.0, 0.0, 0.0), 0.0, (1.5, 0.0))
+    safe = _verdicts()
+    picks = []
+    for _ in range(10):                                  # one line-up, ten ticks
+        choose((0.2, 0.0), PITCH, safe)
+        picks.append(rec.explore)
+        t[0] += 0.02
+    assert rec.lineups == 1 and len(set(picks)) == 1 and picks[0] is not None
+    first = picks[0]
+    t[0] += LINEUP_GAP_S + 0.01                          # the duck stopped planning: a new line-up
+    choose((0.2, 0.0), PITCH, safe)
+    assert rec.lineups == 2
+    second = rec.explore
+    assert second is not None and second != first        # a new line-up re-draws (explore=1.0, seeded)
+    rec.end_lineup()                                     # ...and a swing ends one outright
+    assert rec.last is None and rec.last_t is None
+    t[0] += 0.02                                         # …even with no gap at all
+    choose((0.2, 0.0), PITCH, safe)
+    assert rec.lineups == 3
+
+
+def test_an_exploring_lineup_takes_a_candidate_the_rollout_did_not():
+    """The point of `--explore`: the row's `pick` is not tied to `roll_pick`,
+    and both indices address the same SAFE list the shipped selector ranked."""
+    from kick_choice_data import Recorder
+    safe = _verdicts()
+    seen = set()
+    for q in (0.0, 0.3, 0.6, 0.99):
+        rec = Recorder()
+        rec.explore = (q, "kick_left")
+        rec.bind((0.0, 0.0, 0.0), 0.0, (1.5, 0.0))((0.2, 0.0), PITCH, safe)
+        row = rec.last
+        assert safe[row["pick"]].foot == "kick_left"
+        assert 0 <= row["roll_pick"] < len(safe)
+        seen.add(row["pick"])
+    assert len(seen) > 1, "the quantile must actually move the pick"
+
+
+def test_a_pitch_row_labels_advance_toward_the_mouth_that_team_attacks():
+    """A pitch row carries `attack_sign` −1 for the team at +x, and the label
+    is the signed displacement toward THAT mouth — `world/metrics.py`'s own
+    `kickCarry` rule, not the gym's "+x is the attacked mouth". Getting this
+    wrong would train the model to kick half the team the wrong way, and
+    every number downstream would still look plausible."""
+    row = {"swing": True, "arena": "pitch", "pick": 0,
+           "cands": [[math.pi, "kick_left", 0.2, 0.0, 0.0, 0.0, 0.5]],
+           "pitch": [1.7, 1.425, 0.7, -1.0], "ball": [0.5, -0.2], "los": math.pi,
+           "goal": [-1.7, 0.0], "odom": [0.9, -0.2, math.pi],
+           "advance": 0.9,                                # 0.9 m toward the −x mouth
+           "exit_world": math.pi - 0.1, "swing_yaw": 0.0}
+    X, Y, keep = design([row])
+    assert keep == [row] and Y[0, 0] == 0.9
+    assert Y[0, 1] == 0.0                                 # a line at the −x mouth is NOT backward for them
+    assert design([{**row, "exit_world": 0.1}])[1][0, 1] == 1.0    # ...straight up the pitch is
+
+
+def test_the_pitch_mode_defaults_are_the_ledgers():
+    """The collector's world has to be the world the ledger is read on, or the
+    box it fits is a third arena nobody measures."""
+    import kick_choice_data as K
+    assert K.PITCH_BALL_OUT_S == 5.0
+    sig = __import__("inspect").signature(K.collect_pitch)
+    assert sig.parameters["per_side"].default == 2
+    assert sig.parameters["ball_out_s"].default == K.PITCH_BALL_OUT_S
+    # …and `--pitch` is reachable from the command line with those defaults.
+    import subprocess
+    out = subprocess.run([sys.executable, str(Path(K.__file__)), "collect", "--help"],
+                         capture_output=True, text=True).stdout
+    assert "--pitch" in out and "--ball-out-s" in out and "--per-side" in out

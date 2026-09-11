@@ -32,8 +32,20 @@ held fixed for the whole line-up (a choice that jitters tick to tick is a
 spot the duck can never reach, and would measure the jitter). The row says
 which mode produced it.
 
+THE ARENA IS A CHOICE, AND E.2 GOT IT WRONG ONCE. `collect` drives
+`kick_gym` by default; `--pitch` drives THE LEDGER'S OWN WORLD instead
+(`make_pitch(per_side=2)` under `--ball-out-s 5`, all four `chase` brains).
+The first cut was fitted in the gym, won +0.28 m a swing on three gym blocks
+and then carried the same metres per kick as the shipped selector on a
+48-seed ledger — because 47% of the candidates a 2v2 pitch asks the ranking
+to score are outside the gym's `range` and 31% outside its `ball_board`
+(`scripts/probe_model_box.py`). A model is only as good as the box it was
+fitted in, so fit it on the line-ups it will be asked to rank.
+
     uv run python scripts/kick_choice_data.py collect --seeds 12 --episodes 40 \
         --jobs 3 --explore 0.6 --out runs/kickchoice/data-b0.jsonl
+    uv run python scripts/kick_choice_data.py collect --pitch --seeds 12 --seed0 200 \
+        --seconds 1200 --explore 0.6 --jobs 4 --out runs/kickchoice/data-pitch-b0.jsonl
     uv run python scripts/kick_choice_data.py fit runs/kickchoice/data-b0.jsonl \
         --out runs/kickchoice/model.json
     uv run python scripts/kick_choice_data.py report runs/kickchoice/gym-shipped.jsonl \
@@ -60,20 +72,85 @@ def _wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
+# --- the PITCH collector's constants (E.2 follow-up (1)) ---------------------
+# The gym has EPISODES: one placement, one swing, one settle. A match does
+# not, so a LINE-UP has to be defined in time. These three numbers are that
+# definition, and nothing about the gym path reads them.
+PITCH_BALL_OUT_S = 5.0     # the ledger's own referee (`eval-pitch --ball-out-s 5`)
+# A gap in the chooser's calls longer than this is a NEW line-up, so the
+# exploring pick is re-drawn. `_plan` runs every control tick the duck is
+# lining a kick up (50 Hz), so half a second is 25 missed calls — the duck
+# stopped planning a kick, which is what ends a line-up in the gym too.
+LINEUP_GAP_S = 0.5
+# A swing is attributed to the last line-up latched within this long, and the
+# row carries `latch_age` so the pairing can be checked rather than trusted.
+# MEASURED, not chosen: the brain stops re-planning once it commits to the
+# spot and walks in, so the chooser's last call is 2.4-3.4 s before the skill
+# fires (seed 900, 120 s). The gym has no cap at all — `collect` keeps
+# whatever line-up was last latched before the skill took the body, at exactly
+# the same staleness — so this is a bound on pathology (a duck that planned a
+# kick, was bumped away, wandered and kicked something else), not a filter on
+# the normal case.
+LATCH_MAX_S = 6.0
+
+
 class Recorder:
     """Installed on the brain as `_kick_choice`, so it sees exactly what the
     shipped selector saw — the SAFE candidate list, after the own-goal veto —
     and returns the pick the episode is exploring. Nothing else about the tick
     changes: `kickselect.select` has already done its roll-outs by the time
-    this is called."""
+    this is called.
 
-    def __init__(self) -> None:
+    In the GYM the caller sets `explore` once an episode and this class is a
+    pure latch. On the PITCH there are no episodes, so a Recorder built with a
+    `clock` runs the line-up bookkeeping itself: a gap of more than `gap_s`
+    between calls (or an explicit `end_lineup`, after a swing or a restart)
+    starts a new line-up and re-draws the exploring pick. With `clock` None —
+    every gym call — none of that code runs and the episode stream is
+    bit-for-bit what it was before this mode existed.
+    """
+
+    def __init__(self, clock=None, rng=None, explore: float = 0.0,
+                 gap_s: float = LINEUP_GAP_S) -> None:
         self.explore: tuple[float, str] | None = None   # (quantile, preferred foot) for this episode
         self.last: dict | None = None                   # the latched line-up, replaced every tick
+        self.last_t: float | None = None                # …and when (pitch mode only; the row keys are unchanged)
+        self._clock = clock
+        self._rng = rng
+        self._p = float(explore)
+        self._gap = float(gap_s)
+        self._t_call: float | None = None
+        self.calls = 0                                  # ranking calls, the reachable set of this path
+        self.lineups = 0                                # …grouped into line-ups
+
+    # --- pitch-mode line-up bookkeeping ---------------------------------
+    def new_lineup(self) -> None:
+        """Draw this line-up's exploring pick: a quantile through the safe
+        candidates of one foot, held fixed until the line-up ends. Exactly the
+        gym's draw, moved inside because a match has nobody to call it."""
+        self.lineups += 1
+        self.explore = None
+        if self._p > 0.0 and self._rng is not None and self._rng.random() < self._p:
+            self.explore = (float(self._rng.random()),
+                            "kick_left" if self._rng.random() < 0.5 else "kick_right")
+
+    def end_lineup(self) -> None:
+        """The line-up is over — a swing fired, or the world restarted. The
+        next call starts a fresh one."""
+        self._t_call = None
+        self.last = None
+        self.last_t = None
 
     def bind(self, odom, los: float, goal):
         def choose(ball, pitch, safe):
             from microduck_local.brain.kickselect import _best  # noqa: PLC0415
+            if self._clock is not None:
+                t = float(self._clock())
+                if self._t_call is None or t - self._t_call > self._gap:
+                    self.new_lineup()
+                self._t_call = t
+                self.last_t = t
+            self.calls += 1
             roll = _best(safe, safe[0].n, pitch)
             if self.explore is None:
                 pick = roll
@@ -197,6 +274,176 @@ def _collect(a):
     return collect(*a)
 
 
+# --- THE PITCH COLLECTOR (roadmap E.2 follow-up (1)) -------------------------
+# The first cut was fitted in `kick_gym` and lost on the ledger, and the input
+# box said why: `kick_gym._place` draws the ball 0.45-1.4 m ahead of a duck
+# spawned at x = -0.9 on 3.0 x 2.5 m boards, and 47% of the line-ups a 2v2
+# pitch presents are outside the `range` that produces, 31% outside its
+# `ball_board`. A model is only as good as its box, so this mode collects the
+# rows from THE LEDGER'S OWN WORLD: `make_pitch(per_side=2)` under
+# `--ball-out-s 5`, all four `chase` brains, the same Senses loop, the same
+# kickoff and throw-in handling `eval_pitch.run_one` uses.
+#
+# Nothing about the OUTCOME is re-defined: `advance` is the signed
+# displacement toward the attacked mouth over `kick_gym.SETTLE_S` (= the
+# ledger's own `CARRY_S`), `whiff` is under `kick_gym.WHIFF_M` of travel in
+# that window, and the backward LINE is `kick_gym.exit_angle` over EXIT_S —
+# the same three the gym rows carry, computed by the same imported code, so a
+# pitch row and a gym row are the same event scored the same way.
+#
+# What a match adds and the gym cannot: the ball can be taken away mid-window.
+# A swing whose carry window is cut by a goal or by the ball-out referee is
+# written UNLABELLED (`swing` false, `interrupted` true) rather than scored
+# against a teleported ball, which would put a metre of referee in the label.
+
+def collect_pitch(seed: int, seconds: float, explore: float, knobs: str = "",
+                  per_side: int = 2, ball_out_s: float = PITCH_BALL_OUT_S) -> list[dict]:
+    """One seed of the ledger's pitch, every duck exploring, one row a
+    line-up. The world is built exactly as `eval_pitch.run_one` builds it —
+    including the seed-dependent nudge of the ball off the centre spot, drawn
+    FIRST out of the same `default_rng(seed)` so that at `--explore 0` this
+    collector and `eval-pitch` are the same run."""
+    if knobs:
+        os.environ["MICRODUCK_CHASE"] = knobs
+    else:
+        os.environ.pop("MICRODUCK_CHASE", None)
+    from microduck_local.brain import REGISTRY, Senses
+    from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
+    from microduck_local.brain.team import brain_kwargs, kickoff_brains, throw_in_brains
+    from microduck_local.world import World, make_pitch
+    sc = make_pitch(per_side=per_side)
+    infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=seed, ball_out_s=ball_out_s)
+    teams: dict = {}
+    brains = {d.id: REGISTRY.make("chase", **brain_kwargs(d, w, teams)) for d in sc.ducks}
+    rng = np.random.default_rng(seed)
+    j = w._ball_joint
+    q = int(w.model.jnt_qposadr[j])
+    w.data.qpos[q:q + 2] = rng.uniform(-0.2, 0.2, 2)          # eval_pitch.run_one's own nudge, same draw
+
+    def ball_xy() -> tuple[float, float]:
+        return float(w.data.qpos[q]), float(w.data.qpos[q + 1])
+
+    # One Recorder a duck, each with its own generator: a shared one would make
+    # every duck's exploration a function of how often the OTHERS planned.
+    recs = {did: Recorder(clock=lambda: w.t, rng=np.random.default_rng([seed, i]), explore=explore)
+            for i, did in enumerate(sorted(brains))}
+    for did, b in brains.items():
+        b._kick_choice = recs[did]
+    rows: list[dict] = []
+    pending: list[dict] = []                                   # swings inside their carry window
+    prev_skill = {did: w.ducks[did].skill for did in brains}
+    pushes0 = {did: b.pushes for did, b in brains.items()}
+    ep = {did: 0 for did in brains}
+    goal_seq, out_seq = w.goal_seq, w.ball_out_seq
+
+    def close(p: dict, interrupted: bool) -> None:
+        bx1, by1 = ball_xy()
+        d = w.ducks[p["duck"]]
+        if interrupted:
+            rows.append({"seed": seed, "ep": p["ep"], "duck": p["duck"], "arena": "pitch",
+                         "swing": False, "interrupted": True, "opponents": per_side,
+                         "foot": p["foot"], "t": p["t"], **p["latched"]})
+            return
+        travel = math.dist(p["ball0"], (bx1, by1))
+        sign = float(p["latched"]["pitch"][3])
+        advance = sign * (bx1 - p["ball0"][0])                 # world/metrics.py's own kickCarry rule
+        e_play = None if p["exit"] is None else G.exit_angle(p["ball0"], p["exit"], p["swing_yaw"])
+        rows.append({"seed": seed, "ep": p["ep"], "duck": p["duck"], "arena": "pitch",
+                     "swing": True, "interrupted": False, "opponents": per_side, **p["latched"],
+                     "foot": p["foot"], "swing_yaw": p["swing_yaw"], "falls_before": p["falls_before"],
+                     "latch_age": p["latch_age"],
+                     "ahead": p["ahead"], "side": p["side"], "t": p["t"],
+                     "travel": round(travel, 4), "advance": round(advance, 4),
+                     "whiff": travel < G.WHIFF_M, "back": bool(advance < 0.0),
+                     "fell": int(d.falls) > p["falls_before"],
+                     "exit_play": None if e_play is None else round(e_play, 4),
+                     "exit_world": None if e_play is None else round(_wrap(e_play + p["swing_yaw"]), 4),
+                     "ball1": [round(bx1, 4), round(by1, 4)]})
+
+    while w.t < seconds:
+        for d in w.ducks.values():
+            tof, det = d.tof.last, d.detector.last
+            s = Senses(t=w.t, tof=tof, tof_age=None if tof is None else w.t - tof.t,
+                       det=det, det_age=None if det is None else w.t - det.t,
+                       speed=d.heading_speed(w.data), odom=w.odom(d), skill=d.skill, bumped=w.bumped(d))
+            intent = brains[d.id].step(s)
+            w.apply_intent(d, intent)
+            if d.skill is None:
+                d.set_cmd(w.data, intent.twist, intent.head)
+        w.step()
+
+        # --- swings, per duck, on the same rising edge the gym watches ---
+        for did, b in brains.items():
+            d = w.ducks[did]
+            pushed = b.pushes > pushes0[did]
+            fired = pushed or (d.skill is not None and prev_skill[did] is None
+                               and str(d.skill).startswith("kick"))
+            prev_skill[did] = d.skill
+            pushes0[did] = b.pushes
+            if not fired:
+                continue
+            rec = recs[did]
+            ep[did] += 1
+            latched, t_lat = rec.last, rec.last_t
+            rec.end_lineup()
+            if latched is None or t_lat is None or w.t - t_lat > LATCH_MAX_S:
+                rows.append({"seed": seed, "ep": ep[did], "duck": did, "arena": "pitch",
+                             "swing": False, "unlatched": True, "opponents": per_side,
+                             "t": round(w.t, 2)})
+                continue
+            yaw = d.yaw(w.data)
+            pos = d.trunk_pos(w.data)
+            bx, by = ball_xy()
+            dx, dy = bx - float(pos[0]), by - float(pos[1])
+            pending.append({"duck": did, "ep": ep[did], "latched": latched, "t0": w.t,
+                            "latch_age": round(w.t - t_lat, 2),
+                            "foot": "push" if pushed else str(d.skill),
+                            "swing_yaw": round(float(yaw), 4), "ball0": (bx, by),
+                            "falls_before": int(d.falls), "exit": None,
+                            "ahead": round(dx * math.cos(yaw) + dy * math.sin(yaw), 4),
+                            "side": round(-dx * math.sin(yaw) + dy * math.cos(yaw), 4),
+                            "t": round(w.t, 2)})
+
+        # --- the carry window, sampled where `kick_gym` samples it ---
+        stop = w.goal_seq != goal_seq or w.ball_out_seq != out_seq   # the ball is about to be moved for us
+        keep = []
+        for p in pending:
+            if stop:
+                close(p, interrupted=True)
+                continue
+            if p["exit"] is None and w.t - p["t0"] >= G.EXIT_S:
+                p["exit"] = ball_xy()
+            if w.t - p["t0"] >= G.SETTLE_S:
+                close(p, interrupted=False)
+            else:
+                keep.append(p)
+        pending = keep
+
+        if w.goal_seq != goal_seq:
+            goal_seq = w.goal_seq
+            kickoff_brains(brains, teams, w)
+            for r in recs.values():
+                r.end_lineup()
+        if w.ball_out_seq != out_seq:
+            out_seq = w.ball_out_seq
+            throw_in_brains(brains, teams)
+            for r in recs.values():
+                r.end_lineup()
+
+    for p in pending:                                   # the clock ran out mid-window: no label
+        close(p, interrupted=True)
+    for did, rec in recs.items():                       # the reachable set of the path being fitted
+        rows.append({"seed": seed, "duck": did, "arena": "pitch", "swing": False, "summary": True,
+                     "calls": rec.calls, "lineups": rec.lineups, "kicks": brains[did].kicks,
+                     "pushes": brains[did].pushes, "seconds": seconds})
+    return rows
+
+
+def _collect_pitch(a):
+    return collect_pitch(*a)
+
+
 # --- the fit -----------------------------------------------------------------
 
 def design(rows: list[dict]) -> tuple[np.ndarray, np.ndarray, list[dict]]:
@@ -246,6 +493,16 @@ def main() -> None:
                         "gym every dataset before 2026-09-10 was collected in). With 1, pair it with "
                         "--arm 'kick_select_opps=1' so the selector actually sees them and `p_block` "
                         "stops being an identically-zero column.")
+    c.add_argument("--pitch", action="store_true",
+                   help="collect from the LEDGER'S pitch (make_pitch(per_side), --ball-out-s, four chase "
+                        "brains) instead of the gym. --episodes/--spread/--opponents do not apply; "
+                        "--seconds is the run length a seed. E.2 follow-up (1): the gym's placement box "
+                        "does not cover the pitch's line-ups, so a gym-fitted ranking extrapolates on "
+                        "half of them.")
+    c.add_argument("--seconds", type=float, default=300.0, help="--pitch only: seconds a seed")
+    c.add_argument("--per-side", type=int, default=2, help="--pitch only: ducks a team (2 = the ledger's)")
+    c.add_argument("--ball-out-s", type=float, default=PITCH_BALL_OUT_S,
+                   help="--pitch only: the ball-out referee, as the ledger runs it")
     c.add_argument("--jobs", type=int, default=1)
     c.add_argument("--out", required=True)
 
@@ -265,21 +522,39 @@ def main() -> None:
 
     if a.cmd == "collect":
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-        args = [(s, a.episodes, a.spread, a.explore, a.arm, a.opponents)
-                for s in range(a.seed0, a.seed0 + a.seeds)]
+        seeds = range(a.seed0, a.seed0 + a.seeds)
+        if a.pitch:
+            fn, args = _collect_pitch, [(s, a.seconds, a.explore, a.arm, a.per_side, a.ball_out_s)
+                                        for s in seeds]
+        else:
+            fn, args = _collect, [(s, a.episodes, a.spread, a.explore, a.arm, a.opponents) for s in seeds]
         rows: list[dict] = []
         if a.jobs > 1 and len(args) > 1:
             with ProcessPoolExecutor(a.jobs) as ex:
-                for r in ex.map(_collect, args):
+                for r in ex.map(fn, args):
                     rows += r
         else:
             for x in args:
-                rows += collect(*x)
+                rows += fn(x)
         with open(a.out, "a") as fh:
             for r in rows:
                 fh.write(json.dumps(r) + "\n")
         sw = [r for r in rows if r.get("swing")]
         cands = [len(r["cands"]) for r in rows if r.get("cands")]
+        if a.pitch:
+            summ = [r for r in rows if r.get("summary")]
+            cut = [r for r in rows if r.get("interrupted")]
+            print(f"PITCH {a.per_side}v{a.per_side}, ball-out {a.ball_out_s:g} s, arm {a.arm!r}; "
+                  f"{a.seeds} seeds x {a.seconds:g} s; "
+                  f"{sum(r['lineups'] for r in summ)} line-ups, "
+                  f"{sum(r['calls'] for r in summ)} ranking calls, "
+                  f"{len(sw)} LABELLED swings "
+                  f"({sum(r.get('explored', False) for r in sw)} exploring), "
+                  f"{len(cut)} cut by the referee, "
+                  f"{sum(r.get('unlatched', False) for r in rows)} unlatched; "
+                  f"median candidate set {int(np.median(cands)) if cands else 0}; "
+                  f"whiff {100 * sum(r['whiff'] for r in sw) / max(len(sw), 1):.0f}%; -> {a.out}")
+            return
         print(f"{a.opponents} opponent(s), arm {a.arm!r}; "
               f"{len(rows)} line-ups, {len(sw)} swings, "
               f"{sum(r.get('explored', False) for r in sw)} of them exploring; "
