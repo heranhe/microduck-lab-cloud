@@ -105,8 +105,10 @@ export function AnimPanel() {
   const [poseErr, setPoseErr] = useState<string | null>(null);
   // CoM vs the soles for the pose on screen, for the readout row. The 3D
   // marker reads the store per-frame instead; this state only moves while
-  // the readout is showing, and only when what it says would change.
-  const [balance, setBalance] = useState<Balance | null>(null);
+  // the readout is showing, and only when what it says would change. It
+  // starts from the store's last read so a panel that opens with the marker
+  // already on has a row to show before the first pose comes back.
+  const [balance, setBalance] = useState<Balance | null>(() => animStore.balance);
 
   // 3D selection lives in the shared store (PoseDuck writes it on click).
   useSyncExternalStore(subscribeAnim, animVersion, () => 0);
@@ -256,11 +258,10 @@ export function AnimPanel() {
   useEffect(() => {
     saveJSON("animBalance", showBalance);
     setShowBalance(showBalance);
-    // The readout ignores pose responses while hidden, but the store keeps
-    // the last one: seed from it so the row has something to say the moment
-    // it is turned on, then ask for the current pose again in case the
-    // store's is stale.
-    if (showBalance) setBalance(animStore.balance);
+    // The readout ignores pose responses while hidden, so ask for the pose
+    // again whenever it becomes visible: the store's last read seeds the row
+    // (at mount above, at the toggle below) and this replaces it with a
+    // current one.
     if (showBalance && open && meta) streamerRef.current?.request(poseRef.current);
   }, [showBalance, open, meta]);
   // body → rig-control map for rig-mode picking in the scene.
@@ -924,7 +925,13 @@ export function AnimPanel() {
                 : {}),
             }}
             title="show where the centre of mass falls: a ball at the CoM, a plumb line, and a crosshair on the floor with the soles outlined under it — green inside a sole, blue inside the two-foot stance, amber outside"
-            onClick={() => setShowMarker((v) => !v)}
+            onClick={() => {
+              const next = !showBalance;
+              setShowMarker(next);
+              // Seed the row from the store's last read, so turning the
+              // marker on says something before the pose round-trip lands.
+              if (next) setBalance(animStore.balance);
+            }}
           >
             ⊕ balance
           </button>
