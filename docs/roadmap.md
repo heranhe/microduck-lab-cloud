@@ -9712,6 +9712,170 @@ pp coverage gaps are far beyond that, the turn medians and the falls are
 not. And the turn bar is NOT met — 17-23° right and 21-29° left, over 20° at
 four of the six poses — so `policies/kick/` stays the vendored pair.
 
+**Follow-up A: the second training seed, both feet (2026-09-10).** Same
+recipe, same three rungs, same 32 envs, `--seed 1`, `face_line` 12.0 at
+launch: `lastmetre-{right,left}-s1` (+ `-rung1`, `-rung2`). Grid at 2 seeds a
+cell, level / line-up gaze / neck split, env named per row:
+
+| arm | env | box | sweet spot | falls /180 | \|turn\| |
+|---|---|---|---|---|---|
+| shipped `kick_right.onnx` | `kick_right` | 69 / 67 / 77 % | 100 % | 7/6/6 | 13/21/14° |
+| `lastmetre-right-v1` (seed 0) | `kick_right_sensed` | 96 / 94 / 96 % | 100 % | 8/6/6 | 23/17/20° |
+| **`lastmetre-right-s1` (seed 1)** | `kick_right_sensed` | **92 / 96 / 95 %** | 100 % | 2/1/10 | 27/24/19° |
+| the same policy, BLINDFOLDED | `kick_right` | 21 / 7 / 7 % | 33/0/0 % | 0/0/90 | 39/51/45° |
+| shipped `kick_left.onnx` | `kick_left` | 82 / 79 / 82 % | 100 % | 5/5/8 | 7/9/5° |
+| `lastmetre-left-v1` (seed 0) | `kick_left_sensed` | 95 / 95 / 99 % | 100 % | 0/6/4 | 29/22/21° |
+| **`lastmetre-left-s1` (seed 1)** | `kick_left_sensed` | **98 / 100 / 99 %** | 100 % | 11/6/5 | 22/19/19° |
+| the same policy, BLINDFOLDED | `kick_left` | 17 / 27 / 23 % | 22/50/39 % | 0/5/82 | 21/27/32° |
+
+(The shipped and v1 rows re-ran identically to 12as's table — the bench is
+deterministic in its seeds, so this is also a reproduction of 12as.)
+
+**The gap survives the seed, by a factor of six to twenty-five.** Seed-to-seed
+spread on box coverage is 4 / 2 / 1 pp on the right foot and 3 / 5 / 0 pp on
+the left; the gap over the shipped blind pair is 19-29 pp right and 16-21 pp
+left. Pose bench, 12 seeds a pose: both seed-1 feet whiff 0 % from all five
+poses, travel 0.98-1.38 m (right) and 1.03-1.42 m (left), peak 1.42-1.87 m/s.
+Blindfolded, the seed-1 pair whiffs 100 % (right) and 75-100 % (left) at every
+pose — the observation is load-bearing on this seed too.
+
+What does NOT survive the seed is everything the caveats already flagged.
+Falls move 8/6/6 → 2/1/10 (right) and 0/6/4 → 11/6/5 (right/left per 180
+rollouts), and the pose bench goes 0 → 5 falls on the left; at this n a fall
+count is not an instrument. The turn median moves 23/17/20 → 27/24/19 (right)
+and 29/22/21 → 22/19/19 (left) — **both seeds, both feet, miss the 20° bar at
+most poses**, so `policies/kick/` stays the vendored pair on two seeds now,
+not one.
+
+    MICRODUCK_LM_GAZE_NECK=-0.30,-0.15 MICRODUCK_LM_GAZE_HEAD=0.45,0.60 MICRODUCK_LM_GAZE_YAW=0.30,0.50 \
+    MICRODUCK_KICK_BOX_AHEAD=0.075,0.105 MICRODUCK_KICK_BOX_SIDE=0.027,0.057 \
+      uv run train-behavior kick_right_sensed --run-name lastmetre-right-s1-rung1 --envs 32 \
+      --steps 1000000 --seed 1 --weights-json '{"face_line": 12.0}' --group lastmetre --title ... --description ...
+    # rung 2: same gaze, BOX 0.06,0.12 / 0.03,0.09, --init-from runs/lastmetre-right-s1-rung1
+    # tip:    BOX 0.04,0.16 / 0.01,0.13, GAZE -0.3,0.0 / 0.0,0.6 / 0.0,0.0, 2M, --init-from ...-rung2
+    uv run python scripts/grid_kick_bench_sensed.py --foot right --seeds 2 \
+      shipped=policies/kick/kick_right.onnx s1=runs/lastmetre-right-s1/policy.onnx \
+      s1-blind:kick_right=runs/lastmetre-right-s1/policy.onnx
+
+**Follow-up B: the approach rung — it buys 4 cm, and the wall it hits is the
+range slot, not the curriculum (2026-09-10).**
+
+12as's diagnosis ("nothing pays for arriving and a 2 s clip is a weak cost")
+was half right about the clip and wrong about which knob. Built as
+`lastmetre.py`'s **4th spawn-only stage, "the ball it has to walk to"**: half
+the episodes spawn the ball **0.20-0.45 m ahead and up to 0.13 m either side**
+(`MICRODUCK_LM_FAR_PROB` 0.5, `MICRODUCK_LM_FAR_AHEAD`, `MICRODUCK_LM_FAR_SIDE`),
+the other half is stage 2's world so the strike is still rehearsed, and the
+clip doubles to **4 s** (`MICRODUCK_EPISODE_S`) — measured, not guessed:
+`walker-facts` puts the shipped gait at 0.13-0.18 m/s forward with the feet
+reaching 0.04 m past the trunk, so the worst spawn is 1.6-2.2 s of walking
+before there is anything to swing at. **Not one point of new pay**;
+`ball_forward` already pays only for a ball that rolls, and the only way to
+earn it from out there is to arrive. All four knobs are spawn knobs and are
+locked by `tests/test_lastmetre.py`'s allowlist; the far branch short-circuits
+when the probability is 0, so every earlier rung and every bench draws a
+bit-identical RNG stream (pinned by a test).
+
+Warm-started from the v1 tips, 2M steps, seed 0: `lastmetre-{right,left}-v1-approach`.
+
+**Trunk advance and ball travel vs ball distance** (`scripts/probe_kick_approach.py`,
+8 seeds a cell, 4 s horizon, ball 0.042 m to the kicking foot's side; advance =
+trunk along the kick line, moved = share of seeds the ball travelled ≥ 0.10 m):
+
+| foot / gaze | ball ahead | v1 advance | v1 moved | approach advance | approach moved |
+|---|---|---|---|---|---|
+| right, level | 0.10 m | 0.040 m | 100 % | 0.173 m | 100 % |
+| | 0.16 m | 0.085 m | 100 % | 0.161 m | 100 % |
+| | **0.22 m** | 0.053 m | 50 % | **0.135 m** | **75 %** |
+| | 0.30 m | 0.012 m | 0 % | 0.026 m | 0 % |
+| | 0.45 m | 0.021 m | 0 % | 0.027 m | 0 % |
+| right, neck −0.30 / head +0.60 | 0.16 m | 0.053 m | 100 % | 0.136 m | 88 % |
+| | **0.22 m** | 0.070 m | **0 %** | **0.170 m** | **100 %** |
+| | 0.30 m | 0.023 m | 0 % | 0.046 m | 0 % |
+| | 0.45 m | 0.026 m | 0 % | 0.031 m | 0 % |
+| left, level | 0.16 m | 0.082 m | 100 % | 0.063 m | 88 % |
+| | 0.22 m | 0.161 m | 100 % | 0.029 m | 0 % |
+| | 0.30 m | 0.027 m | 0 % | −0.002 m | 0 % |
+| | 0.45 m | 0.014 m | 0 % | 0.001 m | 0 % |
+
+**The render agrees, and shows a walk rather than a lean.** `render-rollout`
+on the right approach tip with the far window pinned to 0.20-0.24 m: the ball
+spawns 0.21 m ahead, the duck takes **three alternating single-support steps**
+(feet L0R0 → L0R1 → L1R0 → L1R0) while the range slot falls **0.85 → 0.78 →
+0.74 → 0.58**, swings at ~1.2 s, and stands for the remaining 2.5 s. Pinned to
+0.30-0.35 m instead, the same policy reads **r 1.00 at step 0 and r 1.00 at
+4.00 s**, keeps both feet on the floor the whole clip, and the trunk moves
+3 cm. It is not refusing to walk; it is not being told to.
+
+**The cliff is `LM_RANGE_SCALE`.** Sweeping the right approach tip across it
+(8 seeds a cell, moved at 4 s, level / line-up gaze):
+
+| ball ahead | 0.20 | 0.22 | **0.24** | **0.26** | 0.28 | 0.32 |
+|---|---|---|---|---|---|---|
+| advance | 0.146 / 0.159 m | 0.135 / 0.170 m | 0.058 / 0.125 m | 0.019 / 0.064 m | 0.025 / 0.044 m | 0.025 / 0.043 m |
+| ball moved | 100 / 100 % | 75 / 100 % | 38 / 75 % | 12 / 12 % | 0 / 0 % | 0 / 0 % |
+
+obs[52] is `min(1, ground range / LM_RANGE_SCALE)` with `LM_RANGE_SCALE` =
+0.25 m. For a ball straight ahead, **every one of the four slots is identical
+past that radius** — bearing 0, range clipped to 1.0, seen 1, conf 1.0 — so
+walking toward it changes nothing the policy can observe and there is no
+gradient to climb. The approach appears exactly where the range slot becomes
+informative and dies exactly where it saturates.
+
+**The one extra world arm, and the negative that settles it.**
+`lastmetre-{right,left}-approach-far`: 2M more steps warm-started from the
+approach tips with the far window marched to **0.25-0.35 m only**, so the
+spawns are concentrated on the band that failed. The cliff did not move — at
+0.26-0.45 m the right foot advances 0.03-0.17 m and moves the ball on 12-50 %
+of seeds at 0.26 and 12-25 % beyond; the left foot advances 0.01-0.02 m and
+moves it on **0 %**. Meanwhile that same right-foot policy covers **1.03 m in
+4 s** chasing a ball at 0.16 m. **The body can walk a metre; it will not start
+walking when the range slot reads a flat 1.00.** The approach is an
+OBSERVATION problem, not a curriculum one, and this is the last world arm.
+
+**The near game pays for it, and the two feet disagree** (n = 1 seed each, so
+read this as a direction, not a number). Grid box coverage goes 96/94/96 →
+**100/100/98 %** on the right and 95/95/99 → 98/92/99 % on the left, and the
+right foot's turn improves 23/17/20 → 18/16/21°. But falls go 8/6/6 → 9/12/18
+per 180 (right) and 0/6/4 → **24/20/20** (left), the left pose bench falls 22
+times in 60 rollouts against v1's 0, and pose-bench travel drops from
+0.94-1.45 m to 0.70-0.98 m (right). Blindfolded, both approach tips collapse
+as before (14-21 % of the box) — the observation is still what they kick on.
+
+**Verdict.** The rung is a real, cheap win on the band 0.20-0.24 m and a
+measured dead end beyond it, and it costs falls. It ships **in the recipe as
+stage 4** (with the finding written into the stage's own `detail` and the
+module docstring) but **no approach tip is promoted**: the far balls stay the
+brain's job (`kick_ahead_max`) exactly as 12aj left them. The next cut is not
+another rung — it is `LM_RANGE_SCALE` (0.25 m → ~0.60 m), which changes what
+obs[52] means and therefore needs a **new recipe id**, not an edit to this
+one; every policy in the tables above reads its range slot under 0.25.
+`tests/test_lastmetre.py::test_the_range_slot_saturates_and_that_is_where_the_approach_stops`
+pins the number so the ceiling cannot move silently.
+
+    MICRODUCK_KICK_BOX_AHEAD=0.04,0.16 MICRODUCK_KICK_BOX_SIDE=0.01,0.13 \
+    MICRODUCK_LM_GAZE_NECK=-0.3,0.0 MICRODUCK_LM_GAZE_HEAD=0.0,0.6 MICRODUCK_LM_GAZE_YAW=0.0,0.0 \
+    MICRODUCK_LM_FAR_PROB=0.5 MICRODUCK_LM_FAR_AHEAD=0.2,0.45 MICRODUCK_LM_FAR_SIDE=-0.13,0.13 \
+    MICRODUCK_EPISODE_S=4.0 \
+      uv run train-behavior kick_right_sensed --run-name lastmetre-right-v1-approach --envs 32 \
+      --steps 2000000 --seed 0 --weights-json '{"face_line": 12.0}' --group lastmetre \
+      --init-from runs/lastmetre-right-v1 --title ... --description ...
+    # the outward arm: the same, MICRODUCK_LM_FAR_AHEAD=0.25,0.35, --init-from runs/lastmetre-right-v1-approach
+    uv run python scripts/probe_kick_approach.py --foot right --seeds 8 --seconds 4.0 \
+      v1=runs/lastmetre-right-v1/policy.onnx approach=runs/lastmetre-right-v1-approach/policy.onnx
+    uv run python scripts/probe_kick_approach.py --foot right --distances 0.20,0.22,0.24,0.26,0.28,0.32 \
+      approach=runs/lastmetre-right-v1-approach/policy.onnx      # the saturation sweep
+    uv run render-rollout --policy runs/lastmetre-right-v1-approach/policy.onnx \
+      --behavior kick_right_sensed --out /tmp/rr --episodes 3 --seed 40 --camera side \
+      --env MICRODUCK_LM_FAR_PROB=1.0 --env MICRODUCK_LM_FAR_AHEAD=0.20,0.24 --env MICRODUCK_EPISODE_S=4.0
+
+Reviewer's reproduction of the cliff (`probe_kick_approach.py`, 4 seeds, right
+foot): ball moved 100 % at 0.20 m, 25-75 % at 0.24 m, 0 % at 0.28 m. Note the
+seed-1 and approach runs are grouped `lastmetre` while 12as's v1 runs are
+`local-kicks`; regroup one side in `behavior.json` if the /train board should
+show one experiment. Commit fbe84de; runs `lastmetre-{right,left}-s1` (+ `-rung1`, `-rung2`),
+`lastmetre-{right,left}-v1-approach`, `lastmetre-{right,left}-approach-far`.
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
@@ -9954,8 +10118,9 @@ lift, and the 29 % drop in kick events. `kicksBack` should not be quoted alone
 again; quote `kicksBackLine` beside it, and read each out of its own
 denominator.
 
-→ **What settles it next:** (1) the fresh block above; (2) the printed ledger
-line in `eval_pitch._print_ledger` / `_seed_line` still shows only `kicksBack`
+→ **What settles it next:** (1) the fresh block above; (2) **done, a304b5e:** the eval-pitch seed line now prints both shares out
+of their own denominators (`kicks 9 (back 1/7, back-line 2/5)`, `—` for rows
+resumed from a file written before the column) — it previously showed only `kicksBack`
 — the column is in every row and in `compare_pitch`, but not yet on the
 console (that file was mid-edit by another session and was left alone);
 (3) `eval_striker` does not carry `getupDownS` / `getupPolicy`, so
