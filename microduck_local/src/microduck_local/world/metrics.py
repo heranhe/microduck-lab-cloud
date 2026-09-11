@@ -79,10 +79,38 @@ METRIC_FIELDS = ("ballProgress", "ballAdvance", "possession", "possessionWide")
 #     14 goals measured here were walked in;
 #   * failing that the goal is nobody's, and `goalsUnattributed` counts it
 #     rather than a mean quietly absorbing a guess.
-GOAL_FIELDS = ("goalsFor", "goalsAgainst", "ownGoals", "kickCount", "kicksBack", "kickCarry")
+GOAL_FIELDS = ("goalsFor", "goalsAgainst", "ownGoals", "kickCount", "kicksBack",
+               "kickLineCount", "kicksBackLine", "kickCarry")
 # How long after a touch a goal is still that team's. The same 4 s the World
 # allows a kick: "whoever last kicked or held this ball put it in".
 GOAL_CREDIT_S = 4.0
+
+# --- the kick's LINE (roadmap 12au) -------------------------------------------
+# `kicksBack` above is `advance < 0` over CARRY_S, and 12at measured what that
+# actually counts in the gym: among touches struck FORWARD (the 0.5 s line
+# within 45 deg of the attacked mouth) it runs 31-60% below 1 m of travel and
+# 0-5% above it. It is a WEAK-TOUCH measure — the short touch the duck walks
+# back into inside the 2 s window — and is therefore anti-correlated with how
+# well the kick connected. So the ledger could not read the back-kick lean
+# 12aq reported: the arm that HALVES the backward lines raises `kicksBack`
+# (20.6 -> 23.5%) while whiff falls.
+#
+# `kicksBackLine` is the direction measure beside it: the line the ball
+# actually LEFT on, more than 90 deg from the mouth this team attacks. Same
+# rule, same window and the same minimum travel as `scripts/kick_gym.py`'s
+# `exit_play` (its EXIT_S / EXIT_MIN_M, named in `tests/test_metrics_kickline.py`
+# so a drift in either is one honest failure), so the gym's backward-line
+# share and this column are the same quantity on two populations.
+EXIT_S = 0.5
+# Why 0.5 s and not the carry window: at ~1.4 m/s off the foot and 0.3 m/s^2 of
+# rolling resistance the ball has run ~0.66 m by then and has usually not
+# reached a board, so the direction is the kick's and not the wall's.
+EXIT_MIN_M = 0.05
+# Under this the direction is numerical noise: a ball nudged 2 cm has an angle
+# but not a line. Such a kick is counted in `kickCount` and NOT in
+# `kickLineCount`, which is why the two denominators are both in the row — a
+# rate whose denominator is not the population its numerator came from is
+# about the filter (AGENTS.md, "a rate's denominator").
 
 # --- shape (roadmap Track 4.1.3) ----------------------------------------------
 # What "they all pile onto the ball" and "somebody stayed back" are as numbers.
@@ -176,7 +204,18 @@ class PitchMetrics:
         self.kick_count = {t: 0 for t in self.teams}
         self.kicks_back = {t: 0 for t in self.teams}
         self.kick_carry = {t: 0.0 for t in self.teams}
-        self._pending: list[tuple[str, float, tuple[float, float]]] = []
+        # …and the DIRECTION the ball left on (EXIT_S above): how many kicks
+        # had a readable line at all, and how many of those left backward.
+        self.kick_lines = {t: 0 for t in self.teams}
+        self.kicks_back_line = {t: 0 for t in self.teams}
+        # A pending kick is (team, t0, ball at t0, ball at t0 + EXIT_S or None).
+        # The fourth field is filled in by `_sample_exits` when the window
+        # runs out and stays None when the kick is settled before then (a goal
+        # or a ball-out teleports the ball, and a teleport has no direction).
+        # THREE-field entries are still accepted everywhere here: a test that
+        # hands this list a kick by hand writes the old shape
+        # (`tests/test_ball_out.py`), and they simply have no line.
+        self._pending: list[tuple[str, float, tuple[float, float], tuple[float, float] | None]] = []
         # A kick is read off the DUCK that is taking it (`skill_t0`), not off
         # the World's `last_kick_t`: the World keeps one last-kick stamp, so
         # two ducks kicking on the same control step would silently collapse
@@ -271,25 +310,74 @@ class PitchMetrics:
         for did, d in self.w.ducks.items():
             t0 = self._kick_start(d)
             if t0 is not None and t0 != self._kick_t0.get(did) and did in self.team_of:
-                self._pending.append((self.team_of[did], self.w.t, ball))
+                self._pending.append((self.team_of[did], self.w.t, ball, None))
             self._kick_t0[did] = t0
+
+    def _sample_exits(self, ball: tuple[float, float]) -> None:
+        """Where the ball is EXIT_S after each pending kick — the one sample
+        the direction column needs, taken once per kick on the first tick past
+        the window and never again. Called only on a tick the ball moved on
+        its own: on the tick a goal or a ball-out teleports it every pending
+        kick has already been settled, so nothing here can read a jump."""
+        if not self._pending:
+            return
+        out = []
+        for p in self._pending:
+            xy_exit = p[3] if len(p) > 3 else None
+            if xy_exit is None and self.w.t - p[1] >= EXIT_S:
+                xy_exit = ball
+            out.append((p[0], p[1], p[2], xy_exit))
+        self._pending = out
+
+    def _back_line(self, tm: str, xy0: tuple[float, float],
+                   xy_exit: tuple[float, float] | None) -> bool | None:
+        """Did this kick LEAVE on a backward line: is the world direction the
+        ball travelled over its first EXIT_S more than 90 deg from the mouth
+        this team attacks? None when there is no line to read — the sample was
+        never taken (the kick was settled inside the window) or the ball moved
+        under EXIT_MIN_M, which is a whiff and has no direction.
+
+        The attacked mouth is at +x for a team whose `sign` is +1 and at -x for
+        the other, so "more than 90 deg from it" is exactly `kick_gym`'s rule
+        (`|world dir| > pi/2` from the mouth, its `exit_play` measured in the
+        body frame and the mouth at +x in that gym)."""
+        if xy_exit is None:
+            return None
+        dx, dy = xy_exit[0] - xy0[0], xy_exit[1] - xy0[1]
+        if math.hypot(dx, dy) < EXIT_MIN_M:
+            return None
+        mouth = 0.0 if self.sign[tm] > 0 else math.pi
+        ang = math.atan2(dy, dx) - mouth                     # …wrapped into (-pi, pi]
+        return abs(math.atan2(math.sin(ang), math.cos(ang))) > math.pi / 2
 
     def _resolve_kicks(self, ball: tuple[float, float], force: bool = False) -> None:
         """Every kick whose CARRY_S has run (all of them, on a goal — the ball
         is about to be teleported back to the centre spot). What is scored is
         the SAME quantity `ballProgress` scores, the signed displacement along
         the pitch's long axis toward the goal that team attacks, so "the kick
-        went backwards" and "the team lost ground" cannot disagree."""
+        went backwards" and "the team lost ground" cannot disagree.
+
+        Beside it, and NOT the same question (12at): the LINE the ball left on
+        over its first EXIT_S. A kick can leave straight at the mouth and still
+        end the window behind where it started — that is the weak touch the
+        duck walks back into — so `kicksBack` and `kicksBackLine` are expected
+        to disagree, and only the second one is about aim."""
         keep = []
-        for tm, t0, xy0 in self._pending:
+        for p in self._pending:
+            tm, t0, xy0 = p[0], p[1], p[2]
             if not force and self.w.t - t0 < CARRY_S:
-                keep.append((tm, t0, xy0))
+                keep.append(p)
                 continue
             d = self.sign[tm] * (ball[0] - xy0[0])
             self.kick_count[tm] += 1
             self.kick_carry[tm] += d
             if d < 0.0:
                 self.kicks_back[tm] += 1
+            back = self._back_line(tm, xy0, p[3] if len(p) > 3 else None)
+            if back is not None:
+                self.kick_lines[tm] += 1
+                if back:
+                    self.kicks_back_line[tm] += 1
         self._pending = keep
 
     def _shape(self, ball: tuple[float, float], pos: dict[str, tuple[float, float]]) -> None:
@@ -358,6 +446,7 @@ class PitchMetrics:
             self.advance[self._holder] += max(0.0, dx)
         self._prev = ball
         self._note_kick(ball)
+        self._sample_exits(ball)
         self._resolve_kicks(ball)
         # Then who is on the ball at the end of the step, which is who the NEXT
         # step's motion belongs to.
@@ -383,6 +472,12 @@ class PitchMetrics:
         for the same reason — divide it by `kickCount` for the per-kick mean.
         `spread`, `crowd` and `depth` are means over the run's ticks.
 
+        The two back-kick columns have DIFFERENT denominators, and reading one
+        out of the other is the error this pair exists to prevent: `kicksBack`
+        is out of `kickCount` (every kick has a carry), `kicksBackLine` is out
+        of `kickLineCount` (only a kick that moved the ball EXIT_MIN_M in its
+        first EXIT_S left on a line at all).
+
         No side effects: the /sim page calls this every frame. A kick still in
         the air when the run ends therefore never lands in `kickCount`, which
         costs at most the last 2 s of a run and costs it to both teams."""
@@ -398,6 +493,8 @@ class PitchMetrics:
                 "goalsUnattributed": self.goals_unattributed,
                 "kickCount": dict(self.kick_count),
                 "kicksBack": dict(self.kicks_back),
+                "kickLineCount": dict(self.kick_lines),
+                "kicksBackLine": dict(self.kicks_back_line),
                 "kickCarry": {t: round(v, 3) for t, v in self.kick_carry.items()},
                 "ballOwnHalf": {t: round(v * per_min, 2) for t, v in self.own_half.items()},
                 "spread": {t: (round(self._spread[t] / n, 3) if len(self.ducks_of[t]) > 1 else None)

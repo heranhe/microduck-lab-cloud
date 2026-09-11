@@ -34,6 +34,15 @@ four have been got wrong in this repo at least once:
   resolve a 25% shift; as a fraction of the arm's kick events (183 over 24
   seeds of 2v2) it needs about nine. Same measurement, two orders of cost —
   so it is tested here as two proportions, with a z on the pooled events.
+* **AND `kicksBack` IS NOT A DIRECTION.** Measured per swing in the gym (12at):
+  among touches struck straight at the mouth, `advance < 0` runs 31-60% below
+  1 m of travel and 0-5% above it, so it counts the short weak touch the duck
+  walks back into inside the 2 s window, not the kick that pointed the wrong
+  way. `kicksBackLine` — the line the ball LEFT on over its first 0.5 s, more
+  than 90 deg from the attacked mouth — is the direction one, out of
+  `kickLineCount` (kicks that moved the ball far enough to have a line). Both
+  proportions are printed; quote the second for aim. Rows written before
+  2026-09-10 carry neither column and print `—` rather than a zero.
 
 `--side` reads ONE team of an asymmetric matchup (`home` = the side that
 spawns at −x, `away` = the other) instead of pooling both, which is what an
@@ -65,6 +74,7 @@ FIELDS: tuple[tuple[str, str, str], ...] = (
 COUNTS: tuple[tuple[str, str], ...] = (
     ("goals", "goals"), ("falls", "falls"), ("ownGoals", "own goals"),
     ("kickCount", "kicks"), ("kicksBack", "back-kicks"),
+    ("kickLineCount", "kicks w/ line"), ("kicksBackLine", "back-line"),
 )
 
 
@@ -304,19 +314,41 @@ def main() -> None:
         print(f"\nunquotable: {', '.join(sorted(UNQUOTABLE))} — MDE has never been under"
               f" 100% of baseline on a real battery here. Do not quote a difference in it.")
     print("\nevents (totals over the shared seeds):")
+
+    def tot(rows: dict[int, dict], field: str) -> tuple[float, int]:
+        """(total over the shared seeds, how many of them carried the field).
+        A row written before a column existed contributes NOTHING rather than
+        a zero — the pre-12au files have no direction column, and averaging a
+        missing column as 0 would report the honest answer "not measured" as
+        the finding "it never happened"."""
+        vals = [value(rows[s], field, "sum", args.side) for s in seeds]
+        got = [v for v in vals if v is not None]
+        return float(sum(got)), len(got)
+
     for field, label in COUNTS:
-        ta = sum(value(A[s], field, "sum", args.side) or 0 for s in seeds)
-        tb = sum(value(B[s], field, "sum", args.side) or 0 for s in seeds)
-        print(f"  {label:<12}{ta:>8.0f}{tb:>8.0f}")
-    # The one that has to be read as a proportion, not as a per-run mean.
-    ka = sum(value(A[s], "kickCount", "sum", args.side) or 0 for s in seeds)
-    kb = sum(value(B[s], "kickCount", "sum", args.side) or 0 for s in seeds)
-    ba = sum(value(A[s], "kicksBack", "sum", args.side) or 0 for s in seeds)
-    bb = sum(value(B[s], "kicksBack", "sum", args.side) or 0 for s in seeds)
-    if ka and kb:
+        (ta, na), (tb, nb) = tot(A, field), tot(B, field)
+        sa = f"{ta:>8.0f}" if na else f"{'—':>8}"
+        sb = f"{tb:>8.0f}" if nb else f"{'—':>8}"
+        note = ""
+        if (na or nb) and (na != len(seeds) or nb != len(seeds)):
+            note = f"   (carried by {la}: {na}, {lb}: {nb}, of {len(seeds)} seeds)"
+        print(f"  {label:<14}{sa}{sb}{note}")
+    # The two that have to be read as PROPORTIONS, not as per-run means — and
+    # not as each other: the first is a weak-touch measure, the second is the
+    # direction one (see the module docstring).
+    for num, den, what in (("kicksBack", "kickCount",
+                            "kicks whose ball ended up nearer the kicker's own goal 2 s later"),
+                           ("kicksBackLine", "kickLineCount",
+                            "kicks that LEFT on a backward line (>90° from the attacked mouth at 0.5 s)")):
+        (ka, na), (kb, nb) = tot(A, den), tot(B, den)
+        (ba, _), (bb, _) = tot(A, num), tot(B, num)
+        if not (na and nb and ka and kb):
+            print(f"\n{what}: not in these rows — {la} has {na} and {lb} has {nb} of {len(seeds)} "
+                  f"seeds carrying `{den}` (a battery run before the column existed).")
+            continue
         d, p = two_proportions(int(ba), int(ka), int(bb), int(kb))
-        print(f"\nkicks sent back toward the kicker's own goal: {ba:.0f}/{ka:.0f} = {ba / ka:.0%}"
-              f"  →  {bb:.0f}/{kb:.0f} = {bb / kb:.0%}   ({d:+.1%}, p = {p:.4f} on the events)")
+        print(f"\n{what}:\n  {ba:.0f}/{ka:.0f} = {ba / ka:.1%}"
+              f"  →  {bb:.0f}/{kb:.0f} = {bb / kb:.1%}   ({d:+.1%}, p = {p:.4f} on the events)")
 
 
 if __name__ == "__main__":

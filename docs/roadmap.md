@@ -1021,7 +1021,8 @@ Note what it does NOT do: the blind-trained brain still uses a prior perfectly
 well when handed one — better than without — so this is about what it
 PRACTISED, not what it can read.
 
-- [ ] **Ship it?** The case is strong and one-knob, but it rests on a **single
+- [x] **Ship it? — RUN 2026-09-10: the confirmation does not reproduce; do not
+      ship (see below).** The case is strong and one-knob, but it rests on a **single
       training seed** (the lab pins `--seed 0`), and it would mean replacing
       `policies/find_ball/` a second time and flipping a default this file
       currently justifies at 0.7. Effect sizes are far larger than the
@@ -1031,23 +1032,95 @@ PRACTISED, not what it can read.
       → **decide on:** a second blind-trained chain reproducing in-frame ≥ 80%
       and back-bucket found ≥ 95% at `--events 0.33`.
 
-      **STILL OPEN, and three things about it changed on 2026-09-10.** (1) The
-      blind-trained chain is **no longer under `runs/`** — only `31f14b`,
-      `3c1b2e`, `72af49` and `f31a4f` survive — so the confirmation is a fresh
-      8M chain (`MICRODUCK_BALL_PRIOR_PROB=0` through the curriculum,
-      `--seed 1`), not a warm start, and the seed-0 side of it needs
-      re-running too. (2) Its seed-0 numbers were taken under xml and before
-      the physics audit; the shipped export re-measured today reads 88%
-      handoff / 5 falls where the same command recorded 93% / 1, so the whole
-      table needs re-baselining against a same-day control, not comparing to
-      the numbers above. (3) The seed question this box raises has since been
-      answered *for the neighbouring knob*: the faster-sweep item below was run
-      at two seeds, and the two same-recipe control arms differed by 74/98/1
-      against 70/88/4 (in frame / handoff / falls). **That is the size of the
-      seed noise on this recipe** — big enough to swallow the falls and handoff
-      columns whole, small enough that the blind arm's in-frame 68 → 83 would
-      still stand out. Judge a confirmation run on in-frame share and the
-      wrong-side tail, not on falls.
+      *(The "STILL OPEN, three things changed" paragraph that stood here is
+      superseded by the run below; its three points — the blind chain gone
+      from `runs/`, the seed-0 numbers pre-audit, the seed noise measured on
+      the faster-sweep item — are all folded in.)*
+
+      **RUN, AND IT DOES NOT REPRODUCE (2026-09-10). Do not ship the blind
+      recipe as a fresh chain; `policies/find_ball/` stays as it is.**
+
+      Four chains, `scratchpad/chain2.sh` (kept as `runs/fb2-eval/chain2.sh`) —
+      the declared 3-stage xml curriculum (1M + 2M + 1M, `--envs 32`) plus a
+      1M BAM fine-tune at recipe defaults, the deployment path that made the
+      shipped brain and `22f3df`. Two arms (`MICRODUCK_BALL_PRIOR_PROB` 0.0 vs
+      0.7) × two seeds, so the paired blind-vs-prior comparison this box never
+      had. Every battery below is the same command at the same eval seed on the
+      same tree: `MICRODUCK_ACTUATOR=bam uv run eval-find-ball <onnx>
+      --episodes 60 --events 0.33` (default `--seed 123`). Rows under
+      `runs/fb2-eval/` (`summary.txt` re-read by the reviewer; the shipped
+      export reproduced this file's own row exactly, which certifies the tree).
+
+      | arm (`-bam` tip) | found | **in frame** | centred | head yaw | **handoff** | **falls** | back found | worst t_first |
+      |---|---:|---:|---:|---:|---:|---:|---:|---:|
+      | shipped export `f31a4f` | 98% | 65% | 55% | 13.4° | 75% | 13 | 94% | 6.70 s |
+      | **`22f3df` (BAM ft)** | **100%** | **74%** | **68%** | **11.0°** | **98%** | **1** | **100%** | 4.64 s |
+      | `fb2-blind-s0-bam` | 100% | **85%** | 63% | 32.5° | 45% | 9 | **100%** | **1.72 s** |
+      | `fb2-blind-s1-bam` | 98% | 72% | 53% | 39.9° | 23% | **0** | 94% | 7.64 s |
+      | `fb2-prior-s0-bam` | 87% | 59% | 44% | 36.6° | 30% | 33 | 88% | 2.58 s |
+      | `fb2-prior-s1-bam` | 93% | 71% | 59% | 25.2° | 57% | 19 | 94% | 1.96 s |
+
+      → **the decide-on is NOT met.** Seed 1 reads **72% in frame** against the
+      80% bar and **94% back-bucket found** against the 95% bar, and misses both
+      under xml too (77% / 94%; the xml tip `fb2-blind-s1-st3` reads 74% / 100%).
+      Seed 0 clears both bars — and the render says the bars are the wrong bars.
+
+      **Rendered before believing it** (`render-rollout`, 4 eps, BAM;
+      `runs/fb2-eval/sheet-*.png`, read by the reviewer too). **Both blind tips
+      score 0 aim streak in 4/4 episodes.** `fb2-blind-s0-bam` from a ball at
+      −80° **never takes a step in 10 s** — both feet down and the same stance
+      from frame 1 to frame 11 — and holds the ball dead centre with the NECK
+      alone: 98% centred, 0% handoff, body 40-55° off. The shipped export on
+      the same seed turns its BODY from p+173° to p−50° by 0.92 s and p−10° by
+      1.80 s and holds 1.70 s / 3.84 s aim streaks. The fresh blind chains are
+      the gaze policy `eval-find-ball`'s AIMING table was written to catch —
+      head yaw 32-46° against 11.0° — which is why their in-frame column looks
+      best on the page and their handoff is 13-45%. **That retires this box's
+      two decide-on columns: in-frame share and back-bucket found are both
+      satisfiable by a neck. Judge the blind knob on handoff and head yaw.**
+
+      **Paired blind vs prior, the comparison this box lacked.** Blind wins
+      in-frame at both seeds (+26, +1) and falls at both (−24, −19); the two
+      seeds **disagree on the sign of handoff** (+15, −34). Averaged over the
+      pair: in frame +13.5, falls −21.5, handoff −9.5. **The falls result is
+      the only one that survives**, and it is large and same-signed.
+
+      **The seed spread swallows the rest.** Within the blind arm the two seeds
+      differ by **13 points of in-frame and 22 of handoff** (85/45 against
+      72/23); within the prior arm by 12 and 27 (59/30 against 71/57). That is
+      bigger than the seed-1 blind-vs-prior in-frame gap of one point — the
+      same reading the faster-sweep item reached, on a different knob.
+
+      **And the control is not the shipped brain.** A fresh 4M chain of the
+      DECLARED recipe lands at **33 and 19 falls / 60** (prior arm) and 9 and 0
+      (blind arm), against the shipped export's 13 and `22f3df`'s 1. The
+      shipped brain is the tip of a long warm-start lineage (the "8M" at the
+      top of this section is that lineage's six warm-started stages; the
+      declared 3-stage curriculum in `behaviors/ball.py` is 4M, as
+      `runs/teach-find_ball-fe8d23-s{1,2,3}` record), not one clean pass, and
+      this repeats the stale-fix item's finding verbatim: *a fresh chain
+      rediscovers the behavior and lands where every aim-heavy arm lands.*
+      **If the blind knob is worth taking, take it as a warm start from the
+      shipped chain, not as a fresh curriculum.** That is the experiment this
+      box should now ask for.
+
+      `log_std` healthy in all four chains (`std` 0.548-0.552 in every `-bam`
+      log's last block). Runs kept and described in their `behavior.json`:
+      `fb2-{blind,prior}-s{0,1}-{st1,st2,st3,bam}`, group
+      `find_ball-blind-confirm`. Note `describe-brain` cannot write these
+      (it wants a `brain.json` under the brains dir); behavior runs are
+      described by editing `behavior.json`.
+
+      → **RECOMMENDATION (the owner's call, not shipped): leave
+      `policies/find_ball/` alone, and leave `MICRODUCK_BALL_PRIOR_PROB` at
+      0.7.** Nothing measured here beats `runs/teach-find_ball-22f3df`, which
+      stays the arm to promote if the export is to change at all.
+
+      Re-read every number from disk: `cat runs/fb2-eval/summary.txt` (the
+      three tables: BAM, xml, BAM with `--prior 0`), `ls runs/fb2-eval/raw/`
+      (30 raw batteries), `bash runs/fb2-eval/run.sh` (re-measures all,
+      ~4 min), `cat runs/fb2-eval/render-*.txt` (the aim streaks), and the
+      sheets `runs/fb2-eval/sheet-*.png`.
 
 
 **Why this section now has a mechanism, not just a hunch (measured
