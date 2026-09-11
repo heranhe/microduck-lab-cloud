@@ -4329,7 +4329,7 @@ this stack has none of them.
       ball up-pitch reliably, and "passing" as a distinct thing has no
       value left to add to it. Closed: `kick_select_pass` stays off, and
       the push IS the pass.
-- [ ] **D.2 Positioning by potential field or Voronoi — the shape cost is
+- [x] **D.2 Positioning by potential field or Voronoi — the shape cost is
       now measured, and it says what the field must do.** RoboCup
       supporters stand where a potential field over the pitch (ball,
       teammates, opponents, goals) has a minimum; MSL teams tile the field
@@ -8082,8 +8082,9 @@ the ball and turned the wrong way" is the complaint.
 
 **Ships off, both arms.** Recorded, not built: a `Track.bearing_from(pos, yaw)`
 that reads the bearing off `xy` so a coasting track's bearing survives a walk
-(`tracker.py`), and a support/retreat that keeps the head on the remembered
-ball — the latter is where the blind time is.
+(`tracker.py`) — **built and measured, 12ar: the estimate halves its error and
+the behaviour does not move; ships off** — and a support/retreat that keeps the
+head on the remembered ball — the latter is where the blind time is (12ag).
 
 ### 12ag. The head on the remembered ball in support and retreat — MEASURED, SHIPS ON (2026-09-10)
 
@@ -9147,3 +9148,78 @@ and the tree has moved since 12ai's ledger. The measurement that settles it
 is the old pair on seeds 200–223 on today's tree, one paired `eval-pitch`
 block. The ledger's falls are noise, as the per-swing instrument said:
 4 → 9 on seeds 0–23 and 2 on 200–223.
+
+### 12ar. The coasting track's bearing (12af, built): the estimate gets better and the behaviour does not (2026-09-10)
+
+12af's second "recorded, not built", built: `Track.bearing_from(pos, yaw)` and
+`range_from(pos)` read a track's bearing and range off its remembered `xy` for
+the pose the body has NOW, and `TrackerParams.coast_from_xy` wires them into
+`Tracker.update`'s coast step. Until now `Tracker.update` turned a coasting
+bearing by the body's YAW and never by its TRANSLATION, so a duck that walked
+while coasting carried a bearing that had stopped meaning "bearing" — 12af
+measured it 112° off after a walk — while the `xy` beside it was fine. The two
+methods are the exact inverse of `_place`, so at the moment of a hit they
+return what the hit measured and the knob changes nothing until the body moves.
+One knob for both fields, because a brain reading `bearing` and `range` off the
+same track is asking one question. `MICRODUCK_TRACKER="coast_from_xy=1"` is how
+a battery names it (`TrackerParams.env_over`, read by `for_detector`, not by a
+bare `TrackerParams()`); `MICRODUCK_CHASE` could not carry it, because
+`ChaseParams.from_env` raises on a name that is not a `ChaseParams` field.
+`tests/test_track_bearing.py` locks the geometry, the knob-off path row for
+row, the turn-and-walk case in both arms, and the env contract. Commit 5a2414c.
+
+**Who was reading the stale pair.** `Chase` calls a track `seen` for `lost_s`
+(2.0 s) and `fresh` for 0.4 s, so up to 1.6 s of every coast is spent steering
+on it: the `elif seen:` walk (`turn(ball.bearing)`, `k_turn * ball.bearing`,
+`turn_first`, `lineup_range`), `_ball_xy` — and through it the kick spot
+(`_plan`), the board claim and `publish_kick` — the `look_hold_s` head, and the
+yield/avoid bearing comparisons. That is why this is a tracker knob and not a
+`Chase` one: one change makes all of them agree.
+
+**Reachable set first** (12af's lesson). Per-tick counterfactual on the SHIPPED
+brain — what the brain read against what it would have read — 2 seeds × 90 s of
+2v2, 27 439 duck-ticks with a ball track. 28.4 % of ticks act on a track that
+did not hit this frame (support 27 %, retreat 23 %, avoid 18 %, lineup 10 %,
+turn 9 %, chase 7 %), and on those the estimate genuinely improves:
+
+| track age | % of ticks | median \|bearing − truth\| | median range error |
+|---|---|---|---|
+| 0.0–0.4 s | 71.6 % | 1.8° → 1.6° | 0.035 → 0.034 m |
+| 0.4–1.0 s | 12.4 % | 5.0° → 3.3° | 0.052 → 0.038 m |
+| 1.0–2.0 s | 12.1 % | 9.5° → 5.5° | 0.068 → 0.045 m |
+| 2.0–2.5 s | 3.9 % | 17.3° → 9.5° | 0.070 → 0.052 m |
+
+**Loss probe**, `probe_ball_loss --seconds 180` 2v2 ball-out 5, two paired
+blocks (0–11 discovery, 100–111 fresh), `runs/trackbearing/loss-b*` (the arms
+ran as separate invocations because `MICRODUCK_TRACKER` is process-wide;
+pairing is by seed):
+
+| block | arm | ball in view | losses | median | p90 | > 2 s | falls / run | kicks / run |
+|---|---|---|---|---|---|---|---|---|
+| 0 | off | 52.6 % | 1441 | 1.00 s | 8.62 | 33 % | 0.08 | 3.92 |
+| 0 | `coast_from_xy=1` | 50.9 % | 1347 | 1.18 s | 9.92 | 35 % | 0.25 | 3.00 |
+| 100 | off | 54.0 % | 1399 | 0.90 s | 7.99 | 31 % | 0.00 | 4.50 |
+| 100 | `coast_from_xy=1` | 50.7 % | 1454 | 1.00 s | 9.01 | 34 % | 0.08 | 4.17 |
+
+Pooled 24 seeds: ball in view **−2.46 pp ± 3.3, p = 0.14, better on 11/24**
+(null; re-read from the rows by the reviewer, same numbers); median loss
++0.14 ± 0.18 s (better on 7/24); kicks 4.21 → 3.58; falls 0.04 → 0.17 (better
+on 1/24); possession flat. By sign test nothing resolves (view 11 seeds up,
+13 down), so this is an honest null and not a measured loss — but no metric
+pays, both blocks agree in sign, and the tails are longer in both. **The pitch
+ledger was not run: the probe has to pay first.**
+
+**Ships OFF, and the reason is worth keeping.** A better estimate made the
+behaviour no better — which is the warning `_place`'s own docstring already
+carries one level down (AGENTS.md rule 7): correcting the ball placement alone
+LOST 0.38 toys in the playroom even though it cut the estimate's error, because
+the stop distance downstream had been hand-fitted against the biased estimate.
+The same shape here: `turn_first`, `k_turn`, `lineup_range` and the `_plan`
+spot were all fitted against the polar pair as it lags, so correcting the pair
+alone moves them off their constants. The next arm, if anyone wants it, is not
+a re-run of this one — it is this knob **paired with a re-fit of the line-up's
+distances**, which is the "only correcting BOTH won" half of rule 7.
+`Track.bearing_from` / `range_from` are in the tree and cost nothing off. Note
+for a follower: `Follow` builds its tracker from a def-time default
+`TrackerParams()`, so `MICRODUCK_TRACKER` never reaches it (asserted in the
+test; deliberate, the knob is a chase experiment).
