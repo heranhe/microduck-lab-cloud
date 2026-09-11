@@ -20,7 +20,7 @@ that dropped it, mirroring `Detector._visible` for a point target:
     noise      the same with p_find = 1: the datasheet's own miss rate
     range      beyond `max_range_m`
 
-Every LOSS EVENT (from `Chase.DET_MAX_AGE` after the last sighting to the next
+Every LOSS EVENT (from the freshness gate after the last sighting to the next
 frame with a ball, as `probe_search` counts them) carries the cause of the latest
 blind frame when it is declared, the brain's state, what the head was COMMANDED and where it
 actually WAS, whether the tracker still had the ball, whether `yaw_clear` was
@@ -41,6 +41,18 @@ Two more things the head-tracking law has never had measured:
 Arms (`--arm LABEL=KNOBS`, `MICRODUCK_CHASE` syntax) run paired seeds and are
 compared per seed with Student's t (`compare_pitch.paired`), the knobs read
 back off the CONSTRUCTED brain (playbook rule 0).
+
+**THE EVENT RULE IS IN DETECTOR PERIODS, NOT SECONDS** (roadmap 12av follow-up
+(1) E). It used to open a loss at a flat `Chase.DET_MAX_AGE` = 0.4 s after the
+last sighting. Below 2.5 Hz that is SHORTER than the camera's own period, so
+with the ball in every single frame and nothing missed the probe opened an
+event 0.4 s after each frame and closed it at the next — ~5 manufactured
+sub-period events a second per duck. At 2 Hz it read "median loss 1.02 →
+0.10 s, better on 12/12 seeds" while the duck was strictly blinder. The gate is
+now `det_gate(brain.DET_MAX_AGE, LOSS_PERIODS, detector period)`: a loss is no
+frame for longer than the sensor's own cadence and its arrival jitter, and only
+then the brain's gate on top. At 10 Hz and 5 Hz it is still exactly 0.4 s, so
+every number 12af / 12ar / 12ae / 12as took with this probe is unchanged.
 """
 
 from __future__ import annotations
@@ -57,7 +69,7 @@ import numpy as np
 
 from microduck_local.brain import REGISTRY, Senses
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
-from microduck_local.brain.controllers import Chase, ChaseParams, tof_clearance_bearings
+from microduck_local.brain.controllers import Chase, ChaseParams, det_gate, tof_clearance_bearings
 from microduck_local.brain.team import brain_kwargs, kickoff_brains
 from microduck_local.world import World, make_pitch
 from microduck_local.world.metrics import PitchMetrics
@@ -67,6 +79,15 @@ from compare_pitch import paired  # noqa: E402
 
 CAUSES = ("behind", "h_out", "v_low", "v_high", "occluded", "small", "noise", "range")
 MAX_LAG = 20            # ticks (0.4 s) scanned for the head servo's delay
+# How many detector periods of silence are NOT a loss. One period is the
+# cadence itself (a frame is due); the half on top is the frame's arrival
+# jitter — `DetectorNoise.datasheet` puts 0.026 s + |N(0, 0.02)| of latency on
+# every frame, so successive frames can land up to ~0.1 s further apart than
+# the period, and a tick is another 0.02 s of quantisation. Below that the
+# duck has not lost the ball; it is waiting for a camera that is working.
+# At 10 Hz (0.15 s) and 5 Hz (0.30 s) this is under the brain's own 0.4 s gate
+# and changes nothing; at 2 Hz it is 0.75 s and is the whole fix.
+LOSS_PERIODS = 1.5
 
 
 def _wrap(a: float) -> float:
@@ -160,7 +181,8 @@ def _servo(cmd: np.ndarray, act: np.ndarray) -> dict:
             "movingFrac": round(float(moving.mean()), 4)}
 
 
-def run(seed: int, seconds: float, per_side: int, knobs: str = "", ball_out_s: float = 5.0) -> dict:
+def run(seed: int, seconds: float, per_side: int, knobs: str = "", ball_out_s: float = 5.0,
+        loss_periods: float = LOSS_PERIODS) -> dict:
     if knobs:
         os.environ["MICRODUCK_CHASE"] = knobs
     else:
@@ -198,6 +220,12 @@ def run(seed: int, seconds: float, per_side: int, knobs: str = "", ball_out_s: f
     cmd_hist: dict[str, list] = {d.id: [] for d in sc.ducks}
     act_hist: dict[str, list] = {d.id: [] for d in sc.ducks}
     half_h = math.radians(next(iter(w.ducks.values())).detector.spec.fov_h_deg) / 2
+    # The loss gate, against THIS camera's cadence and THIS brain's own
+    # freshness gate (which `ChaseParams.det_max_periods` may itself have put
+    # in periods). Printed into the row so a rate arm's numbers carry the rule
+    # they were counted under.
+    det_period = next(iter(w.ducks.values())).detector.period
+    gate = det_gate(next(iter(brains.values())).DET_MAX_AGE, loss_periods, det_period)
     while w.t < seconds:
         for d in w.ducks.values():
             tof, det = d.tof.last, d.detector.last
@@ -241,12 +269,12 @@ def run(seed: int, seconds: float, per_side: int, knobs: str = "", ball_out_s: f
                         coast_gap += 1
                         if truth["cause"] == "h_out" and abs(truth["bearingBody"]) <= half_h + p0.head_yaw_max:
                             coast_gap_reach += 1
-            if w.t - last_ball_t[d.id] <= Chase.DET_MAX_AGE:
+            if w.t - last_ball_t[d.id] <= gate:
                 seen_ticks += 1
             elif open_loss[d.id] is None:
                 tr = last_truth[d.id] or {}
                 open_loss[d.id] = {
-                    "duck": d.id, "t0": round(last_ball_t[d.id] + Chase.DET_MAX_AGE, 2),
+                    "duck": d.id, "t0": round(last_ball_t[d.id] + gate, 2),
                     "cause": tr.get("cause", "?"), "causes": Counter(),
                     "state": b.state, "cmdYaw": round(float(head[2]), 3), "cmdPitch": round(float(head[1]), 3),
                     "camYaw": tr.get("camYaw"), "camPitch": tr.get("camPitch"),
@@ -275,6 +303,7 @@ def run(seed: int, seconds: float, per_side: int, knobs: str = "", ball_out_s: f
         "seed": seed, "perSide": per_side, "seconds": seconds, "simSeconds": round(w.t, 1),
         "live": {k: (v if not isinstance(v, float) else round(v, 4)) for k, v in live.items()},
         "ticks": ticks, "viewFrac": round(seen_ticks / max(ticks, 1), 4),
+        "detHz": round(1.0 / det_period, 3), "lossGate": round(gate, 3), "lossPeriods": loss_periods,
         "frames": frames, "blindFrames": blind_frames,
         "causeFrames": dict(cause_frames),
         "causeState": {c: dict(v) for c, v in cause_state.items()},

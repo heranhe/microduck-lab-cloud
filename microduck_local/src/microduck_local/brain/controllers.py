@@ -527,6 +527,27 @@ class ChaseParams:
     k_turn: float = 3.0
     turn_first: float = 0.6        # rad off the nose: turn in place before walking
     lost_s: float = 2.0
+    # THE FRESHNESS GATE, IN THE SENSOR'S OWN PERIODS (roadmap 12av
+    # follow-up (1)). `Chase.DET_MAX_AGE` is a constant 0.4 s, which is four
+    # detector periods at the lab's 10 Hz default and SHORTER than one period
+    # at the robot's documented, thermally-bound 2 Hz (0.5 s). At that rate
+    # the shipped brain calls its own newest detection stale on 26.7 % of its
+    # ticks before anything has been missed (measured; 12av's "a sixth" aged
+    # a frame from its ARRIVAL, and `Senses.det_age` ages it from its CAPTURE,
+    # which is the number the gate compares) — a mis-specification of the
+    # brain, not a property of the hardware, and it is what the 2 Hz arm in
+    # 12av was measuring. This expresses the same gate in periods of whatever
+    # camera `MICRODUCK_CAMERA` builds, read once at construction:
+    #
+    #     gate = max(DET_MAX_AGE, det_max_periods * detector period)
+    #
+    # It can only ever LENGTHEN the gate, and at 10 Hz (period 0.1 s) and
+    # 5 Hz (0.2 s) every setting up to 4 and 2 periods respectively is exactly
+    # the shipped 0.4 s, so the arm is byte-identical at every rate the lab
+    # has measured. Ships OFF (0.0 = the bare constant) so every row on disk
+    # still reproduces at every rate, 2 Hz included; 1.0 is "one frame late is
+    # not stale", 1.5 adds the frame's arrival jitter on top.
+    det_max_periods: float = 0.0
     tof_stop: float = 0.3          # walls and ducks (body-height ToF returns); the ball and the floor do not count
     side_stop: float = 0.22        # a wall this close in the side columns: no turn in place toward it
     # THE LINE-UP'S OWN STOP (roadmap 12am, built after 12al). `tof_stop`
@@ -2638,6 +2659,23 @@ def _wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
 
 
+def det_gate(base_s: float, periods: float, period_s: float) -> float:
+    """The detection-freshness gate to use against a sensor of THIS cadence.
+
+    A gate in seconds is only meaningful beside the period of the camera it
+    judges: 0.4 s is four frames at 10 Hz and less than one frame at the
+    robot's 2 Hz, where it goes stale on a QUARTER of the ticks with nothing
+    missed (26.7 % measured on a 1v1 pitch; roadmap 12av follow-up (1) and its
+    own follow-up (1)). `max` rather than a replacement, so
+    the knob can only lengthen the gate and every rate at or above
+    `periods / base_s` Hz keeps the shipped number exactly.
+
+    Used by `Chase` (through `ChaseParams.det_max_periods`) and by
+    `scripts/probe_ball_loss.py`, whose loss EVENT rule is the same question
+    asked of the same sensor."""
+    return max(float(base_s), float(periods) * float(period_s))
+
+
 class Chase:
     """Walk at the nearest ball, line up behind it on the line to the goal,
     and KICK it with the shipped kick policy (roadmap soccer). Tracks the
@@ -2696,7 +2734,18 @@ class Chase:
         # the ball inside. The camera the sim runs (`MICRODUCK_CAMERA`), read
         # once here the way the tracker reads the detector's datasheet.
         from ..sensors.detector import DetectorSpec  # noqa: PLC0415
-        self._half_v = math.radians(DetectorSpec.from_env().fov_v_deg) / 2
+        _spec = DetectorSpec.from_env()
+        self._half_v = math.radians(_spec.fov_v_deg) / 2
+        # …and the same spec's CADENCE. `DET_MAX_AGE` is a class constant in
+        # seconds; this SHADOWS it per instance with the period-derived gate
+        # (`det_max_periods`, default 0.0 → the constant, unchanged), so every
+        # `self.DET_MAX_AGE` read below — and every probe that reads
+        # `brain.DET_MAX_AGE` off a constructed brain — asks its question of
+        # the camera this duck actually has. `Follow` has the same constant
+        # and is deliberately left alone: it looks at people, at the lab rate,
+        # and nothing in this item measured it.
+        self.det_period = 1.0 / _spec.rate_hz
+        self.DET_MAX_AGE = det_gate(Chase.DET_MAX_AGE, self.p.det_max_periods, self.det_period)
         self.gait = GaitWatch()
         self.blocker = Interceptor()
         self._kick_rng = None              # kick_select's generator, seeded from the duck id on first use
