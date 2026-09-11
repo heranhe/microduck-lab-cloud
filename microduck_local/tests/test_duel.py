@@ -224,3 +224,105 @@ def test_knob_off_is_byte_identical_to_the_shipped_brain():
     shipped = rollout()
     assert rollout(duel=0.0) == shipped
     assert rollout(duel=STANDOFF) != shipped          # ...and the knob is not inert
+
+
+# -- the lateral offset (`duel_side`) ----------------------------------------
+#
+# The block wins the first touch and gives the metres back (roadmap C.4). The
+# gym rows say why: every first touch we win is made EN ROUTE to the spot, from
+# a median 0.317 m short of it, and the straight servo line to a spot on the
+# far side of the ball runs through the ball. `duel_side` puts the spot off
+# that line on the side the duck is already on, so the walk goes round it.
+
+SIDE = 0.15
+
+
+def test_the_offset_ships_off():
+    assert ChaseParams().duel_side == 0.0
+
+
+def test_the_offset_reaches_the_brain_that_runs_and_is_not_gated():
+    """Rule 0 again, for the second knob: the arm that sets it must be the arm
+    that runs it. `live` in `kick_gym --duel` reads the same attribute."""
+    old = os.environ.get("MICRODUCK_CHASE")
+    os.environ["MICRODUCK_CHASE"] = f"duel={STANDOFF},duel_side={SIDE}"
+    try:
+        assert ChaseParams.from_env().duel_side == SIDE
+        assert Chase().p.duel_side == SIDE           # the lab / benchmark path: no `p` given
+    finally:
+        if old is None:
+            os.environ.pop("MICRODUCK_CHASE", None)
+        else:
+            os.environ["MICRODUCK_CHASE"] = old
+    assert warning_for(f"duel={STANDOFF},duel_side={SIDE}") is None
+
+
+def test_the_offset_moves_the_spot_onto_the_side_the_duck_is_already_on():
+    """Ball at the origin, our goal at −x, so the line is the x axis and the
+    offset is in y. A duck at +y gets a spot at +y and one at −y gets −y: the
+    walk to it never crosses the ball."""
+    for dy in (0.30, -0.30):
+        b = _brain(duel=STANDOFF, duel_side=SIDE)
+        odom = (0.9, dy, math.atan2(-dy, -0.9))
+        _drive(b, odom, (0.0, 0.0), ducks=[(-0.15, 0.0)])
+        assert b.dueling and b.duel_spot is not None
+        assert math.copysign(1.0, b.duel_spot[1]) == math.copysign(1.0, dy)
+        assert abs(abs(b.duel_spot[1]) - SIDE) < 1e-9
+
+
+def test_the_offset_is_perpendicular_and_keeps_the_standoff_on_the_line():
+    """It is an offset OFF the line, not a walk along it: the component of the
+    spot along the ball-to-own-goal direction is still `duel`."""
+    b = _brain(duel=STANDOFF, duel_side=SIDE)
+    odom = (0.9, 0.30, math.atan2(-0.30, -0.9))
+    _drive(b, odom, (0.0, 0.0), ducks=[(-0.15, 0.0)])
+    assert b.duel_spot is not None
+    assert abs(-b.duel_spot[0] - STANDOFF) < 1e-9    # our goal is at −x: along == −x
+    assert abs(math.hypot(*b.duel_spot) - math.hypot(STANDOFF, SIDE)) < 1e-9
+
+
+def test_the_offset_spot_is_still_never_laid_in_the_boards():
+    b = _brain(duel=STANDOFF, duel_side=SIDE)
+    ball = (-BOUNDS[0] + 0.10, BOUNDS[1] - 0.10)
+    _drive(b, (0.6, 0.0, math.atan2(ball[1], ball[0] - 0.6)), ball,
+           ducks=[(ball[0] - 0.02, ball[1] - 0.12)])
+    assert b.dueling and b.duel_spot is not None
+    m = b.p.support_margin
+    assert b.duel_spot[0] >= -BOUNDS[0] + m - 1e-9
+    assert abs(b.duel_spot[1]) <= BOUNDS[1] - m + 1e-9
+
+
+def test_the_offset_still_takes_the_duel_state_and_steers_somewhere_else():
+    on = _brain(duel=STANDOFF, duel_side=SIDE)
+    plain = _brain(duel=STANDOFF)
+    odom, ball, opp = (0.55, 0.75, -2.2), (0.0, 0.0), (-0.15, 0.0)
+    ion = _drive(on, odom, ball, ducks=[opp])
+    iplain = _drive(plain, odom, ball, ducks=[opp])
+    assert on.state == "duel" and plain.state == "duel"
+    assert on.duel_spot != plain.duel_spot
+    assert ion.twist != iplain.twist
+
+
+def test_offset_off_is_byte_identical_to_the_duel_arm_it_is_measured_against():
+    """The A/B is `duel=0.15` against `duel=0.15,duel_side=x`, so the lock that
+    matters is this one: at 0 the new knob must not move one command of the
+    arm it is compared to — nor of the shipped chain."""
+    def rollout(**knobs) -> list[tuple]:
+        b = _brain(**knobs)
+        rows = []
+        for k in range(120):
+            t = k * 0.05
+            a = 0.6 * math.sin(0.25 * t)
+            ball = (0.3 * math.cos(0.4 * t), 0.3 * math.sin(0.4 * t))
+            odom = (0.9 + 0.1 * math.cos(t), 0.2 * math.sin(t), math.pi + a)
+            opp = (ball[0] - 0.12, ball[1] + 0.05)
+            it = b.step(Senses(t=t, det=_frame(t, odom, ball, [opp]), det_age=0.0,
+                               speed=0.2, odom=odom))
+            rows.append((b.state, it.twist, it.head, it.skill))
+        return rows
+
+    shipped = rollout()
+    assert rollout(duel_side=SIDE) == shipped        # no duel: the offset has nothing to offset
+    duel = rollout(duel=STANDOFF)
+    assert rollout(duel=STANDOFF, duel_side=0.0) == duel
+    assert rollout(duel=STANDOFF, duel_side=SIDE) != duel

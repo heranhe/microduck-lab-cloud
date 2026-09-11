@@ -2264,6 +2264,50 @@ class ChaseParams:
     # (that is a swing about to happen), and `avoid` still owns a touch.
     duel: float = 0.0
     duel_near: float = 0.35        # an opponent this close to the ball is contesting it (probe_duel's number)
+    # ...and the lateral offset of that spot off the ball-to-own-goal line, in
+    # metres, 0 = the line itself (the measured `duel` arms, to the bit).
+    #
+    # `kick_gym.py --duel` found the block at 0.15 m nearly DOUBLES first touch
+    # (9.4/7.9 -> 14.8/17.1%) and hands the metres straight back: our advance
+    # falls 0.029 m an episode, equal and opposite to the 0.031 the opponent's
+    # loses. The rows say where those metres go, and it is not where the item
+    # assumed. A duck standing ON the block spot touches the ball AWAY from our
+    # goal - forward, by construction. But at the moment of our first touch the
+    # duck is a median 0.317 m from its own spot and has NEVER reached it (0 of
+    # 42 within `intercept_tol`): every touch we win is made EN ROUTE. And the
+    # route is a straight servo line from wherever the duck stands to a spot on
+    # the far side of the ball, so when the duck starts up-pitch the line runs
+    # THROUGH the ball and the contact drives it home - the duck is up-pitch of
+    # the ball on 50% of its own first touches, the ball leaves with a negative
+    # x-velocity on 64%, and that velocity predicts the 2 s advance at r=0.87.
+    #
+    # So the metres are a PATH problem, not a stance problem, and this is the
+    # path fix: put the spot `duel_side` off the line, on the side of it the
+    # duck is already on, so the walk goes round the ball rather than across
+    # it. The side is the duck's own and not the nearer board's on purpose - a
+    # board-side rule is a coin flip against this mechanism, helping on the
+    # half of draws where the duck is already board-side and steering the walk
+    # further across the ball on the other half.
+    #
+    # MEASURED AND IT SHIPS OFF (`kick_gym.py --duel`, 40 episodes x 12 seeds a
+    # block, seeds 0-11 and 100-111). It does not trade the metres for the
+    # touch: it throws the touch away. We touch first 14.8/17.1% at
+    # `duel_side` 0 -> 4.6/6.5% at 0.15 -> 1.0/0.8% at 0.25, BELOW the shipped
+    # 9.4/7.9%, and the opponent's advance climbs back with it (+.002/+.005 ->
+    # +.018/+.030 -> +.020/+.041). The net is flat on every arm and not
+    # resolvable at this size anyway (MDE 76-99% of baseline).
+    #
+    # Why, in one column: our duck touches the ball AT ALL on 10.6/11.5% of
+    # shipped episodes, 21.0/21.9% at `duel` 0.15, and 8.1/10.6% with the
+    # offset. The block's first touch is not a stance at all - it is the
+    # COLLISION on the way in, and it exists only because the spot sits inside
+    # `duck_touch` (0.22). An offset of 0.15 puts the spot 0.21 m off the ball
+    # and 0.25 puts it 0.29, so the walk that used to end in the ball now ends
+    # beside it. Any variant that keeps the touch has to keep the spot inside
+    # `duck_touch`, which leaves the contact direction set by where the duck
+    # started, not by where the spot is - so the touch's direction is not a
+    # spot knob's to fix.
+    duel_side: float = 0.0
     # The ToF sees the ball at the feet (tof_floor_ball): inside `tof_ball_m`
     # with the head dipped, a floor blob feeds the tracker as a ball sighting
     # when the camera has none - the level camera loses a floor ball inside
@@ -3250,6 +3294,13 @@ class Chase:
                 gx, gy = self._own_goal(odom)
                 u = math.atan2(gy - bxy[1], gx - bxy[0])       # from the ball toward OUR goal
                 sx, sy = bxy[0] + p.duel * math.cos(u), bxy[1] + p.duel * math.sin(u)
+                if p.duel_side > 0.0:
+                    # ...offset off that line, on the side of it the duck is
+                    # ALREADY on, so the walk to the spot goes ROUND the ball
+                    # instead of through it (see the knob).
+                    lat = -(odom[0] - bxy[0]) * math.sin(u) + (odom[1] - bxy[1]) * math.cos(u)
+                    s = p.duel_side if lat >= 0.0 else -p.duel_side
+                    sx, sy = sx - s * math.sin(u), sy + s * math.cos(u)
                 if self.bounds is not None:                     # never a spot in the boards
                     m = p.support_margin
                     sx = float(np.clip(sx, -self.bounds[0] + m, self.bounds[0] - m))
