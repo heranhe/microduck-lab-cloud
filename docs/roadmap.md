@@ -4739,6 +4739,11 @@ this stack has none of them.
 #### E. Learning — where the field found it pays, and where it did not
 
 - [ ] **E.1 The striker, with sensing in the loop (re-points item 4).**
+      **First cut built 2026-09-10 — 12as:** a kick that SEES the ball on the
+      head command slots covers 94-99 % of the play box against the blind
+      pair's 67-82 %, blindfold ablation proves it is the observation; the
+      approach half did not appear and the arena still zeroes the slots, so
+      it is not in play.
       Three results say the same thing. "Learning Vision-Driven Reactive
       Soccer Skills for Humanoid Robots" (2025) trains search / chase /
       multidirectional-kick **with only onboard vision**, exposing the policy
@@ -9498,6 +9503,107 @@ distances**, which is the "only correcting BOTH won" half of rule 7.
 for a follower: `Follow` builds its tracker from a def-time default
 `TrackerParams()`, so `MICRODUCK_TRACKER` never reaches it (asserted in the
 test; deliberate, the knob is a chase experiment).
+
+### 12as. The learned last metre, first cut (12h / E.1): the kick that sees the ball covers 94-99 % of the play box against the blind pair's 67-82 %, and it still will not walk to it (2026-09-10)
+
+12aj left the far balls as the ones nothing can refuse — 11 % of swings,
+half the whiffs, and the belief is what is wrong — and 12ak closed with the
+ask: *"the lever that would USE a fresh sighting is a kick that adapts to
+where the ball is"*. Built as 12h's first cut.
+
+**Built:** `behaviors/lastmetre.py` `kick_{left,right}_sensed` — the wide
+kick's world and the wide kick's pay to the term (`kick._kick_terms` plus
+12ab's `face_line`), with the ball's position riding the four HEAD command
+slots of the untouched 61-obs contract: `[51]` bearing in the duck's own yaw
+frame (psi/(pi/2), + to the LEFT), `[52]` ground range / 0.25 m, `[53]` the
+detector's `seen`, `[54]` the estimate's freshness. Body frame, not camera
+frame, because the daemon's tracker adds the camera's own yaw before anyone
+consumes a bearing (verification rule 8) and this policy is placing a FOOT.
+Everything in the slots is daemon-doable: the ball is projected through the
+MJCF `head_camera` with `find_ball`'s own FOV knobs, `seen` is in-frame in
+both axes at 25 Hz with its jitter, the jittered bearing pair is turned back
+into a ray and intersected with the floor plane (head encoders + IMU, no
+range sensor), and the world point is held and re-expressed in the current
+body frame each step — odometry. Three spawn-only rungs: 1M on the strike
+spot with the gaze pitched down AND yawed at the ball (measured: 96 % of the
+box is in frame from there, 47 % looking straight down, 0 % level — 12k's
+geometry), 1M on a 6 x 6 cm box, 2M on the full 4-16 x 1-13 cm box at any
+gaze with the head yaw back at HOME. Locked by `tests/test_lastmetre.py`.
+Trained from scratch both feet, 4M steps each, `face_line` re-priced to 12.0
+at launch (`lastmetre-{right,left}-v1`): the strike's `VecNormalize` cannot
+be warm-started onto live command slots — it was fitted with those four
+carrying keep-alive noise, std 0.009-0.029 at a 2M count — so rung 1 finds
+the strike instead of inheriting it (12b's route, closed).
+
+**Instrument:** `scripts/grid_kick_bench_sensed.py` — the box grid and the
+gaze-pose bench with the env built from a NAMED recipe. Both existing
+benches hard-code `BehaviorEnv(f"kick_{foot}")`, the BLIND recipe's env, so
+a sensed policy run there has its eyes taped shut and the number looks like
+a result. It reproduces `grid_kick_bench.py` row for row on the shipped
+kick, and prints `seen@0` / in-frame-over-the-window as the positive
+control.
+
+**Coverage of the 4-16 x 1-13 cm play box** (level / line-up gaze / neck
+split, 2 seeds a cell; env named per row):
+
+| arm | env | box | sweet spot | falls /180 | \|turn\| |
+|---|---|---|---|---|---|
+| shipped `kick_right.onnx` | `kick_right` | 69 / 67 / 77 % | 100 % | 7/6/6 | 13/21/14° |
+| **`lastmetre-right-v1`** | `kick_right_sensed` | **96 / 94 / 96 %** | 100 % | 8/6/6 | 23/17/20° |
+| the same policy, BLINDFOLDED | `kick_right` | 46 / 42 / 33 % | 67/61/50 % | 90/0/0 | 38/13/17° |
+| 12b blind box `f40503-s2` | `kick_right_wide` | 82 / 86 / 92 % | 100 % | 3/1/4 | 160/168/161° |
+| shipped `kick_left.onnx` | `kick_left` | 82 / 79 / 82 % | 100 % | 5/5/8 | 7/9/5° |
+| **`lastmetre-left-v1`** | `kick_left_sensed` | **95 / 95 / 99 %** | 100 % | 0/6/4 | 29/22/21° |
+| the same policy, BLINDFOLDED | `kick_left` | 17 / 7 / 15 % | 22/0/22 % | 0/0/0 | 4/3/9° |
+| 12b blind box `ab161c-s2` | `kick_left_wide` | 62 / 83 / 99 % | 100 % | 10/4/3 | 52/108/150° |
+
+Gaze-pose bench, 12 seeds a pose: **0 % whiff from all five poses on both
+feet, no falls**, travel 0.94-1.45 m (right) and 1.10-1.55 m (left), peak
+1.40-2.03 m/s, body turn 3-15°.
+
+**The whole gain is the observation, and the blindfold rows are how we know.**
+Driven through the blind recipe's env — same ONNX, slots replaced by
+keep-alive noise — the sensed pair loses two thirds of the box and most of
+the sweet spot. It is kicking on what it sees, not sweeping. And it LOOKS:
+in frame on 40-76 % of steps and in 98-100 % of cells at some point, from
+5-7 % at the first step with a level head, which is the head turning to the
+ball inside the episode.
+
+**What it did NOT learn is the approach, and that is the half of 12h still
+open.** With the ball out of the swing's reach (0.22-0.45 m ahead, 8 seeds a
+cell, 2 s) the trunk advances 1-11 cm and the ball never moves. The render
+agrees: on the box's far corner it acquires the ball at 0.12 s, swings,
+misses, and then stands watching it from 0.17 m away for the rest of the
+episode. Nothing pays for arriving and a 2 s clip is a weak cost, so the
+step-then-swing is not in the rollouts — which by the playbook is a WORLD
+fix (a rung that spawns the ball beyond reach with a longer clip), not a
+reward one. Until then the far balls stay the brain's job (`kick_ahead_max`)
+exactly as 12aj left them.
+
+**It is NOT wired into play, and it must not be.** `world/arena.py`
+`_skill_cmd` zeroes `head_cmd` for the whole kick window ("the kick's
+observation carries an all-zero command") and `WorldDuck.obs` fills
+`obs[51:55]` from it, so a sensed kick in the arena IS the blindfolded row —
+worse than the shipped pair. Wiring it needs three things in brain/world
+code: a sidecar field marking a skill ONNX as sensed (beside `exit_rad`),
+`_skill_cmd` writing `Chase`'s own ball track into `head_cmd[0:4]` in the
+recipe's units instead of zeroing it, and `set_cmd`'s zeroing default left
+alone for every other skill. Only then can `kick_gym` / `probe_kick_recover`
+/ a 2v2 ledger say anything about this pair.
+
+Reviewer's reproduction: the pose bench at 6 seeds, right foot — sensed 0 %
+whiff at all five poses, 0 falls, travel 1.00-1.42 m; the same ONNX
+blindfolded 33-67 % whiff, travel 0.05-0.32 m. Commit f9a3201; runs
+`lastmetre-{left,right}-v1` (+ `-rung1`, `-rung2`).
+
+**Caveats.** One training seed a foot. The sensed arm carries the box AND the
+sensing against the shipped point strike, so only the blindfold ablation
+isolates the observation — 12b's blind-box arms are in the table for
+reference but ran at `face_line` 4 with a 160° pirouette and are not a
+matched control. At 2 seeds a cell a half-filled cell is one hit: the 27-30
+pp coverage gaps are far beyond that, the turn medians and the falls are
+not. And the turn bar is NOT met — 17-23° right and 21-29° left, over 20° at
+four of the six poses — so `policies/kick/` stays the vendored pair.
 
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
