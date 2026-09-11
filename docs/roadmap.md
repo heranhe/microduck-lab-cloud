@@ -5076,7 +5076,11 @@ this stack has none of them.
 
 #### F. Architecture, for when the above lands
 
-- [ ] **F.1 A behaviour hierarchy.** B-Human writes behaviour in CABSL
+- [x] **F.1 A behaviour hierarchy — closed as not needed (ticked 2026-09-10):
+      the refactor that paid, `Chase.PRIORITY` with its order locked by a test,
+      is done; a hierarchy is wanted only when a role needs its own
+      top-level loop, and the measured keeper does not. Reopen if that
+      changes.** B-Human writes behaviour in CABSL
       (hierarchical state machines) organised as skills and cards; NimbRo
       runs a two-layer FSM (game FSM over behaviour FSM). `Chase` is one
       flat state machine in a 3 000-line file with roles bolted on as a
