@@ -11089,6 +11089,193 @@ written into each `behavior.json`); rows under
 `runs/sensedplay/gym-leftstrike-b{0,100}.jsonl`. No recipe, stage or reward
 changed; nothing promoted.
 
+**Follow-up G: the clone's reading does not grow — 6M more PPO steps
+plateau the slot sensitivity at 7.5 %, and the 25 Hz detector moves the
+BLIND foot, not the sensed one (2026-09-10).**
+
+Follow-up F's two honest next cuts, both taken. Neither buys the
+combination; both close a door.
+
+**A. The PPO curve on the clone.** Three 2M-step increments off
+`lastmetre-left-distil-v1`, same recipe, same stage (full 4-16 x 1-13 cm
+box at any gaze), same `face_line` 12.0, 32 envs, seed 0, each
+`--init-from` the last. `log_std` flat 0.119 -> 0.129 over the whole 9M —
+no ratchet. Slot sensitivity is now a committed instrument,
+`scripts/probe_slot_sensitivity.py` (commit d62fa49): mean
+|a(obs) - a(obs with obs[51:55] = 0)| over 10 000 steps of the recipe's own
+finished world, as a share of mean |a(obs)|, the rollout driven by the TRUE
+action throughout. Stable to +-0.2 pp over three probe seeds, so a 2M
+increment's effect on it is readable. In play: `kick_gym --episodes 40
+--seeds 12` on blocks 0-11 and 100-111, `MICRODUCK_SKILL_KICK_LEFT` pinned
+to a scratch copy of each tip beside a `{"sensed": true, "exit_rad": ...}`
+sidecar, the exit calibrated first on ONE block at 0.0 as F and 12at do,
+`World.skill_path` / `skill_sensed` / `kick_exits()` asserted on the
+CONSTRUCTED World and off the constructed chase brain before any compute.
+
+| tip | slots | left whiff | vs shipped | travel | bench box | BLINDFOLD box | bench falls /180 | \|turn\| | fell |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped `kick_left.onnx` | (n/a) | 8.5 % | — | 1.13 m | 82/79/82 % | — | 5/5/8 | 7/9/5° | 0.5 % |
+| `-distil-rung0` (0 PPO) | **0.6 %** | — | — | — | 75/79/80 % | — | 3/4/7 | 17/13/10° | — |
+| `-distil-v1` (3M, F's tip) | **5.5 %** | 7.9 % | −0.7 pp, MDE 3.6, p 0.710 | 1.06 m | 82/90/70 % | 82/88/68 % | 3/5/4 | 8/8/5° | 0.4 % |
+| **`-distil-v1-5m`** (5M) | **7.0 %** | 10.1 % | +1.5 pp, MDE 3.8, p 0.437 | 0.95 m | 81/87/81 % | 79/79/76 % | 0/3/2 | 13/11/9° | 0.4 % |
+| **`-distil-v1-7m`** (7M) | **7.2 %** | 6.0 % | −2.6 pp, MDE 3.4, p 0.137 | 0.96 m | 80/92/94 % | 76/87/92 % | 0/2/2 | 14/16/18° | 0.0 % |
+| **`-distil-v1-9m`** (9M) | **7.5 %** | 7.0 % | −1.5 pp, MDE 3.5, p 0.398 | 0.95 m | 92/94/100 % | 87/90/95 % | 0/0/3 | 20/25/22° | 0.0 % |
+| `lastmetre-left-v1` (from scratch) | **101.8 %** | 34.5 % | +25.9 pp, p 0.000 | 0.19 m | 95/95/99 % | — | 0/6/4 | 29/22/21° | — |
+
+(`slots` is the new probe; F's own scratch script read the same three arms
+0.6 / 4.5 / 94.6 % over ~39 000 steps, so the probe is F's number, re-taken
+at 10 000 steps and three seeds. F's four bench rows re-ran to the cell on
+this snapshot — shipped 82/79/82, from-scratch 95/95/99, the 3M tip 82/90/70
+and its blindfold 82/88/68 — the positive control for everything new here.
+The shipped gym block 0 is `outcome_key`-identical to
+`runs/sensedplay/gym-ship-b0.jsonl`, so the blind path has not moved.)
+
+**The question is answered and the answer is NO.** Sensitivity goes
+0.6 -> 5.5 -> 7.0 -> 7.2 -> 7.5 %: the increments per 2M steps are
++1.4, +0.3, +0.3. It is not approaching 94 %, it is converging on about 7,
+and at the last observed rate it would need roughly **580M steps** to get
+there. F's "still rising" was the tail of the clone's own first 3M.
+Meanwhile the strike is never lost — the left foot in play reads
+7.9 / 10.1 / 6.0 / 7.0 % against the vendored 8.5 %, every shift a null,
+and the two blocks agree inside each tip (5M 9.7/10.4, 7M 5.9/6.1,
+9M 7.9/6.1), so the +-2 pp wobble is the chain, not the block. So the
+strike never leaves the band and the observation never arrives: the race F
+set up has no finish line.
+
+**What the 6M steps DO buy is a better BLIND swing.** Bench box coverage
+climbs 82/90/70 -> 92/94/100 %, which is the from-scratch arm's row at
+last — but the BLINDFOLDED row climbs with it, 82/88/68 -> 87/90/95, so the
+sensed-minus-blind gap is +0/+2/+2 at 3M and +5/+4/+5 at 9M: five points of
+box, not thirty. Bench falls fall to 0/0/3 and in-window falls to 0.0 %.
+The cost is the turn: |body turn| 8/8/5° -> 20/25/22°, so the 20° bar that
+F's tip was the first sensed left arm to meet is **missed again at 9M** —
+the chain drifts back toward the from-scratch arm's 29/22/21° as it opens
+the box. The in-play exit is stable along the whole chain (+0.2142,
++0.2231, +0.2025, +0.2337 rad, each inside the others' CI).
+
+**The render agrees, at the one spawn F called out** (`render-rollout`,
+3 episodes, seed 40, side camera, no falls). F's 3M tip sprayed the box's
+far corner — ball 0.14 m ahead / 0.12 m left ended 0.215 m BEHIND and
+0.382 m to the side, never stepped to. The 9M tip on the SAME episode
+strikes it inside 0.2 s and the ball ends **+0.471 m ahead** / +0.489 m to
+the side. The sweet spot is weaker (0.833 m against 1.334 m) and
+0.10 / 0.02 weaker still (0.191 m against 0.630 m). Trunk 0.110-0.128 m
+against the 0.120 STAND reference, rotation 0°, both feet down 8 % of
+frames: it strikes, then marches in place with the range slot pinned at
+1.00 — the vendored kick's failure mode, in the vendored kick's places,
+exactly as F described it.
+
+**Verdict A: more PPO on the clone is closed.** Route (b) does not become
+route (a) by being run longer. The clone's four slots are a 7 % perturbation
+on a vendored swing and stay one; what improves is the swing.
+
+**B. The detector-rate mismatch, and it is REACHABLE.** `rate_hz` is a
+numeric field of `DetectorSpec` and `world/arena.py` builds the arena's
+detector through `DetectorSpec.from_env()`, so the recipe's 25 Hz is
+settable from the command line with **`MICRODUCK_CAMERA="rate_hz=25.0"`
+and no code change**. What it actually moves, counted inside gym kick
+windows (World `start_skill` / `_sensed_head` patched in memory, seeds 0-3,
+40 episodes):
+
+| inside a sensed kick window | 10 Hz (shipped) | 25 Hz | the recipe's own world |
+|---|---|---|---|
+| ticks with any ball in the slots | 97.8 % | 98.9 % | — |
+| `seen` = 1 | **33.5 %** | **38.4 %** | ~43 % |
+| confidence slot, median | **0.803** | **0.869** | — |
+| range slot / \|bearing\| median | 0.643 / 0.189 | 0.658 / 0.204 | — |
+
+So 25 Hz closes about a third of the `seen` gap and no more, which is the
+reachable-set statement: `seen` is governed by DETECTION PROBABILITY (gaze,
+FOV, size gate), not by frame rate — a faster camera refreshes the answer,
+it does not find the ball more often.
+
+**Both blocks, four arms, pooled over 24 seeds** (`compare_gym.py`; the
+10 Hz arms are 12as's own row files, re-read):
+
+| arm | rate | swings | whiff both | LEFT whiff | RIGHT whiff | right travel | right advance med | fell | ledger back |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped pair | 10 Hz | 819 | 9.0 % | 8.5 % | 9.6 % | 0.74 m | 0.239 m | 0.2 % | 20.6 % |
+| sensed right | 10 Hz | 827 | 6.2 % | 7.1 % | **5.0 %** | 0.98 m | 0.777 m | 0.5 % | 20.1 % |
+| shipped pair | **25 Hz** | 797 | 6.8 % | **4.8 %** | 9.2 % | 0.81 m | 0.450 m | 0.4 % | 20.7 % |
+| sensed right | **25 Hz** | 788 | 6.7 % | 7.9 % | **5.3 %** | 1.13 m | 0.915 m | 0.6 % | **26.1 %** |
+
+| contrast | right-foot whiff | shift | MDE | p | seeds |
+|---|---|---|---|---|---|
+| shipped -> sensed right, at 10 Hz | 9.6 -> 5.0 % | −4.6 pp | 3.7 | **0.015** | better on 18 of 21, sign p 0.001 |
+| shipped -> sensed right, at 25 Hz | 9.2 -> 5.3 % | −3.9 pp | 3.8 | **0.045** | better on 13 of 20, sign p 0.263 |
+| sensed right, 10 -> 25 Hz | 5.0 -> 5.3 % | +0.4 pp | 3.2 | 0.818 | **null** |
+
+**The answer to the registered question is NO, and the control is the
+result.** 25 Hz does not move the sensed right foot at all (+0.4 pp, MDE
+3.2, a null), and the sensed-vs-vendored gap is the same at both rates
+(−4.6 vs −3.9 pp, each inside the other's MDE). But the shipped pair is
+NOT flat under it: pooled whiff 9.0 -> 6.8 % (−2.3, MDE 2.6, p 0.093, null
+by the gym's own rule) carried almost entirely by the **LEFT foot, 8.5 ->
+4.8 % (−3.8, MDE 3.3, p 0.025)** — the BLIND foot, which reads no slots at
+all. A faster detector therefore does not act on the kick's observation; it
+acts on the brain that places the duck, and it lands where 12as expected
+the sensed arm to gain. Read with `compare_gym`'s own touches table, the
+25 Hz sensed arm is also the only one of the four that moves the ledger's
+back rule (20.6 -> 26.1 %, +6 pp, MDE 4, p 0.009) on longer carries —
+one arm at one rate, not quotable further.
+
+**Verdict B: the 10 Hz / 25 Hz mismatch is NOT why the sensed kick reads
+the ball badly in play.** It is a real mismatch, it is reachable with one
+env var, it moves the confidence slot 0.80 -> 0.87 — and it changes nothing
+the sensed foot does. The remaining 12as mismatch, the tracker's ~5.5 cm
+placement error, is still unmeasured and is now the only one left.
+
+    # A — the chain (left foot, seed 0, 32 envs; headless via the CLI, NOT the
+    # farm: these runs are not visible in the viewer, which the playbook allows
+    # for an agent's own batteries. ~2.5 min an increment)
+    MICRODUCK_KICK_BOX_AHEAD=0.04,0.16 MICRODUCK_KICK_BOX_SIDE=0.01,0.13 \
+    MICRODUCK_LM_GAZE_NECK=-0.30,0.0 MICRODUCK_LM_GAZE_HEAD=0.0,0.60 MICRODUCK_LM_GAZE_YAW=0.0,0.0 \
+      uv run train-behavior kick_left_sensed --run-name lastmetre-left-distil-v1-5m \
+      --envs 32 --steps 2000000 --seed 0 --weights-json '{"face_line": 12.0}' \
+      --group lastmetre --init-from runs/lastmetre-left-distil-v1 --title ... --description ...
+    # ...then -7m from -5m, -9m from -7m, identical otherwise
+    uv run python scripts/probe_slot_sensitivity.py --recipe kick_left_sensed --steps 10000 \
+      rung0=runs/lastmetre-left-distil-rung0/policy.onnx \
+      d3M=runs/lastmetre-left-distil-v1/policy.onnx  d9M=runs/lastmetre-left-distil-v1-9m/policy.onnx \
+      scratch=runs/lastmetre-left-v1/policy.onnx           # ...and --seed 11 / 23
+    uv run python scripts/grid_kick_bench_sensed.py --foot left --seeds 2 \
+      distil-9M:kick_left_sensed=runs/lastmetre-left-distil-v1-9m/policy.onnx \
+      distil-9M-BLIND:kick_left=runs/lastmetre-left-distil-v1-9m/policy.onnx
+    # in play: calibrate the exit on ONE block at exit_rad 0.0, write the median in, then
+    MICRODUCK_SKILL_KICK_LEFT=<scratch copy of the tip, beside {"sensed":true,"exit_rad":0.2337}> \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 0 --jobs 3 \
+      --out runs/sensedplay/gym-leftstrike-9m-b0.jsonl          # ...and --seed0 100
+    uv run render-rollout --policy runs/lastmetre-left-distil-v1-9m/policy.onnx \
+      --behavior kick_left_sensed --out /tmp/rr --episodes 3 --seed 40 --camera side
+
+    # B — the detector rate (one env var; no code change)
+    MICRODUCK_CAMERA=rate_hz=25.0 \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 {0,100} --jobs 3 \
+      --out runs/sensedplay/gym-ship25-b{0,100}.jsonl                     # shipped pair
+    MICRODUCK_CAMERA=rate_hz=25.0 MICRODUCK_SKILL_KICK_RIGHT=<sensed right, {"sensed":true,"exit_rad":-0.1331}> \
+      uv run python scripts/kick_gym.py --episodes 40 --seeds 12 --seed0 {0,100} --jobs 3 \
+      --out runs/sensedplay/gym-sensedright25-b{0,100}.jsonl
+    uv run python scripts/compare_gym.py ship10=... sr10=... ship25=... sr25=...
+
+Reviewer's re-read of the row files: per-foot whiff reproduces to the decimal
+(shipped 8.5 / 9.6 % at 10 Hz, 4.8 / 9.2 % at 25 Hz; sensed right 5.0 → 5.3 %;
+the 9M clone 7.0 %). Commit d62fa49 (`scripts/probe_slot_sensitivity.py` only — no recipe, stage,
+reward, world or sensor changed). Runs `lastmetre-left-distil-v1-{5m,7m,9m}`
+(the finding is written into each `behavior.json`). Rows under
+`runs/sensedplay/`: `gym-leftstrike-{5m,7m,9m}-b{0,100}.jsonl` and their
+`-cal-b0` calibration blocks, `gym-ship25-b{0,100}.jsonl`,
+`gym-sensedright25-b{0,100}.jsonl`. **Nothing promoted; `policies/kick/` is
+unchanged.**
+
+→ **What settles it next:** the left foot's two routes are now both closed
+at their own ends — more PPO on the clone plateaus, and the detector rate it
+was blamed on is a null on the sensed foot. What is left from 12as's list is
+the tracker's ~5.5 cm placement error, and one new lead this item produced
+by accident: **a 25 Hz detector takes the BLIND left foot from 8.5 % to
+4.8 % whiff (p 0.025) with the shipped policies unchanged** — a perception
+knob, not a policy, and the cheapest kick win measured on this line so far.
+It needs a second pair of blocks and a falls read before it can be quoted.
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
