@@ -55,6 +55,19 @@ KICK_S = 0.5
 # of the all-zero block the vendored pair was trained on. This is the class the
 # tracker must hold for it to have anything to say.
 SENSED_BALL_CLS = "ball"
+# …and the SIM-ONLY ABLATION that prices what the track costs it (roadmap
+# 12as follow-up H). `MICRODUCK_SENSED_TRUTH=1` makes the four slots carry the
+# recipe's own projection of the TRUE ball instead of the tracker's estimate of
+# it, which is the upper bound a perfect tracker could ever hand this kick.
+#
+# THIS CAN NEVER SHIP AND IS NOT A KNOB TO LEAVE ON. The robot has no truth:
+# there is no `qpos` for the ball on hardware, so an arm measured under this
+# flag describes a world that does not exist. It is here to answer ONE
+# question — how much of a sensed foot's in-play gap to its bench is the
+# tracker's ~5.5 cm placement error (`brain/tracker.py::_place`) — and
+# `World.sensed_truth` is printed at construction so a battery cannot run it
+# by accident and quote the number as play.
+SENSED_TRUTH_ENV = "MICRODUCK_SENSED_TRUTH"
 # A goal this soon after a kick is the kick's; the rest were walked into.
 # (Until 2026-09-06 the ball had no rolling resistance, so a chase at
 # 0.45 m/s sent a bumped ball as far as a kick did - to the boards; now a
@@ -400,6 +413,19 @@ class World:
         self._skill_sensed = {n: World.skill_sensed(n) for n in SKILLS}
         self._sensed_kick = any(self._skill_sensed[n] for n in SKILLS if n.startswith("kick"))
         self._ball_trackers: dict = {}
+        # The truth ablation, read ONCE here and never again (playbook rule 0:
+        # the flag a battery thinks it is measuring has to be readable off the
+        # World it built). Off is the only shipping value and costs one
+        # attribute: no state is kept and no random number is drawn.
+        self.sensed_truth = os.environ.get(SENSED_TRUTH_ENV, "").strip() not in ("", "0", "false", "False")
+        self._truth_sense: dict = {}
+        self._truth_cam: dict = {}
+        self._truth_seed = scenario.seed if seed is None else seed
+        self._truth_rng = None
+        if self.sensed_truth:
+            print(f"[world] {SENSED_TRUTH_ENV}=1 — the sensed kick reads the TRUE ball through the "
+                  "recipe's projection. SIM-ONLY ABLATION: the robot has no truth, this can never ship.",
+                  flush=True)
         self.model = compose(scenario)
         self.data = mujoco.MjData(self.model)
         self.t = 0.0
@@ -608,6 +634,7 @@ class World:
         d.skill_sensed = False
         if d.id in self._ball_trackers:
             self._ball_trackers[d.id].reset()
+        self._truth_sense.pop(d.id, None)      # the ablation's memory goes with the track's
 
     def reset_duck(self, duck_id: str) -> None:
         d = self.ducks[duck_id]
@@ -685,6 +712,7 @@ class World:
         for trk in self._ball_trackers.values():
             trk.reset()               # …and the ball a sensed kick remembers goes with it, exactly as the
                                       # brains' does (world_server.after_step): the referee moved it.
+        self._truth_sense.clear()
         self._ball_rest_t0 = None
 
     def _clear_of_ducks(self, x: float, y: float, hx: float, hy: float) -> tuple[float, float]:
@@ -1019,6 +1047,9 @@ class World:
         from ..behaviors.lastmetre import LM_MEM_TAU, LM_RANGE_SCALE  # noqa: PLC0415
         hc = d.head_cmd
         hc[:] = 0.0
+        if self.sensed_truth:
+            hc[:] = self.truth_slots(d)       # the sim-only ablation; see SENSED_TRUTH_ENV
+            return
         trk = self._ball_trackers.get(d.id)
         tr = None if trk is None else trk.best(SENSED_BALL_CLS, self.t, min_hits=1)
         if tr is None:
@@ -1036,6 +1067,104 @@ class World:
         seen = last is not None and tr.last_t == last.t     # the newest frame is the one that hit
         hc[2] = 1.0 if seen else 0.0
         hc[3] = 1.0 if seen else float(math.exp(-max(0.0, tr.age(self.t)) / LM_MEM_TAU))
+
+    # -- the truth ablation (SIM-ONLY, see SENSED_TRUTH_ENV) --------------------
+    def _head_camera(self, d: WorldDuck):
+        """(position, forward, image-right, image-up) of THIS duck's head
+        camera, world frame — `behaviors/ball.py::_ball_camera`'s convention on
+        the composed model's per-duck `<prefix>head_camera` element, so the
+        truth arm projects through the same optics the recipe trained on."""
+        cid = self._truth_cam.get(d.id)
+        if cid is None:
+            cid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, d.adr.prefix + "head_camera")
+            if cid < 0:
+                raise RuntimeError(f"duck {d.id} has no head_camera element")
+            self._truth_cam[d.id] = cid
+        R = self.data.cam_xmat[cid]
+        return self.data.cam_xpos[cid], R[2::3], -R[1::3], -R[0::3]
+
+    def truth_update(self, d: WorldDuck) -> None:
+        """SIM-ONLY. One control step of the RECIPE's own sensing
+        (`behaviors/lastmetre.py::_lm_sense`) run against the TRUE ball: the
+        same FOV, the same `LM_DETECT_EVERY` cadence, the same `LM_JITTER` on
+        the reported angles, the same `_lm_ground_point` placement off the head
+        encoders, the same `LM_MEM_TAU` fade. Everything the recipe's detector
+        does is kept; the ONE thing removed is the tracker — association,
+        smoothing and odometry coasting — and with it its placement error.
+
+        Held per duck and stepped EVERY tick (not only inside a kick window),
+        because that is what training did: a memory that only runs during the
+        0.5 s swing would start every window blind and measure that instead.
+
+        The jitter comes from a stream of its own (`_truth_rng`, seeded off the
+        world's seed), so an arm running under this flag cannot move the
+        world's RNG and nothing outside the ablation changes.
+        """
+        from ..behaviors.ball import _BALL_KNOBS  # noqa: PLC0415
+        from ..behaviors.lastmetre import (  # noqa: PLC0415
+            LM_DETECT_EVERY,
+            LM_JITTER,
+            LM_MAX_RANGE,
+            LM_MEM_TAU,
+            _lm_ground_point,
+        )
+        st = self._truth_sense.get(d.id)
+        if st is None:
+            st = self._truth_sense[d.id] = {"world": None, "conf": 0.0, "det_tick": -(10 ** 9),
+                                            "seen": False}
+        if self._truth_rng is None:
+            self._truth_rng = np.random.default_rng((int(self._truth_seed or 0) * 2 + 90_210) % (2 ** 32))
+        j = self._ball_joint
+        if j is None:
+            return
+        q = int(self.model.jnt_qposadr[j])
+        bx, by, bz = (float(self.data.qpos[q]), float(self.data.qpos[q + 1]), float(self.data.qpos[q + 2]))
+        cam, fwd, right, up = self._head_camera(d)
+        half_h = math.radians(_BALL_KNOBS["MICRODUCK_BALL_HFOV_DEG"]) / 2
+        half_v = math.radians(_BALL_KNOBS["MICRODUCK_BALL_VFOV_DEG"]) / 2
+        vx, vy, vz = bx - float(cam[0]), by - float(cam[1]), bz - float(cam[2])
+        dist = math.sqrt(vx * vx + vy * vy + vz * vz)
+        f = vx * fwd[0] + vy * fwd[1] + vz * fwd[2]
+        if f > 1e-6:
+            ax = math.atan2(vx * right[0] + vy * right[1] + vz * right[2], f) / half_h
+            ay = math.atan2(vx * up[0] + vy * up[1] + vz * up[2], f) / half_v
+            seen = -1.0 < ax < 1.0 and -1.0 < ay < 1.0 and dist < LM_MAX_RANGE
+        else:
+            ax = ay = 0.0
+            seen = False
+        if self.tick - st["det_tick"] >= LM_DETECT_EVERY:
+            st["det_tick"] = self.tick
+            st["seen"] = seen
+            if seen:
+                r = self._truth_rng
+                a_h = (ax + float(r.uniform(-LM_JITTER, LM_JITTER))) * half_h
+                a_v = (ay + float(r.uniform(-LM_JITTER, LM_JITTER))) * half_v
+                p = _lm_ground_point(cam, fwd, right, up, a_h, a_v)
+                if p is not None:
+                    st["world"], st["conf"] = p, 1.0
+        if not st["seen"]:
+            st["conf"] *= math.exp(-C.CTRL_DT / LM_MEM_TAU)
+
+    def truth_slots(self, d: WorldDuck) -> np.ndarray:
+        """SIM-ONLY. The four head slots `truth_update`'s held estimate makes,
+        in the recipe's units — the tail of `_lm_sense`, off the same odometry
+        pose `_sensed_head` reads the track from, so the two arms differ in the
+        ESTIMATE and in nothing else."""
+        from ..behaviors.lastmetre import LM_RANGE_SCALE  # noqa: PLC0415
+        out = np.zeros(4, np.float32)
+        st = self._truth_sense.get(d.id)
+        if st is None:
+            return out
+        if st["world"] is not None:
+            x, y, yaw = self.odom(d)
+            dx, dy = st["world"][0] - x, st["world"][1] - y
+            c, s = math.cos(yaw), math.sin(yaw)
+            ahead, beside = c * dx + s * dy, -s * dx + c * dy      # + beside = to the LEFT
+            out[0] = float(np.clip(math.atan2(beside, ahead) / (math.pi / 2), -1.0, 1.0))
+            out[1] = float(np.clip(math.hypot(ahead, beside) / LM_RANGE_SCALE, 0.0, 1.0))
+        out[2] = 1.0 if st["seen"] else 0.0
+        out[3] = float(np.clip(st["conf"], 0.0, 1.0))
+        return out
 
     def start_skill(self, d: WorldDuck, name: str) -> bool:
         """Hand the reflex tier to a skill policy for one cycle (the robot's
@@ -1156,6 +1285,8 @@ class World:
             if self._sensed_kick and d.detector is not None:
                 ox, oy, oyaw = self.odom(d)       # the ball track a sensed kick reads, kept warm
                 self._ball_tracker(d).update(d.detector.last, self.t, oyaw, (ox, oy))
+                if self.sensed_truth:
+                    self.truth_update(d)      # …and, under the ablation, the truth projection beside it
             skill = self._skill_cmd(d)
             obs = d.obs(data)
             # A duck that is DOWN is driven by the get-up policy when there is

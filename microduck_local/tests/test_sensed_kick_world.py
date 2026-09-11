@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
 
 import mujoco
 import numpy as np
 import pytest
 
+from microduck_local import contract as C
 from microduck_local.behaviors.lastmetre import LM_MEM_TAU, LM_RANGE_SCALE
 from microduck_local.brain.brain_env import POLICIES_DIR
 from microduck_local.brain.tracker import Track, Tracker
@@ -262,3 +264,151 @@ def test_the_tracker_is_the_brains_own_over_the_ducks_own_frames(monkeypatch, tm
     nz = DetectorNoise.preset("datasheet")
     assert trk.p.meas_bearing_sigma == pytest.approx(float(nz.bearing_sigma_rad))
     assert trk.p.meas_range_frac == pytest.approx(float(nz.width_sigma_frac))
+
+
+# -- the truth ablation (roadmap 12as follow-up H) ---------------------------
+#
+# `MICRODUCK_SENSED_TRUTH=1` makes `_sensed_head` write the four slots from the
+# recipe's own projection of the TRUE ball instead of off the track, so a gym
+# arm can price what the tracker's ~5.5 cm placement error costs the kick. It
+# is a SIM-ONLY ablation — the robot has no `qpos` for the ball — so the two
+# things worth locking are that it is inert when off and that when on it really
+# is the recipe's projection of the truth and not a second, tidier tracker.
+
+def test_the_truth_knob_is_off_unless_asked_and_keeps_no_state(monkeypatch, tmp_path):
+    """Off is the shipping value and costs one attribute: no memory, no RNG
+    stream, and the slots still come out of the track."""
+    _pin(monkeypatch, tmp_path, lambda foot: {"sensed": True, "exit_rad": 0.0})
+    monkeypatch.delenv("MICRODUCK_SENSED_TRUTH", raising=False)
+    w = World(_one_duck(), seed=0)
+    assert w.sensed_truth is False
+    d = w.ducks["d0"]
+    trk = w._ball_tracker(d)
+    w.t = 1.0
+    trk.tracks = [_fake_track(math.pi / 4, 0.125, last_t=1.0)]
+    w._sensed_head(d)
+    assert d.head_cmd[0] == pytest.approx(0.5, abs=1e-6)      # the TRACK's bearing, not the ball's
+    assert w._truth_sense == {} and w._truth_rng is None      # …and nothing was computed beside it
+
+    for value in ("1", "true", "yes"):
+        monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", value)
+        assert World(_one_duck(), seed=0).sensed_truth is True
+    for value in ("", "0", "false"):
+        monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", value)
+        assert World(_one_duck(), seed=0).sensed_truth is False
+
+
+@needs_walker
+def test_the_truth_knob_off_is_byte_identical_to_the_package_before_it(monkeypatch, tmp_path):
+    """The out-of-band half, in band when a snapshot is available:
+    MICRODUCK_PRE_PKG=<dir holding a pre-edit microduck_local> makes this run
+    the same seeded rollout under both packages and compare the digest of every
+    qpos of every tick (memory note shared-checkout-ab-on-copies).
+
+    It is env-gated on purpose rather than built from `git show HEAD:`: once
+    this change is committed, HEAD carries the knob and a self-built snapshot
+    would be comparing the file with itself — a test that passes by being
+    vacuous. Run it with a real snapshot:
+
+        cp -R src/microduck_local <snap>/microduck_local     # at the pre-edit sha
+        ln -s $PWD/policies <snap>/policies                  # or it silently runs the Hub kicks
+        MICRODUCK_PRE_PKG=<snap> uv run --with pytest pytest tests/test_sensed_kick_world.py -k byte
+    """
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    pre = os.environ.get("MICRODUCK_PRE_PKG")
+    if not pre:
+        pytest.skip("set MICRODUCK_PRE_PKG to a pre-edit package copy to run the digest A/B")
+    src = textwrap.dedent("""
+        import hashlib, sys
+        import numpy as np
+        import microduck_local
+        from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
+        from microduck_local.world import World
+        from microduck_local.world.scenario import Ball, Duck, Scenario, Wall
+        hx, hy = 1.5, 1.25
+        corners = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+        sc = Scenario(name="t", floor=(2 * hx + 0.5, 2 * hy + 0.5),
+                      walls=[Wall(corners[i], corners[(i + 1) % 4], 0.3, 0.02) for i in range(4)],
+                      balls=[Ball((0.45, 0.22))],
+                      ducks=[Duck("d0", (0.0, 0.0, 0.0), None, "datasheet", "datasheet", "chase",
+                                  team="cream")], goal_width=0.7)
+        walker = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
+        w = World(sc, infer_for={"d0": walker}, seed=3)
+        h = hashlib.sha256()
+        for k in range(100):
+            if k == 20:
+                w.start_skill(w.ducks["d0"], "kick_left")
+            w.step()
+            h.update(np.ascontiguousarray(w.data.qpos, dtype=np.float64).tobytes())
+        print(microduck_local.__file__, file=sys.stderr)
+        print(h.hexdigest())
+    """)
+    script = tmp_path / "digest.py"
+    script.write_text(src)
+    _pin(monkeypatch, tmp_path, lambda foot: {"run": "old", "exit_rad": 0.0})   # the VENDORED shape
+    import microduck_local
+    here_pkg = str(Path(microduck_local.__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env.pop("MICRODUCK_SENSED_TRUTH", None)
+    # The snapshot trap (memory note shared-checkout-ab-on-copies): a package
+    # copy resolves POLICIES_DIR relative to ITSELF and would silently run the
+    # Hub's walker, or none. Pin the upstream checkout for both runs; the kicks
+    # are already pinned by `_pin`.
+    env["MICRODUCK_RL_DIR"] = str(C.MICRODUCK_RL_DIR)
+
+    def digest(pkg: str) -> str:
+        out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                             env=dict(env, PYTHONPATH=pkg))
+        assert out.returncode == 0, out.stderr[-2000:]
+        assert pkg in out.stderr, f"ran the wrong package: {out.stderr[-400:]}"
+        return out.stdout.strip()
+
+    here, there = digest(here_pkg), digest(pre)
+    assert here == there, f"the knob-off rollout moved: {here} != {there}"
+
+
+@needs_walker
+def test_the_truth_knob_on_writes_the_recipes_projection_of_the_true_ball(monkeypatch, tmp_path):
+    """On, the slots are the TRUE ball seen through the recipe's own camera
+    maths — within the projection's own jitter, and regardless of what the
+    tracker believes. The poisoned track is the discriminator: a second, better
+    tracker would still be reading the track."""
+    _pin(monkeypatch, tmp_path, lambda foot: {"sensed": True, "exit_rad": 0.0})
+    monkeypatch.setenv("MICRODUCK_SENSED_TRUTH", "1")
+    w = _standing_world(_one_duck())
+    assert w.sensed_truth is True
+    d = w.ducks["d0"]
+    _place_ball(w, 0.45, 0.22)
+    for _ in range(15):
+        w.step()
+    assert w._truth_sense["d0"]["world"] is not None, "the recipe's camera never saw the ball"
+
+    # The held estimate is the ball, to about a centimetre.
+    est = w._truth_sense["d0"]["world"]
+    assert math.dist(est, (0.45, 0.22)) < 0.03, est
+
+    # …and the four slots are that estimate in the recipe's units.
+    w._sensed_head(d)
+    x, y, yaw = w.odom(d)
+    ahead = math.cos(yaw) * (0.45 - x) + math.sin(yaw) * (0.22 - y)
+    beside = -math.sin(yaw) * (0.45 - x) + math.cos(yaw) * (0.22 - y)
+    assert d.head_cmd[0] == pytest.approx(math.atan2(beside, ahead) / (math.pi / 2), abs=0.05)
+    assert d.head_cmd[1] == pytest.approx(min(1.0, math.hypot(ahead, beside) / LM_RANGE_SCALE), abs=0.06)
+    assert d.head_cmd[0] > 0.0                      # the ball is to the LEFT and reads left
+
+    # A poisoned track cannot move it: the ablation does not read the tracker.
+    poisoned = d.head_cmd.copy()
+    trk = w._ball_tracker(d)
+    bogus = _fake_track(-math.pi / 3, 2.0, last_t=w.t)
+    bogus.xy = (-1.0, -1.0)
+    trk.tracks = [bogus]
+    w._sensed_head(d)
+    assert np.allclose(d.head_cmd, poisoned)
+
+    # …and the memory goes with the duck, like the track's.
+    w.reset_duck("d0")
+    assert "d0" not in w._truth_sense
