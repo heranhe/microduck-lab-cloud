@@ -72,10 +72,11 @@ _BALL_KNOBS = {
     #
     # From the camera's own datasheet (2026-09-04): EFL 2.9 mm giving
     # H 116 deg, V 60 deg, D 142.2 deg on a 1920x1080 / 2.75 um / 1/2.9 in
-    # sensor. Those are the SENSOR's own axes; the part is mounted rotated
-    # 90 deg (which is why the daemon rotates its frames), so in the robot's
-    # frame they SWAP: 60 deg across the frame, 116 deg up it. Tall and
-    # narrow, which is the right shape for a duck hunting a ball on the floor.
+    # sensor. Those are the SENSOR's own axes, and from 2026-09-04 to
+    # 2026-09-11 this file carried them SWAPPED into the robot's frame — 60
+    # across, 116 up — on the belief that the part is mounted rotated 90 deg.
+    # It is not (the dated note below): the module is mounted LANDSCAPE and
+    # the datasheet's own axes are the robot's, 116 across and 60 up.
     #
     # The previous values here (48 x 62) were placeholders written for a 4:3
     # IMX219 that this robot does not carry. They were wrong in both axes and,
@@ -93,10 +94,20 @@ _BALL_KNOBS = {
     # VFOV is the axis that bites — in-frame share runs 58% at 40 deg to 75%
     # at 116 — and ORIENTATION matters most: mounted the other way round
     # (116 across, 60 up) the duck loses 10 points of in-frame share and takes
-    # 40% longer to reach the kick handoff. **If the camera is ever remounted
-    # landscape, swap these back and retrain.**
-    "MICRODUCK_BALL_HFOV_DEG": 60.0,
-    "MICRODUCK_BALL_VFOV_DEG": 116.0,
+    # 40% longer to reach the kick handoff.
+    #
+    # 2026-09-11: the module IS mounted landscape — 116 across, 60 up — the
+    # owner's call, and the orientation `sensors/detector.py` and
+    # docs/camera-hardware.md (the module's own FOV table) already model. The
+    # portrait numbers above were measured in a sim of a mount the robot does
+    # not have, and roadmap 12as follow-ups I-L measured what that cost: a
+    # sensed kick trained portrait reads the ball on 17 % of in-play ticks
+    # against 70 % in training. Every shipped find_ball export before this
+    # date was trained portrait; re-baseline under landscape before quoting
+    # its numbers, and retrain to move them. The sensed-kick chains that
+    # exported these two knobs by hand (12as J-L) now get them by default.
+    "MICRODUCK_BALL_HFOV_DEG": 116.0,
+    "MICRODUCK_BALL_VFOV_DEG": 60.0,
     "MICRODUCK_BALL_MAX_RANGE": 3.0,     # m — beyond this the detector has no box
     # Spawn: distance window and how far around the duck (yaw, rad) the
     # ball may start. pi = anywhere; 1.2 = in the front 140 deg.
@@ -163,6 +174,11 @@ _BALL_KNOBS = {
     # (77% handoff, 25 falls / 60 against 90% and 2): it buys tracking and
     # spends it on falls, the same frontier every other lever here lands on.
     "MICRODUCK_BALL_STALE_FIX": 1.0,
+    # NORMALIZED bearing units, so this one's meaning in degrees travelled
+    # with the mount: 0.02 was 0.6 deg across the frame and 1.2 deg up it
+    # under the portrait read, and is 1.2 across / 0.6 up under the landscape
+    # one. Left at 0.02 — it is detector noise expressed as a fraction of the
+    # frame, which is what a box-centroid error actually is.
     "MICRODUCK_BALL_JITTER": 0.02,
     "MICRODUCK_BALL_DROPOUT": 0.0,
     "MICRODUCK_BALL_MEM_TAU": 4.0,
@@ -192,9 +208,12 @@ _BALL_NO_PRIOR_CONF = 0.3
 # In DEGREES off the optical axis, not in normalized-bearing units. The
 # detector's bx/by are divided by the half-FOV, so a tolerance expressed in
 # them silently rescales with the camera: swapping the 48x62 placeholder for
-# the real 60x116 lens moved "centred" from +-7.8 deg to +-14.5 deg vertically
-# with no reward edited, and moved this gate with it (docs/roadmap.md section
-# 2). Degrees are the units the kick actually cares about. The daemon can
+# the then-assumed 60x116 lens moved "centred" from +-7.8 deg to +-14.5 deg
+# vertically with no reward edited, and moved this gate with it
+# (docs/roadmap.md section 2) — and the 2026-09-11 flip to the landscape mount
+# the robot has would have moved it straight back, which is exactly why these
+# are in DEGREES and did not move at all. Degrees are the units the kick
+# actually cares about. The daemon can
 # still run this test — it knows its own FOV, which it needs anyway to produce
 # a normalized bearing at all.
 _BALL_AIM_DEG = 7.0           # ball this many degrees off the axis, or closer

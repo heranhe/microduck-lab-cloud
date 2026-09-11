@@ -20,22 +20,34 @@ from microduck_local.behaviors.core import _face_home_pen
 from microduck_local.behaviors.env import BehaviorEnv
 from microduck_local.behaviors.kick import (
     BALL_Z,
-    HEAD_DOWN,
     KICK_BOX_AHEAD,
     KICK_BOX_SIDE,
-    NECK_DOWN,
     _kick_ball_ids,
 )
 from microduck_local.behaviors.lastmetre import (
+    LM_BOX_STAGE0,
     LM_FAR_AHEAD,
     LM_FAR_SIDE,
     LM_GAZE_STAGE1,
+    LM_GAZE_TIP_HEAD,
+    LM_GAZE_TIP_NECK,
     LM_RANGE_SCALE,
     LM_RANGE_SCALE_FAR,
     _lm_sense,
 )
 
 HEAD_YAW_ID = C.JOINT_NAMES.index("head_yaw")
+# (neck, head) offsets on HOME that a ball at a given range is actually IN
+# FRAME from, under the camera the robot has: 116 deg across and 60 deg up
+# (`behaviors/ball.py`, settled 2026-09-11), so the half-VFOV is 30 deg.
+# There is no single pose that holds both ends of this recipe's world, and
+# that is the geometry rather than a choice: the near box needs the optical
+# axis ~60 deg down, and from there a ball at 0.45 m is 35 deg ABOVE the
+# frame. Both poses are inside the tip window the recipe trains at.
+# (These replace the single portrait-era pose (-0.30, +0.60), which sees
+# nothing at all now: 1 % of the box.)
+GAZE_NEAR = (0.0, 1.05)        # axis 60 deg down: the box, 0.08-0.30 m
+GAZE_FAR = (0.0, 0.75)         # axis 43 deg down: 0.16-0.45 m
 # Every one of these is a SPAWN window (or the clip the spawn gets to play
 # out in). Nothing here may ever name a reward key: a stage laddering the pay
 # is the failure this allowlist exists to catch, and no reward curve would
@@ -128,8 +140,8 @@ def test_the_ladder_moves_the_world_and_never_the_pay():
         for st in (b.curriculum[2], b.curriculum[3]):
             assert st.env["MICRODUCK_KICK_BOX_AHEAD"] == f"{KICK_BOX_AHEAD[0]},{KICK_BOX_AHEAD[1]}"
             assert st.env["MICRODUCK_KICK_BOX_SIDE"] == f"{KICK_BOX_SIDE[0]},{KICK_BOX_SIDE[1]}"
-            assert st.env["MICRODUCK_LM_GAZE_NECK"] == f"{NECK_DOWN[0]},{NECK_DOWN[1]}"
-            assert st.env["MICRODUCK_LM_GAZE_HEAD"] == f"{HEAD_DOWN[0]},{HEAD_DOWN[1]}"
+            assert st.env["MICRODUCK_LM_GAZE_NECK"] == f"{LM_GAZE_TIP_NECK[0]},{LM_GAZE_TIP_NECK[1]}"
+            assert st.env["MICRODUCK_LM_GAZE_HEAD"] == f"{LM_GAZE_TIP_HEAD[0]},{LM_GAZE_TIP_HEAD[1]}"
             assert st.env["MICRODUCK_LM_GAZE_YAW"] == "0.0,0.0"
         # ...and stage 2 has no far share at all: it must reproduce the world
         # 12as measured, bit for bit.
@@ -147,9 +159,9 @@ def test_the_ladder_moves_the_world_and_never_the_pay():
 
 
 def test_the_spawn_puts_the_ball_in_the_box_and_the_drill_puts_the_gaze_on_it():
-    """The default world is the wide kick's (ball over the box, head across
-    the gaze range, head yaw HOME as the bench and the arena hand it over);
-    stage 1 narrows the box and turns the gaze onto it."""
+    """The default world is the finished one (ball over the box play produces,
+    head across the TIP gaze window, head yaw HOME as the bench and the arena
+    hand it over); stage 1 narrows the box and turns the gaze onto it."""
     for side, sgn in (("right", -1.0), ("left", 1.0)):
         env = _env(side)
         aheads, sides, necks, heads, yaws = [], [], [], [], []
@@ -165,7 +177,8 @@ def test_the_spawn_puts_the_ball_in_the_box_and_the_drill_puts_the_gaze_on_it():
         assert KICK_BOX_AHEAD[0] - 1e-6 <= min(aheads) and max(aheads) <= KICK_BOX_AHEAD[1] + 1e-6
         assert KICK_BOX_SIDE[0] - 1e-6 <= min(sides) and max(sides) <= KICK_BOX_SIDE[1] + 1e-6
         assert max(aheads) - min(aheads) > 0.08 and max(sides) - min(sides) > 0.08
-        assert NECK_DOWN[0] - 1e-6 <= min(necks) and max(heads) <= HEAD_DOWN[1] + 1e-6
+        assert LM_GAZE_TIP_NECK[0] - 1e-6 <= min(necks) and max(necks) <= LM_GAZE_TIP_NECK[1] + 1e-6
+        assert LM_GAZE_TIP_HEAD[0] - 1e-6 <= min(heads) and max(heads) <= LM_GAZE_TIP_HEAD[1] + 1e-6
         # Head yaw is HOME in the finished world (the drill's offset is 0,0
         # there), so only the walk env's own spawn noise is left on it — which
         # is exactly what the wide kick's spawn leaves.
@@ -186,7 +199,60 @@ def test_the_spawn_puts_the_ball_in_the_box_and_the_drill_puts_the_gaze_on_it():
         # the walk env's own spawn noise on that joint.
         assert all(lo - 0.05 <= sgn * y <= hi + 0.05 for y in yaws), yaws
         assert min(sgn * y for y in yaws) > 0.2
-        assert np.mean(seen) > 0.9        # ...and that is what makes it in frame: measured 99%
+        # ...and that is what makes it in frame: measured 100 % of this rung's
+        # spawns under the camera the robot has, and 0 % from the window this
+        # drill used to spawn (see the reachable-set test below).
+        assert np.mean(seen) > 0.9
+
+
+def test_the_trained_gaze_windows_can_actually_see_the_ball():
+    """The reachable set of this recipe's two gaze windows, measured with the
+    recipe's own projection — and the test that would have caught the camera
+    being mounted the other way round.
+
+    The sensed kick pays for a SIGHTING. If the window a stage spawns the
+    gaze in cannot hold the ball it spawns, the pay is for a state no rollout
+    ever reaches, and no reward, tracker or brain change can fix it
+    afterwards (AGENTS.md: ladder the physics, and check a knob's reachable
+    set before A/Bing it). That is exactly what happened between 2026-09-04
+    and 2026-09-11, when `behaviors/ball.py` modelled the camera PORTRAIT
+    (60 across, 116 up) while the robot carries it LANDSCAPE (116 across,
+    60 up): under the real mount the windows this recipe shipped with saw
+    0 % of the strike spot and 1 % of the full box, and the sensed kicks
+    trained in them read the ball on 17 % of in-play ticks against the 70 %
+    they trained on (roadmap 12as follow-ups I-K).
+
+    So: the bars, at the DEFAULT camera, both feet. The drill window has to
+    hold the spot it drills (measured 100 %, and 97 % of the full box); the
+    tip window has to hold the full box often enough to be a sighting rather
+    than a lottery (measured 70 %, against the 41 % the arena's own detector
+    delivers in play). A remount that is not followed through into these two
+    windows fails here."""
+    rng = np.random.default_rng(7)
+    spot = [tuple(float(v) for v in k.split(",")) for k in LM_BOX_STAGE0]
+    drill = [tuple(float(v) for v in k.split(",")) for k in LM_GAZE_STAGE1]
+
+    def share(env, sgn, box_ahead, box_side, neck, head, yaw, n=120):
+        hits = 0
+        for _ in range(n):
+            g = _place(env, rng.uniform(*box_ahead), sgn * rng.uniform(*box_side),
+                       rng.uniform(*neck), rng.uniform(*head), sgn * rng.uniform(*yaw))
+            hits += int(g[2] > 0.5)
+        return hits / n
+
+    for side, sgn in (("right", -1.0), ("left", 1.0)):
+        env = _env(side)
+        assert share(env, sgn, spot[0], spot[1], *drill) >= 0.95
+        assert share(env, sgn, KICK_BOX_AHEAD, KICK_BOX_SIDE, *drill) >= 0.90
+        assert share(env, sgn, KICK_BOX_AHEAD, KICK_BOX_SIDE,
+                     LM_GAZE_TIP_NECK, LM_GAZE_TIP_HEAD, (0.0, 0.0)) >= 0.40
+    # The control, and the reason the two constants moved: the PORTRAIT-era
+    # windows, through the camera the robot has, see essentially nothing.
+    env = _env("right")
+    assert share(env, -1.0, spot[0], spot[1],
+                 (-0.30, -0.15), (0.45, 0.60), (0.30, 0.50), n=60) < 0.05
+    assert share(env, -1.0, KICK_BOX_AHEAD, KICK_BOX_SIDE,
+                 (-0.30, 0.0), (0.0, 0.60), (0.0, 0.0), n=60) < 0.10
 
 
 def test_the_ball_rides_the_head_slots_left_positive_right_negative():
@@ -196,7 +262,7 @@ def test_the_ball_rides_the_head_slots_left_positive_right_negative():
     detector has it; obs[54] how fresh that is. A ball nobody has seen reads
     all zeros."""
     env = _env("right")
-    down = (-0.30, 0.60)                                  # a gaze the ball is in frame from
+    down = GAZE_NEAR                                      # a gaze the near box is in frame from
     left = _place(env, 0.16, +0.06, *down)
     right = _place(env, 0.16, -0.06, *down)
     centre = _place(env, 0.16, 0.0, *down)
@@ -222,7 +288,7 @@ def test_a_ball_out_of_frame_reads_seen_zero_and_the_estimate_fades():
     assert blind[2] == 0.0 and blind[3] == 0.0            # not seen, nothing known...
     assert blind[0] == 0.0 and blind[1] == 0.0            # ...and the position slots say nothing
     # Seen, then hidden: the estimate is HELD (odometry) and its confidence fades.
-    _place(env, 0.10, -0.06, -0.30, 0.60)
+    _place(env, 0.10, -0.06, *GAZE_NEAR)
     assert env.head_cmd[2] == 1.0 and env.head_cmd[3] == pytest.approx(1.0)
     held = float(env.head_cmd[0])
     env.data.qpos[env.joint_qpos_adr[6]] = C.DEFAULT_POSE[6]      # look up: the ball leaves the frame
@@ -278,10 +344,20 @@ def test_the_approach_rung_spawns_a_ball_no_swing_can_reach_and_only_then():
         assert far > 30 and near > 30, (far, near)          # both worlds in the rollouts
         assert min(sides) < -0.02 and max(sides) > 0.02     # ...and the far ball is on both sides
 
-        # A far ball is VISIBLE from a level head — the geometry the near box
-        # fails (12k: the camera is 0.21 m up, so a ball at its feet is below
-        # the frame). That is what makes the approach learnable at all.
-        assert _place(env, 0.40, 0.0, 0.0, 0.0)[2] == 1.0
+        # A far ball is VISIBLE from the SHALLOW end of the gaze window this
+        # rung trains at — the whole far window, near edge to far edge, in one
+        # frame — which is what makes the approach learnable at all. The near
+        # box is the half that cannot be seen from there (12k: the camera is
+        # 0.21 m up, so a ball at its feet is below the frame); under the
+        # landscape mount the two halves no longer fit in one pose at all.
+        shallow = (LM_GAZE_TIP_NECK[1], LM_GAZE_TIP_HEAD[0])          # (0.0, +0.60)
+        assert _place(env, LM_FAR_AHEAD[0], 0.0, *shallow)[2] == 1.0
+        assert _place(env, LM_FAR_AHEAD[1], 0.0, *shallow)[2] == 1.0
+        assert _place(env, KICK_BOX_AHEAD[0], 0.0, *shallow)[2] == 0.0
+        # ...and a LEVEL head sees only the outer end of the far window: the
+        # frame's bottom edge lands at about 0.45 m (half-VFOV 30 deg).
+        assert _place(env, 0.40, 0.0, 0.0, 0.0)[2] == 0.0
+        assert _place(env, 0.50, 0.0, 0.0, 0.0)[2] == 1.0
 
 
 def test_every_rung_before_the_approach_is_the_world_12as_measured():
@@ -320,7 +396,7 @@ def test_the_range_slot_saturates_and_that_is_where_the_approach_stops():
     assert LM_RANGE_SCALE == pytest.approx(0.25)
     assert LM_FAR_AHEAD[1] > LM_RANGE_SCALE          # the rung spawns past it, deliberately
     env = _env("right")
-    down = (-0.30, 0.60)
+    down = GAZE_FAR                       # the near pose cannot see 0.45 m — see GAZE_NEAR
     inside = _place(env, LM_RANGE_SCALE - 0.03, 0.0, *down)
     just_out = _place(env, LM_RANGE_SCALE + 0.01, 0.0, *down)
     far_out = _place(env, LM_FAR_AHEAD[1], 0.0, *down)
@@ -383,7 +459,7 @@ def test_the_far_recipe_ranges_a_ball_the_first_one_cannot_tell_apart():
     assert LM_RANGE_SCALE_FAR > LM_FAR_AHEAD[1] > LM_RANGE_SCALE
     assert LM_RANGE_SCALE_FAR > math.hypot(LM_FAR_AHEAD[1], LM_FAR_SIDE[1])
 
-    down = (-0.30, 0.60)
+    down = GAZE_FAR                       # 0.30 and 0.45 m are the balls under test
     for side in ("right", "left"):
         near_env, far_env = _env(side), _env_id(f"kick_{side}_sensed_far")
         # The scale is stamped on the env by the recipe's own reset — one
@@ -405,10 +481,14 @@ def test_the_far_recipe_ranges_a_ball_the_first_one_cannot_tell_apart():
         # 0.30 m reads 0.5, not 1.0 — the headline of the cut.
         assert _place(far_env, 0.30, 0.0, *down)[1] == pytest.approx(0.5, abs=0.03)
         # Inside the old radius the two agree on the ORDERING and differ only
-        # by the scale factor, so the near game is the same problem.
+        # by the scale factor, so the near game is the same problem. A ball
+        # this close is under the frame from `down`, so the near pose does
+        # the looking — and the slots have to be NON-ZERO, or this comparison
+        # is 0 == 0 and would pass through a camera that sees nothing.
         for ahead in (0.08, 0.16, 0.22):
-            n = _place(near_env, ahead, 0.0, *down)
-            f = _place(far_env, ahead, 0.0, *down)
+            n = _place(near_env, ahead, 0.0, *GAZE_NEAR)
+            f = _place(far_env, ahead, 0.0, *GAZE_NEAR)
+            assert n[2] == f[2] == 1.0 and n[1] > 0.2
             assert f[1] == pytest.approx(n[1] * LM_RANGE_SCALE / LM_RANGE_SCALE_FAR, abs=0.02)
 
 
@@ -418,15 +498,17 @@ def test_the_first_recipe_still_reads_its_range_slot_under_0_25():
     scale ever leaked onto the original id, all of them would silently read
     their own range wrong and every table above would still pass.
     """
-    down = (-0.30, 0.60)
     for side in ("right", "left"):
         env = _env(side)
         for ahead in (0.08, 0.16, 0.22):
-            slot = _place(env, ahead, 0.0, *down)[1]
+            slot = _place(env, ahead, 0.0, *GAZE_NEAR)[1]
             assert slot == pytest.approx(math.hypot(ahead, 0.0) / LM_RANGE_SCALE, abs=0.02)
-        # ...and it still saturates where it always did.
-        assert _place(env, 0.26, 0.0, *down)[1] == pytest.approx(1.0)
-        assert np.allclose(_place(env, 0.26, 0.0, *down), _place(env, 0.45, 0.0, *down), atol=0.02)
+        # ...and it still saturates where it always did. From the FAR pose:
+        # 0.26 m and 0.45 m have to be in one frame to be indistinguishable
+        # in it, and no gaze holds 0.08 m and 0.45 m at once (half-VFOV 30).
+        assert _place(env, 0.26, 0.0, *GAZE_FAR)[1] == pytest.approx(1.0)
+        assert np.allclose(_place(env, 0.26, 0.0, *GAZE_FAR),
+                           _place(env, 0.45, 0.0, *GAZE_FAR), atol=0.02)
 
 
 def test_the_far_recipe_spawns_the_same_worlds_as_the_first_one():

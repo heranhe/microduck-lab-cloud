@@ -1212,13 +1212,15 @@ def test_find_ball_rides_the_head_slots_and_nothing_else():
     ahead at 1 m must read as seen, centred horizontally and BELOW centre
     (the camera is 25 cm up and level at STAND).
 
-    The NEAR end changed with the real camera and it is worth knowing: this
-    test used to assert that a ball at 0.3 m is under the field of view, which
-    was true of the 62 deg placeholder VFOV (half-angle 31 deg against a
-    35.6 deg depression). The actual lens is 116 deg in this axis, half-angle
-    58 deg, so the whole spawn window is in frame at a LEVEL gaze and nodding
-    down is no longer how you find a near ball. See test_find_ball_near_balls_
-    no_longer_need_a_nod for the consequence."""
+    The NEAR end has moved twice with the camera and it is worth knowing
+    which end of it this is. The 62 deg placeholder VFOV (half-angle 31) put
+    a ball at 0.3 m under the frame; the real module read PORTRAIT (116 deg
+    up the robot's view, half-angle 58) put the whole spawn window in frame
+    at a level gaze; and the module as it is actually MOUNTED — landscape,
+    116 across and 60 up, half-angle 30 on this axis (2026-09-11) — puts the
+    near end back under it. So the nearest thing the spawner can produce is
+    out of frame level again: see test_find_ball_near_balls_need_a_nod_again.
+    """
     from microduck_local.behaviors import _ball_place, _ball_sense
     env = _ball_env()
     _ball_place(env, 1.0, 0.0)
@@ -1230,36 +1232,68 @@ def test_find_ball_rides_the_head_slots_and_nothing_else():
     assert abs(obs[54]) < 0.02          # memory = body bearing / pi = 0
     # Still below centre, and further down than the 1 m ball.
     far_by = obs[52]
-    _ball_place(env, 0.3, 0.0)
+    _ball_place(env, 0.5, 0.0)
     _ball_sense(env, force=True)
     obs = env._get_obs()
     assert obs[53] == 1.0 and obs[52] < far_by
+    # ...and past the bottom edge of the frame it stops being seen at all,
+    # which under the landscape mount happens INSIDE the spawn window
+    # (measured: the edge lands at ~0.45 m from the trunk, level).
+    _ball_place(env, 0.3, 0.0)
+    _ball_sense(env, force=True)
+    assert env._get_obs()[53] == 0.0
 
 
-def test_find_ball_near_balls_no_longer_need_a_nod():
-    """The recipe's near-floor pitch band exists because a ball closer than
-    ~0.5 m used to sit BELOW a level gaze. The real camera (116 deg vertical,
-    half-angle 58) removes that constraint: every distance the spawner can
-    produce is in frame with the head level, so the nod-down band is now
-    covering a case the hardware does not have.
+def test_find_ball_near_balls_need_a_nod_again():
+    """The recipe's near-floor pitch band is LOAD-BEARING under the camera the
+    robot actually has, and this is the test that says so.
 
-    Locked so that swapping the camera back to a narrow lens — or remounting
-    it landscape, which puts 60 deg on this axis — fails here loudly rather
-    than quietly making the recipe's pitch bands load-bearing again."""
+    The band exists because a ball closer than ~0.5 m sits BELOW a level gaze:
+    the camera is 0.25 m up and the ball 0.035, so the near end of the spawn
+    window (0.3 m) is 35 deg down. Whether that is inside the frame is exactly
+    the mount question — half-angle 58 deg (portrait, 116 up the view) says
+    yes and the recipe's pitch bands are decoration; half-angle 30 deg
+    (landscape, 116 ACROSS and 60 up, which is how the module is mounted —
+    2026-09-11, matching `sensors/detector.py` and docs/camera-hardware.md)
+    says no. Measured here, at the default camera: the frame's bottom edge
+    lands at about 0.45 m, so the near end of the window needs a nod and a
+    HEAD_PITCH of +0.30 off HOME is already enough to hold the WHOLE window,
+    0.3 m to 1.5 m, at once.
+
+    Locked both ways, so that a remount in either direction fails here loudly
+    rather than quietly making the pitch bands load-bearing or ornamental."""
+    import mujoco
+
+    from microduck_local import contract as C
     from microduck_local.behaviors import _BALL_KNOBS, _ball_place, _ball_sense
     env = _ball_env()
     lo, hi = (_BALL_KNOBS["MICRODUCK_BALL_DIST_LO"],
               _BALL_KNOBS["MICRODUCK_BALL_DIST_HI"])
-    for d in (lo, 0.5, 1.0, hi):
+    for d in (lo, 0.40):
+        _ball_place(env, d, 0.0)
+        _ball_sense(env, force=True)
+        assert not env._ball_seen, f"ball at {d} m is in frame at a level gaze"
+    for d in (0.5, 1.0, hi):
         _ball_place(env, d, 0.0)
         _ball_sense(env, force=True)
         assert env._ball_seen, f"ball at {d} m is out of frame at a level gaze"
-    # ...and it is genuinely the VERTICAL axis doing it: at the old 62 deg
-    # placeholder the closest spawn was not visible.
-    narrow = _ball_env(spawn_overrides={"MICRODUCK_BALL_VFOV_DEG": "62"})
-    _ball_place(narrow, lo, 0.0)
-    _ball_sense(narrow, force=True)
-    assert not narrow._ball_seen
+    # The nod, and the whole window under it — this is the strategy the
+    # near-floor pitch band of the coverage pay is buying.
+    env.data.qpos[env.joint_qpos_adr[6]] = C.DEFAULT_POSE[6] + 0.30
+    mujoco.mj_forward(env.model, env.data)
+    for d in (lo, 0.40, 0.5, 1.0, hi):
+        _ball_place(env, d, 0.0)
+        _ball_sense(env, force=True)
+        assert env._ball_seen, f"ball at {d} m is out of frame with the head nodded"
+    # ...and it is genuinely the VERTICAL axis doing it: pin the PORTRAIT
+    # orientation (116 up the view, the value this recipe carried until
+    # 2026-09-11) and the near end comes back into a level frame.
+    tall = _ball_env(spawn_overrides={"MICRODUCK_BALL_HFOV_DEG": "60",
+                                      "MICRODUCK_BALL_VFOV_DEG": "116"})
+    for d in (lo, 0.40):
+        _ball_place(tall, d, 0.0)
+        _ball_sense(tall, force=True)
+        assert tall._ball_seen, f"portrait: ball at {d} m should be in frame"
 
 
 def test_find_ball_bearing_signs_match_the_detector():
@@ -1755,6 +1789,8 @@ def test_stale_fix_carries_the_held_bearing_without_compounding_it():
     and worse below, which reads convincingly as "compensation does not
     work"."""
 
+    import math
+
     import mujoco
 
     from microduck_local.behaviors import _ball_place, _ball_sense
@@ -1782,12 +1818,19 @@ def test_stale_fix_carries_the_held_bearing_without_compounding_it():
 
     fixed_from, fixed_to = bearing_after_head_turn("1")
     assert fixed_from == pytest.approx(held_from, abs=1e-6)
-    # +1/half_h per rad of camera yaw, measured — the head turned ~0.30 rad.
-    assert fixed_to > fixed_from + 0.3, (fixed_from, fixed_to)
+    # +1/half_h per rad of camera yaw, MEASURED — so the slot moves by the
+    # turn DIVIDED BY the half-HFOV and rescales with the lens: the same
+    # 0.30 rad of head yaw reads +0.57 through a 60 deg-wide frame (the
+    # portrait mount this recipe assumed until 2026-09-11) and +0.30 through
+    # the 116 deg-wide one the robot has. Written against the knob, so a
+    # remount moves the expectation rather than breaking the test — and
+    # tightly, because the failure this guards (compounding) OVERSHOOTS.
+    from microduck_local.behaviors import _BALL_KNOBS
+    half_h = math.radians(_BALL_KNOBS["MICRODUCK_BALL_HFOV_DEG"]) / 2
+    assert fixed_to == pytest.approx(fixed_from + 0.30 / half_h, abs=0.05), (fixed_from, fixed_to)
 
     # On in the shipped recipe: ~2 points of handoff at the nominal 25 Hz,
     # and it buys the entire cliff below it.
-    from microduck_local.behaviors import _BALL_KNOBS
     assert _BALL_KNOBS["MICRODUCK_BALL_STALE_FIX"] == 1.0
 
     # THE COMPOUNDING GUARD. Hold one report while the head turns steadily and

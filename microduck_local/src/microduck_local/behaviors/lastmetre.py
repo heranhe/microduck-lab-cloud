@@ -97,13 +97,36 @@ LM_RANGE_SCALE, which is a new obs contract and therefore a new recipe id,
 not an edit to this one. `tests/test_lastmetre.py` pins the saturation.
 
 **The ladder is spawns only.** Stage 1 puts the ball in the 6 x 6 cm box
-round the sweet spot AND pins the gaze to the down half of its range, where
+round the sweet spot AND pins the gaze to the down END of its range, where
 the geometry says the ball is actually in frame (at a level head the camera
 sits 0.21 m above a ball on the floor, so a ball 0.10 m ahead is 65 deg below
-the optical axis and outside the 58 deg half-VFOV - a level duck cannot see
-its own feet, which is 12k's finding). Stage 2 opens both: the full box play
-produces, and the whole gaze range the wide kick trains on, so the finished
-policy still has to swing blind at the poses where there is nothing to see.
+the optical axis and outside the half-VFOV - a level duck cannot see its own
+feet, which is 12k's finding). Stage 2 opens the box to the one play
+produces, at the whole gaze range the finished policy is handed over at, so
+it still has to swing blind at the poses where there is nothing to see.
+
+**2026-09-11: those two windows are the LANDSCAPE windows** (the camera is
+mounted 116 deg across, 60 deg up - `behaviors/ball.py`). The half-VFOV is
+30 deg, not 58, so the pitch the gaze needs is the whole question and the
+head yaw is nearly free (half-HFOV 58 deg). Measured with this module's own
+projection, `_lm_sense`'s `seen` at spawn, ball swept over the box and the
+gaze drawn from the window (roadmap 12as follow-ups J and K):
+
+    window                                    portrait 60x116  landscape 116x60
+    the OLD drill (-0.30,-0.15 / 0.45,0.60), spot     100 %             0 %
+    the OLD tip   (-0.30,0 / 0,0.60), full box         25 %             1 %
+    LM_GAZE_STAGE1 below, on the spot                 100 %           100 %
+    LM_GAZE_STAGE1 below, on the full box              99 %            97 %
+    LM_GAZE_TIP below, on the full box                 53 %            70 %
+
+(400 draws a cell, right foot; the left is within 2 pp of every cell. The
+two windows below are not a portrait/landscape trade: they are better than
+the shipped ones under BOTH reads of the camera, which is what you would
+expect of windows chosen by measuring rather than by reasoning.)
+
+`tests/test_lastmetre.py` locks both bars against the default camera, so a
+remount that is not followed through into these two windows fails loudly
+rather than training a policy that sees nothing.
 
 **The far-range pair, `kick_{side}_sensed_far`** (12as's "next cut"). The
 approach cliff above is the range slot's own ceiling, so the cut is to raise
@@ -132,11 +155,9 @@ from .kick import (
     BALL_NOISE,
     BALL_OFFSET,
     BALL_Z,
-    HEAD_DOWN,
     KICK_BOX_AHEAD,
     KICK_BOX_SIDE,
     KICK_BOX_STAGE1,
-    NECK_DOWN,
     _box_knob,
     _kick_ball_ids,
     _kick_terms,
@@ -156,9 +177,18 @@ LM_DETECT_EVERY = 2          # control steps between detector reports (25 Hz, fi
 LM_JITTER = 0.02             # normalized bearing units, find_ball's MICRODUCK_BALL_JITTER
 LM_MEM_TAU = 1.0             # s: the confidence slot's fade while the report says nothing
 LM_MAX_RANGE = 3.0           # m — the detector has no box beyond this (find_ball's)
-# Stage 1's gaze: the down half of the range, where a ball in the box is in
-# frame. Full range (NECK_DOWN / HEAD_DOWN) is stage 2 and the default.
-LM_GAZE_STAGE1 = ("-0.30,-0.15", "0.45,0.60", "0.30,0.50")  # neck, head, |head yaw| "lo,hi"
+# Stage 1's gaze — the DRILL window: pitched far enough down that a ball in
+# the box is in frame through a 60 deg-tall landscape frame, and yawed toward
+# the kicking foot. 12as follow-up J re-measured it after the camera's
+# orientation was settled: the portrait window this recipe shipped with
+# (-0.30,-0.15 / 0.45,0.60) sees 0 % of the strike spot under the camera the
+# robot actually has, and this one sees 100 % of it and 97 % of the full box.
+# The box sits 50-81 deg below a level camera, so the optical axis has to go
+# 60-80 deg down: head +0.90..+1.05 (head_pitch tops out at +1.22 off HOME,
+# so this is near the joint's own limit) with the neck a little further back
+# than before. The yaw term no longer does any work at a 58 deg half-HFOV; it
+# is kept so the drill is otherwise the window follow-up A measured.
+LM_GAZE_STAGE1 = ("-0.45,-0.30", "0.90,1.05", "0.30,0.50")  # neck, head, |head yaw| "lo,hi"
 # Rung 1's box: the POINT-STRIKE spot, +-BALL_NOISE — `kick.BALL_OFFSET` to
 # the millimetre, derived from it so the two cannot drift apart. 12b measured
 # why this rung exists: the box FROM SCRATCH loses the strike ("a random swing
@@ -175,6 +205,20 @@ LM_BOX_STAGE0 = (f"{BALL_OFFSET[0] - BALL_NOISE:.3f},{BALL_OFFSET[0] + BALL_NOIS
 # Head yaw at spawn is HOME in the finished world, as it is for the wide kick
 # and as the bench and the arena hand it over.
 LM_GAZE_YAW = (0.0, 0.0)
+# The TIP window — stages 3 and 4, and the default when no stage is speaking.
+# NOT the wide kick's NECK_DOWN / HEAD_DOWN (0.0..+0.60 of head): that window
+# is a BLIND kick's, and through a 60 deg-tall frame it holds the box on 1 %
+# of draws, which is a recipe that pays for a sighting it never gets. This is
+# 12as follow-up K's window, the deep half of the pitch range, measured at
+# 70 % of the full box against follow-up J's 43 % for the shallower
+# (+0.10..+1.20) variant. It is deliberately WIDER than the drill in pitch:
+# the finished policy is handed over at whatever pose the brain arrives in,
+# and a sensed kick that has only ever seen one pitch is a kick with a pose
+# precondition nothing guarantees (K measured the brain's own handover at a
+# median +0.55 / p90 +0.59 of head, i.e. BELOW this window - which is a brain
+# constant to move, and `ChaseParams.head_down` caps it at 0.6 today).
+LM_GAZE_TIP_NECK = (-0.60, 0.0)
+LM_GAZE_TIP_HEAD = (0.60, 1.20)
 
 # The APPROACH rung's spawn (12as follow-up). A share of episodes put the
 # ball out of the swing's reach, so the only rollouts that earn `ball_forward`
@@ -198,8 +242,8 @@ def _lm_gaze(env) -> tuple[tuple[float, float], tuple[float, float], tuple[float
     The yaw window is a MAGNITUDE, turned toward the kicking foot by the
     reset, because which way "at the ball" is depends on the foot.
     """
-    return (_box_knob(env, "MICRODUCK_LM_GAZE_NECK", NECK_DOWN),
-            _box_knob(env, "MICRODUCK_LM_GAZE_HEAD", HEAD_DOWN),
+    return (_box_knob(env, "MICRODUCK_LM_GAZE_NECK", LM_GAZE_TIP_NECK),
+            _box_knob(env, "MICRODUCK_LM_GAZE_HEAD", LM_GAZE_TIP_HEAD),
             _box_knob(env, "MICRODUCK_LM_GAZE_YAW", LM_GAZE_YAW))
 
 
@@ -452,27 +496,32 @@ def _lm_behavior(side: str, suffix: str, range_scale: float) -> Behavior:
                              "MICRODUCK_LM_GAZE_HEAD": LM_GAZE_STAGE1[1],
                              "MICRODUCK_LM_GAZE_YAW": LM_GAZE_STAGE1[2]},
                             detail=("The ball in a 6 x 6 cm box round the sweet spot and the gaze "
-                                    "already ON it — pitched into the down half of its range and "
-                                    "yawed toward the kicking foot, which is the only pose the box "
-                                    "is really in frame from (measured: 96 % of the box, against "
-                                    "47 % looking straight down and 0 % level). A swing AND a "
-                                    "sighting are both in the rollouts from the first minute.")),
-            CurriculumStage("the box play produces, at any gaze", 2_000_000,
+                                    "already ON it — pitched right down and yawed toward the "
+                                    "kicking foot, which is the only pose the box is really in "
+                                    "frame from (measured under the robot's own landscape camera: "
+                                    "100 % of the 6 x 6 box and 97 % of the full one from this "
+                                    "window, against 0 % with the head level, either foot). A "
+                                    "swing AND a sighting are both in the rollouts from the first "
+                                    "minute.")),
+            CurriculumStage("the box play produces, at any gaze it can see from", 2_000_000,
                             {"MICRODUCK_KICK_BOX_AHEAD": f"{KICK_BOX_AHEAD[0]},{KICK_BOX_AHEAD[1]}",
                              "MICRODUCK_KICK_BOX_SIDE": f"{KICK_BOX_SIDE[0]},{KICK_BOX_SIDE[1]}",
-                             "MICRODUCK_LM_GAZE_NECK": f"{NECK_DOWN[0]},{NECK_DOWN[1]}",
-                             "MICRODUCK_LM_GAZE_HEAD": f"{HEAD_DOWN[0]},{HEAD_DOWN[1]}",
+                             "MICRODUCK_LM_GAZE_NECK": f"{LM_GAZE_TIP_NECK[0]},{LM_GAZE_TIP_NECK[1]}",
+                             "MICRODUCK_LM_GAZE_HEAD": f"{LM_GAZE_TIP_HEAD[0]},{LM_GAZE_TIP_HEAD[1]}",
                              "MICRODUCK_LM_GAZE_YAW": f"{LM_GAZE_YAW[0]},{LM_GAZE_YAW[1]}"},
                             detail=("The full box — 4-16 cm ahead, 1-13 cm to the kicking foot's "
-                                    "side — the whole gaze range, and the head yaw back at HOME, "
-                                    "which is how the bench and the arena hand a kick over: the "
-                                    "ball is in frame on about a quarter of spawns and the policy "
-                                    "has to turn its head to the rest or swing blind.")),
+                                    "side — the deep half of the pitch range, and the head yaw "
+                                    "back at HOME, which is how the bench and the arena hand a "
+                                    "kick over: the ball is in frame on 70 % of spawns and the "
+                                    "policy has to turn its head to the rest or swing blind. The "
+                                    "shallow half is cut deliberately (12as follow-up K): through "
+                                    "a 60 deg-tall frame it holds the box on 1 % of draws, so it "
+                                    "is a pose that pays for a sighting that never arrives.")),
             CurriculumStage("the ball it has to walk to", 2_000_000,
                             {"MICRODUCK_KICK_BOX_AHEAD": f"{KICK_BOX_AHEAD[0]},{KICK_BOX_AHEAD[1]}",
                              "MICRODUCK_KICK_BOX_SIDE": f"{KICK_BOX_SIDE[0]},{KICK_BOX_SIDE[1]}",
-                             "MICRODUCK_LM_GAZE_NECK": f"{NECK_DOWN[0]},{NECK_DOWN[1]}",
-                             "MICRODUCK_LM_GAZE_HEAD": f"{HEAD_DOWN[0]},{HEAD_DOWN[1]}",
+                             "MICRODUCK_LM_GAZE_NECK": f"{LM_GAZE_TIP_NECK[0]},{LM_GAZE_TIP_NECK[1]}",
+                             "MICRODUCK_LM_GAZE_HEAD": f"{LM_GAZE_TIP_HEAD[0]},{LM_GAZE_TIP_HEAD[1]}",
                              "MICRODUCK_LM_GAZE_YAW": f"{LM_GAZE_YAW[0]},{LM_GAZE_YAW[1]}",
                              "MICRODUCK_LM_FAR_PROB": "0.5",
                              "MICRODUCK_LM_FAR_AHEAD": f"{LM_FAR_AHEAD[0]},{LM_FAR_AHEAD[1]}",
