@@ -1477,6 +1477,18 @@ class ChaseParams:
     # flat. Alone (no gate) it sees the ball on 54% of swings and changes
     # nothing (45% whiff): seeing is only worth what the gate does with it.
     gaze_still: bool = True
+    # The gaze law reads its range as the SLANT it is (asin) rather than as
+    # ground distance (atan2): deeper by ~7 deg at 0.27 m and ~20 deg at
+    # 0.20 m. Recorded, not built, in 12ae because it moves the shipped
+    # line-up gaze; built 2026-09-10 as a knob to A/B (roadmap 12ap).
+    # MEASURED OFF: kick gym, two seed blocks, both populations. Open play
+    # whiff 10 -> 7 % on the discovery block (better 9/12, null at MDE 4)
+    # and 8 -> 8 % on the fresh one (5/12); the ball at a board on the cove
+    # 33 -> 32 % and 33 -> 33 %; connected kicks and falls flat; the track at
+    # the swing no fresher (1.43 -> 1.42 s). A 7-20 deg deeper walking gaze
+    # changes nothing the kick can use: the ball leaves the frame under the
+    # chin either way (12k).
+    gaze_slant: bool = False
     # The settle that raises the head: with `gaze_still` the line-up gaze
     # puts the ball on the sweet spot and leaves the head pitched where the
     # kick skill cannot swing (benched: 12 of 12 whiffs from a head joint at
@@ -2673,7 +2685,17 @@ class Chase:
         p = self.p
         k = p.gaze_neck if neck is None else neck
         cap = p.head_down if down is None else down
-        want = math.atan2(p.cam_z - 0.035, max(rng, 0.05))
+        h = p.cam_z - 0.035
+        if p.gaze_slant:
+            # `rng` is a SLANT range (the detector's range_est, and the tracker
+            # places its xy that far along the bearing), so the depression that
+            # centres the ball is asin(h / slant), as `_track_pitch` already
+            # says; atan2(h, slant) treats it as ground distance and under-aims
+            # (roadmap 12ae: ~12 deg at 0.27 m). Off, the law `gaze_still` was
+            # measured with, to the bit.
+            want = math.asin(float(np.clip(h / max(rng, h), -1.0, 1.0)))
+        else:
+            want = math.atan2(h, max(rng, 0.05))
         gain = p.head_gain + p.neck_gain * k
         return float(np.clip((want - p.cam_level) / max(gain, 1e-6), 0.0, cap))
 

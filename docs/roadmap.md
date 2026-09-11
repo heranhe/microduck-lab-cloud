@@ -7981,7 +7981,7 @@ a search that turns toward the remembered ball rather than always left
 (`search_sided` was a null on 8 seeds of 1v1 on the old camera and shipped
 kicks — an instrument that could not have seen it).
 
-**Recorded, not built:** `_gaze` reads the tracker's SLANT range as ground
+**Recorded, not built** — **built and measured off, 12ap:** `_gaze` reads the tracker's SLANT range as ground
 distance (`atan2(height, range)`), under-aiming ~12° at 0.27 m; the tracking
 pitch uses `asin(height / slant)`. Fixing `_gaze` moves the shipped line-up
 gaze that `gaze_still` was measured with, so it stays as measured until
@@ -9044,3 +9044,25 @@ turn — which no command law in this brain fixes; a walker that turns in
 place without creeping, or a kick that does not need a spot (A.2), is the
 route. Instruments: `probe_board_states --cove/--corner` (endings,
 timeouts), `tests/test_lineup_square.py` (the crab).
+
+
+### 12ap. The gaze law's slant range, built as a knob: a null on two blocks (2026-09-10)
+
+12ae's recorded-not-built item. `ChaseParams.gaze_slant` makes `_gaze` take
+its range as the slant it is (asin(h / r), as `_track_pitch` does) instead of
+ground distance (atan2(h, r)): 7° deeper at 0.27 m, 20° at 0.20 m, the same
+far away; off, the law `gaze_still` was measured with, to the bit
+(`tests/test_gaze_slant.py`). Kick gym, 480 episodes an arm, two blocks:
+
+| population | block | shipped whiff | `gaze_slant` | connected | fell |
+|---|---|---|---|---|---|
+| open play | seeds 0–11 | 10 % | 7 % (better 9 / 12, null at MDE 4) | 371 → 383 | 2 → 2 |
+| | seeds 100–111 | 8 % | 8 % (5 / 12) | 374 → 366 | 0 → 0 |
+| the cove, ball ≤ 0.15 m from a board | seeds 0–11 | 33 % | 32 % (6 / 12) | 169 → 161 | 1 → 2 |
+| | seeds 100–111 | 33 % | 33 % (5 / 12) | 164 → 165 | 3 → 0 |
+
+The discovery block's three points did not replicate; the ball track at the
+swing is no fresher (1.43 → 1.42 s). A deeper walking gaze sees a ball that
+leaves the frame under the chin either way (12k). Ships off, with the
+numbers; the law is written correctly beside it for whoever needs the
+depression for something else.
