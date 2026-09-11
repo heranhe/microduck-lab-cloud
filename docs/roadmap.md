@@ -9745,6 +9745,113 @@ it needs one sample at `t0 + 0.5 s`) and split `kicksBack` into "left on a
 backward line" and "ended up back", which is the column that would have made
 12aq readable in the first place; (3) the gym's `back` column should not be
 quoted alone in future items — quote the backward-LINE share beside it.
+**Follow-ups (1) and (2) built and measured as 12au, below: backward lines
+26 → 8 % on the ledger, the selector declines 29 % of its swings.**
 Caveat: the five arms ran against one PYTHONPATH snapshot of `src/` (the working
 tree at 18:09 with three other agents' uncommitted edits), so they are
 internally consistent but a clean checkout will not reproduce them bit for bit.
+
+### 12au. The pitch gets a direction column, and the corrected sidecar is free on it: backward LINES fall 26 → 8 % where the ledger's own `kicksBack` cannot resolve anything (2026-09-10)
+
+12at's follow-ups (2) and (1), in that order. The ledger had no direction
+measure at all: `kicksBack` is `advance < 0` over CARRY_S, and 12at measured
+per swing that among touches struck straight at the mouth it fires 31-60 % of
+the time below 1 m of travel and 0-5 % above it — a WEAK-TOUCH count,
+anti-correlated with how well the kick connected. So 12aq's "13 → 29 % of
+kicks go back" was never readable as "the kicks point backwards".
+
+**The column.** `world/metrics.py` takes ONE extra ball sample per kick, at
+`t0 + EXIT_S` (0.5 s), and records two per-team columns beside the old ones:
+`kicksBackLine` (the ball LEFT on a line more than 90° from the mouth that
+team attacks) out of `kickLineCount` (kicks that moved the ball at least
+`EXIT_MIN_M` = 0.05 m in that window and so had a line to read). Two
+denominators on purpose: a whiff has no direction, and a kick settled early —
+a goal or a ball-out teleports the ball — borrows nothing from the teleport.
+The rule, the window, the floor and the origin instant (the tick the kick
+skill takes the body) are `scripts/kick_gym.py`'s `exit_play`, so the gym's
+backward-line share and this column are one quantity on two populations;
+`tests/test_metrics_kickline.py` NAMES both constants against the gym's, so a
+drift is one honest failure rather than two instruments quietly disagreeing.
+`scripts/compare_pitch.py` prints both shares with their own two-proportion p,
+and prints `—` plus which arm carries the column for pre-12au rows instead of
+a 0 %. Landed inside commit a32812e: the reviewer's roadmap commit swept the three
+staged files from the shared index (the code is correct; the message is the
+find_ball one). Reviewer's re-read of both row files below: every total
+reproduces.
+
+**Additive, and measured to be.** 3 seeds × 60 s of 2v2 against two PYTHONPATH
+snapshots differing in ONLY `metrics.py`: every pre-existing column identical
+row for row, the two new keys the only addition. Stronger: the shipped arm
+re-run below is identical on every old column to `runs/kickseed1/pitch-ship-200.jsonl`
+(12at, 17:43) on **all 24 seeds**, so nothing three other agents changed in the
+tree that afternoon touched this benchmark — and the same comparison against
+`pitch-oldpair-200.jsonl` matches on 0/24, so "identical" is not vacuous. A
+probe outside `PitchMetrics` (its own kick stamps, its own 0.5 s sample, its
+own mouth arithmetic) reproduces the column on three runs.
+
+**The corrected sidecar on the ledger — measured, NOT shipped.**
+`policies/kick/kick_left.json` is still −0.225. A scratch copy of the w12 ONNX
+pair with the left sidecar at +0.209, pinned through `MICRODUCK_SKILL_KICK_*`;
+the preflight asserted `World.kick_exits()` and the exits read back off the
+CONSTRUCTED brains — (−0.225, −0.036) and (0.209, −0.036). Both arms ran
+against ONE frozen snapshot of `src/` (the working tree at 18:39, three other
+agents' uncommitted edits included), so they are internally consistent and a
+clean checkout will not reproduce them bit for bit.
+
+`eval-pitch --seeds 24 --seed0 200 --seconds 300 --per-side 2 --ball-out-s 5`,
+the same seeds as 12aq/12at:
+
+| 24 seeds, 2v2 × 300 s | w12 (shipped) | w12fix (0.209) | Δ ± MDE (MDE %) | p | verdict |
+|---|---|---|---|---|---|
+| possession s/min | 39.84 | 40.32 | +0.49 ± 1.66 (4 %) | 0.550 | **null** |
+| ballAdvance m/min | 1.242 | 1.176 | −0.066 ± 0.163 (13 %) | 0.410 | **null** |
+| ballProgress m/min | 0.580 | 0.496 | — | — | unquotable |
+| spread / crowd / depth / ballOwnHalf | flat | flat | MDE 0–8 % | 0.10–1.0 | null |
+| goals | 18 | 32 | +0.58 ± 0.54 /run (72 %) | 0.036 | effect by t, 11 up / 4 down / 9 tied (sign p 0.12) |
+| own goals | 4 | 5 | +0.04 ± 0.36 (218 %) | 0.814 | NO RESULT |
+| falls | 2 | 0 | −0.08 ± 0.12 (143 %) | 0.162 | NO RESULT (4912 seeds) |
+| kicks | 173 | 122 | −2.13 ± 1.23 /run (17 %) | **0.0016** | **effect** |
+| kicks with a line | 113 | 77 | −1.50 ± 1.15 (24 %) | 0.013 | effect |
+| carry per kick | +0.325 m | +0.480 m | totals 56.2 → 58.6 m | 0.817 | total: NO RESULT |
+| `kicksBack`, of kicks | 50/173 = **28.9 %** | 24/122 = **19.7 %** | −9.2 pp | 0.072 | not resolved |
+| `kicksBackLine`, of lines | 29/113 = **25.7 %** | 6/77 = **7.8 %** | −17.9 pp | **0.0018** | **effect** |
+
+Both sides move together — cream 31 → 7 %, graphite 19 → 9 % — which is the
+only internal check self-play allows. Levels are NOT the gym's (there: 6.9 →
+4.1 % backward lines, 20.6 → 23.5 % ledger back): a pitch has opponents and
+boards, and only 65 % of its kicks move the ball far enough to have a line at
+all, against 78 % in the gym. The SHIFT is what carries across.
+
+**12at's prediction, scored.** `kicksBackLine` falls: **held**, and it is the
+largest effect in the block. Possession flat: **held** (null, MDE 4 %).
+`kicksBack` does not fall: **half held** — it does not RISE as the gym's block
+did (+2.8 pp), but its −9.2 pp fall here is unresolved (p 0.072), and the
+population moved underneath it. Goals flat: **not held** — 18 → 32 at p 0.036,
+but on 11 of 24 seeds (4 worse, 9 tied; sign p 0.12) with an MDE of 72 % of
+baseline, which is exactly the metric 12aq already caught being a coin.
+
+**And one cost the gym could not see.** The corrected model makes the selector
+DECLINE swings: kicks 173 → 122, −29 %, p 0.0016, fewer on 18 of 24 seeds —
+while carry per kick rises 0.325 → 0.480 m and the total carry stays flat
+(56.2 → 58.6 m). Fewer, better touches. Nothing in the block prices that as a
+loss, but it is a behaviour change of a size the ledger CAN resolve, unlike
+the goal lift.
+
+**Verdict / recommendation (the sidecar is the owner's call).** Set
+`policies/kick/kick_left.json` `exit_rad` to +0.209: on the 24 paired ledger
+seeds the correction removes two thirds of the backward lines and costs
+nothing this battery can resolve — possession, advance, shape, carry, own
+goals and falls all flat or better. Before or just after shipping it, confirm
+the two things this block could not settle on FRESH seeds (300–323): the goal
+lift, and the 29 % drop in kick events. `kicksBack` should not be quoted alone
+again; quote `kicksBackLine` beside it, and read each out of its own
+denominator.
+
+→ **What settles it next:** (1) the fresh block above; (2) the printed ledger
+line in `eval_pitch._print_ledger` / `_seed_line` still shows only `kicksBack`
+— the column is in every row and in `compare_pitch`, but not yet on the
+console (that file was mid-edit by another session and was left alone);
+(3) `eval_striker` does not carry `getupDownS` / `getupPolicy`, so
+`test_striker.py::test_the_chase_arm_reproduces_eval_pitch_exactly` is red in
+the working tree — unrelated to this item, but it will bite the next person
+who runs the suite.
