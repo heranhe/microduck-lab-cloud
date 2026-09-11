@@ -27,14 +27,21 @@ from microduck_local.behaviors.kick import (
     _kick_ball_ids,
 )
 from microduck_local.behaviors.lastmetre import (
+    LM_FAR_AHEAD,
     LM_GAZE_STAGE1,
     LM_RANGE_SCALE,
     _lm_sense,
 )
 
 HEAD_YAW_ID = C.JOINT_NAMES.index("head_yaw")
+# Every one of these is a SPAWN window (or the clip the spawn gets to play
+# out in). Nothing here may ever name a reward key: a stage laddering the pay
+# is the failure this allowlist exists to catch, and no reward curve would
+# ever complain about it.
 STAGE_KNOBS = {"MICRODUCK_KICK_BOX_AHEAD", "MICRODUCK_KICK_BOX_SIDE",
-               "MICRODUCK_LM_GAZE_NECK", "MICRODUCK_LM_GAZE_HEAD", "MICRODUCK_LM_GAZE_YAW"}
+               "MICRODUCK_LM_GAZE_NECK", "MICRODUCK_LM_GAZE_HEAD", "MICRODUCK_LM_GAZE_YAW",
+               "MICRODUCK_LM_FAR_PROB", "MICRODUCK_LM_FAR_AHEAD", "MICRODUCK_LM_FAR_SIDE",
+               "MICRODUCK_EPISODE_S"}
 
 
 def _env(side: str, **over):
@@ -93,12 +100,14 @@ def test_the_ladder_moves_the_world_and_never_the_pay():
     stage knob here is a SPAWN window, and the stages are strictly opening."""
     for side in ("right", "left"):
         b = BEHAVIORS[f"kick_{side}_sensed"]
-        assert len(b.curriculum) == 3
+        assert len(b.curriculum) == 4
         # ...and it only ever OPENS: each rung's box is wider than the last in
         # both axes (the 6 x 6 rung sits 3 mm inside the strike spot's near
-        # edge, so this is a width test, not a containment one).
+        # edge, so this is a width test, not a containment one). Rung 4 keeps
+        # rung 3's near box and opens a SECOND window past it, so the widening
+        # test is over the three near rungs and rung 4 is checked below.
         prev = None
-        for st in b.curriculum:
+        for st in b.curriculum[:3]:
             lo_a, hi_a = (float(v) for v in st.env["MICRODUCK_KICK_BOX_AHEAD"].split(","))
             lo_s, hi_s = (float(v) for v in st.env["MICRODUCK_KICK_BOX_SIDE"].split(","))
             box = (hi_a - lo_a, hi_s - lo_s)
@@ -110,12 +119,25 @@ def test_the_ladder_moves_the_world_and_never_the_pay():
             assert st.detail
         assert sum(st.steps for st in b.curriculum) == b.default_steps
         # Stage 2 IS the finished world: the full box, the full gaze, yaw home.
-        last = b.curriculum[-1].env
-        assert last["MICRODUCK_KICK_BOX_AHEAD"] == f"{KICK_BOX_AHEAD[0]},{KICK_BOX_AHEAD[1]}"
-        assert last["MICRODUCK_KICK_BOX_SIDE"] == f"{KICK_BOX_SIDE[0]},{KICK_BOX_SIDE[1]}"
-        assert last["MICRODUCK_LM_GAZE_NECK"] == f"{NECK_DOWN[0]},{NECK_DOWN[1]}"
-        assert last["MICRODUCK_LM_GAZE_HEAD"] == f"{HEAD_DOWN[0]},{HEAD_DOWN[1]}"
-        assert last["MICRODUCK_LM_GAZE_YAW"] == "0.0,0.0"
+        for st in (b.curriculum[2], b.curriculum[3]):
+            assert st.env["MICRODUCK_KICK_BOX_AHEAD"] == f"{KICK_BOX_AHEAD[0]},{KICK_BOX_AHEAD[1]}"
+            assert st.env["MICRODUCK_KICK_BOX_SIDE"] == f"{KICK_BOX_SIDE[0]},{KICK_BOX_SIDE[1]}"
+            assert st.env["MICRODUCK_LM_GAZE_NECK"] == f"{NECK_DOWN[0]},{NECK_DOWN[1]}"
+            assert st.env["MICRODUCK_LM_GAZE_HEAD"] == f"{HEAD_DOWN[0]},{HEAD_DOWN[1]}"
+            assert st.env["MICRODUCK_LM_GAZE_YAW"] == "0.0,0.0"
+        # ...and stage 2 has no far share at all: it must reproduce the world
+        # 12as measured, bit for bit.
+        assert not (set(b.curriculum[2].env) & {"MICRODUCK_LM_FAR_PROB", "MICRODUCK_EPISODE_S"})
+        # Stage 3 is the APPROACH rung: a share of the episodes out of reach,
+        # and a clip long enough to step AND swing.
+        appr = b.curriculum[3].env
+        assert 0.0 < float(appr["MICRODUCK_LM_FAR_PROB"]) < 1.0     # the strike is still rehearsed
+        far_lo, far_hi = (float(v) for v in appr["MICRODUCK_LM_FAR_AHEAD"].split(","))
+        assert far_lo >= KICK_BOX_AHEAD[1] + 0.03                   # genuinely past the swing
+        assert far_hi > far_lo
+        side_lo, side_hi = (float(v) for v in appr["MICRODUCK_LM_FAR_SIDE"].split(","))
+        assert side_lo < 0.0 < side_hi                              # either side, not just the foot's
+        assert float(appr["MICRODUCK_EPISODE_S"]) >= 2 * b.episode_s
 
 
 def test_the_spawn_puts_the_ball_in_the_box_and_the_drill_puts_the_gaze_on_it():
@@ -220,3 +242,84 @@ def test_the_slots_reach_the_observation_and_nothing_else_moves():
     for _ in range(10):
         obs, _, _, _, _ = env.step(np.zeros(14, np.float32))
         assert np.allclose(obs[51:55], env.head_cmd)
+
+
+def test_the_approach_rung_spawns_a_ball_no_swing_can_reach_and_only_then():
+    """The 12as follow-up, and the whole of it: the first cut kicked a ball it
+    could see and never walked to one, because no rollout ever contained a
+    ball worth walking to. This rung puts one there — and every rung before it
+    must be untouched, RNG stream included, or the seed-2 replicate and the
+    benches stop measuring the same world."""
+    for side, sgn in (("right", -1.0), ("left", 1.0)):
+        b = BEHAVIORS[f"kick_{side}_sensed"]
+        env = _env(side, **dict(b.curriculum[3].env))
+        assert env.max_steps == round(4.0 / C.CTRL_DT)     # the clip knob reaches the env
+        far, near, sides = 0, 0, []
+        for k in range(120):
+            env.reset(seed=200 + k)
+            _, qadr, _ = _kick_ball_ids(env)
+            ahead = float(env.data.qpos[qadr] - env.data.qpos[0])
+            beside = sgn * float(env.data.qpos[qadr + 1] - env.data.qpos[1])
+            if ahead > KICK_BOX_AHEAD[1] + 1e-6:
+                far += 1
+                assert 0.20 - 1e-6 <= ahead <= 0.45 + 1e-6
+                assert abs(beside) <= 0.13 + 1e-6
+                sides.append(beside)
+            else:
+                near += 1
+                assert KICK_BOX_AHEAD[0] - 1e-6 <= ahead <= KICK_BOX_AHEAD[1] + 1e-6
+                assert KICK_BOX_SIDE[0] - 1e-6 <= beside <= KICK_BOX_SIDE[1] + 1e-6
+        assert far > 30 and near > 30, (far, near)          # both worlds in the rollouts
+        assert min(sides) < -0.02 and max(sides) > 0.02     # ...and the far ball is on both sides
+
+        # A far ball is VISIBLE from a level head — the geometry the near box
+        # fails (12k: the camera is 0.21 m up, so a ball at its feet is below
+        # the frame). That is what makes the approach learnable at all.
+        assert _place(env, 0.40, 0.0, 0.0, 0.0)[2] == 1.0
+
+
+def test_every_rung_before_the_approach_is_the_world_12as_measured():
+    """The far spawn is OFF by default and draws no random number when it is,
+    so rung 1-3, every bench and every replay see the identical stream. This
+    is the test that would catch 'the seed-2 run is not comparable'."""
+    for side in ("right", "left"):
+        a = _env(side)
+        b = _env(side, MICRODUCK_LM_FAR_PROB="0.0")
+        for k in range(20):
+            a.reset(seed=700 + k)
+            b.reset(seed=700 + k)
+            _, qa, _ = _kick_ball_ids(a)
+            _, qb, _ = _kick_ball_ids(b)
+            assert np.allclose(a.data.qpos[qa:qa + 3], b.data.qpos[qb:qb + 3])
+            assert np.allclose(a.data.qpos, b.data.qpos)
+        assert a.max_steps == round(2.0 / C.CTRL_DT)
+
+
+def test_the_range_slot_saturates_and_that_is_where_the_approach_stops():
+    """The measured ceiling of the approach rung, pinned as a number.
+
+    obs[52] is `min(1, ground range / LM_RANGE_SCALE)`, so for a ball straight
+    ahead of the duck EVERY slot is identical past LM_RANGE_SCALE: bearing 0,
+    range 1.0, seen 1, conf 1.0. Walking toward such a ball changes nothing
+    the policy can observe until it crosses that radius, so there is no
+    gradient out there — which is exactly what the trained rung does. The
+    approach appears between 0.20 and 0.24 m and dies between 0.24 and 0.26,
+    and a second 2M-step arm with the spawns concentrated on 0.25-0.35 m
+    moved that cliff by nothing (roadmap 12as follow-up).
+
+    If someone raises LM_RANGE_SCALE, this test is what tells them the
+    approach ceiling moved with it — and that every policy trained under the
+    old value now reads its range slot wrong.
+    """
+    assert LM_RANGE_SCALE == pytest.approx(0.25)
+    assert LM_FAR_AHEAD[1] > LM_RANGE_SCALE          # the rung spawns past it, deliberately
+    env = _env("right")
+    down = (-0.30, 0.60)
+    inside = _place(env, LM_RANGE_SCALE - 0.03, 0.0, *down)
+    just_out = _place(env, LM_RANGE_SCALE + 0.01, 0.0, *down)
+    far_out = _place(env, LM_FAR_AHEAD[1], 0.0, *down)
+    assert inside[1] < 0.95                                    # informative...
+    assert just_out[1] == pytest.approx(1.0)                   # ...then pinned
+    assert far_out[1] == pytest.approx(1.0)
+    # ...and the two out-of-range balls are INDISTINGUISHABLE, 0.19 m apart.
+    assert np.allclose(just_out, far_out, atol=0.02), (just_out, far_out)

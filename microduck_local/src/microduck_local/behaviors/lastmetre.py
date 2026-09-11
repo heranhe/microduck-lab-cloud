@@ -63,6 +63,39 @@ reward here does; the obs never does.
 OBSERVATION and in nothing else that is paid. AGENTS.md: a stage may ladder
 the world, never the pay.
 
+**The approach rung** (12as follow-up). The first cut learned to kick a
+ball it can see and NOT to walk to one: with the ball 0.22-0.45 m ahead the
+trunk advanced 1-11 cm in the 2 s clip and the ball never moved. By the
+playbook that is a world fix, not a reward one - "if rollouts never contain
+the skill you are paying for, fix the physics curriculum, not the reward",
+because an unsampled state's value is never learned. Stage 3 therefore
+spawns HALF its episodes with the ball 0.20-0.45 m ahead and up to 0.13 m
+either side - beyond anything a swing from standing reaches - and doubles
+the clip to 4 s, which is what the shipped walker needs to cover the gap
+(`walker-facts`: 0.13-0.18 m/s forward, feet reaching 0.04 m past the
+trunk, so 0.29 m of approach is 1.6-2.2 s) plus a swing. Not one point of
+new pay: `ball_forward` already pays only for a ball that ROLLS, and the
+only way to earn it from out there is to arrive first.
+
+MEASURED (`scripts/probe_kick_approach.py`, 8 seeds a cell, warm-started
+from the v1 tips as `lastmetre-{right,left}-v1-approach`): the rung buys the
+band 0.20-0.24 m and stops dead. The right foot goes from 5 cm of trunk
+advance and a ball that never moves at 0.22 m to 13-17 cm and the ball
+kicked on 75-100 % of seeds, and the render is a walk - three alternating
+single-support steps with the range slot falling 0.85 -> 0.58, then the
+swing at ~1.2 s. Past 0.25 m nothing: 2-5 cm of advance, ball never moved,
+both feet down for the whole clip. The cliff is between 0.24 and 0.26 m,
+which is LM_RANGE_SCALE - and that is the whole explanation. For a ball
+straight ahead, EVERY slot is identical past that radius (bearing 0, range
+clipped to 1.0, seen 1, conf 1.0), so walking changes nothing the policy can
+see and there is no gradient to climb. A second 2M-step arm with the far
+window marched to 0.25-0.35 m (`lastmetre-{right,left}-approach-far`) moved
+the cliff by nothing while proving the BODY is not the limit: the right foot
+covers 1.03 m in 4 s chasing a ball it can range on. The approach is an
+OBSERVATION problem, not a curriculum one; the next cut raises
+LM_RANGE_SCALE, which is a new obs contract and therefore a new recipe id,
+not an edit to this one. `tests/test_lastmetre.py` pins the saturation.
+
 **The ladder is spawns only.** Stage 1 puts the ball in the 6 x 6 cm box
 round the sweet spot AND pins the gaze to the down half of its range, where
 the geometry says the ball is actually in frame (at a level head the camera
@@ -120,6 +153,21 @@ LM_BOX_STAGE0 = (f"{BALL_OFFSET[0] - BALL_NOISE:.3f},{BALL_OFFSET[0] + BALL_NOIS
 # and as the bench and the arena hand it over.
 LM_GAZE_YAW = (0.0, 0.0)
 
+# The APPROACH rung's spawn (12as follow-up). A share of episodes put the
+# ball out of the swing's reach, so the only rollouts that earn `ball_forward`
+# are the ones that walked to it first. Off by default - every rung before
+# stage 3, and every bench, sees exactly the world 12as measured.
+LM_FAR_PROB = 0.0                 # share of episodes spawned out of reach
+LM_FAR_AHEAD = (0.20, 0.45)       # m ahead: past KICK_BOX_AHEAD's 0.16 far edge
+LM_FAR_SIDE = (-0.13, 0.13)       # m either side - a ball it has to walk to can be either
+# 4 s, not the base clip's 2 s: `walker-facts` measures the shipped gait at
+# 0.13-0.18 m/s forward with the feet reaching 0.04 m past the trunk, so the
+# worst spawn (0.45 m, kickable by ~0.16 m) is 1.6-2.2 s of walking before
+# there is anything to swing at. 2 s cannot contain a step AND a swing, which
+# is why 12as's "a 2 s clip is a weak cost" was the wrong diagnosis of the
+# wrong knob: the clip was not a cost, it was a ceiling.
+LM_APPROACH_EPISODE_S = "4.0"
+
 
 def _lm_gaze(env) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
     """(neck, head, |head yaw|) spawn windows for this stage — offsets off HOME.
@@ -155,8 +203,17 @@ def _lm_reset_for(side: str):
         r = env._rng
         _, qadr, dadr = _kick_ball_ids(env)
         yaw = _yaw(env)
-        ox = r.uniform(*_box_knob(env, "MICRODUCK_KICK_BOX_AHEAD", KICK_BOX_AHEAD))
-        oy = sgn * r.uniform(*_box_knob(env, "MICRODUCK_KICK_BOX_SIDE", KICK_BOX_SIDE))
+        # The approach rung's out-of-reach share. Short-circuited when the
+        # knob is off, so no random number is drawn and the RNG stream of
+        # every pre-12as rung and bench is bit-identical to what they had.
+        far_p = env._knob_prob("MICRODUCK_LM_FAR_PROB", LM_FAR_PROB)
+        far = far_p > 0.0 and float(r.uniform()) < far_p
+        if far:
+            ox = r.uniform(*_box_knob(env, "MICRODUCK_LM_FAR_AHEAD", LM_FAR_AHEAD))
+            oy = sgn * r.uniform(*_box_knob(env, "MICRODUCK_LM_FAR_SIDE", LM_FAR_SIDE))
+        else:
+            ox = r.uniform(*_box_knob(env, "MICRODUCK_KICK_BOX_AHEAD", KICK_BOX_AHEAD))
+            oy = sgn * r.uniform(*_box_knob(env, "MICRODUCK_KICK_BOX_SIDE", KICK_BOX_SIDE))
         x = float(env.data.qpos[0]) + math.cos(yaw) * ox - math.sin(yaw) * oy
         y = float(env.data.qpos[1]) + math.sin(yaw) * ox + math.cos(yaw) * oy
         env.data.qpos[qadr:qadr + 7] = [x, y, BALL_Z, 1.0, 0.0, 0.0, 0.0]
@@ -173,7 +230,9 @@ def _lm_reset_for(side: str):
         if getattr(env, "bam", None) is not None:
             env.bam.reset(env.data.qpos[env.joint_qpos_adr])
         mujoco.mj_forward(env.model, env.data)
-        env.last_spawn = f"ball {ox:.2f}m ahead {abs(oy):.2f}m {side}"
+        env.last_spawn = (f"ball {ox:.2f}m ahead {abs(oy):.2f}m "
+                          f"{side if oy * sgn >= 0 else ('left' if side == 'right' else 'right')}"
+                          + (" (out of reach)" if far else ""))
         # Sensing state, fresh per episode (a leaked estimate is one free
         # sighting on the first step of the next one).
         env._lm_episode = env.episode_id
@@ -309,9 +368,10 @@ for _side in ("right", "left"):
             RewardTerm("face_line", "Docked for the body turning off the kick line through the swing",
                        4.0, _face_home_pen, is_penalty=True),
         ),
-        default_steps=4_000_000,
+        default_steps=6_000_000,
         success_metric=("ball speed along the kick line at 0.5 s from every spot in the box and every "
-                        "gaze pose; coverage of the play box above the blind pair's 69-82 %; body turn under 20 deg"),
+                        "gaze pose; coverage of the play box above the blind pair's 69-82 %; body turn under 20 deg; "
+                        "and, from stage 3, a ball 0.20-0.45 m ahead moved at all"),
         symmetric=False,
         episode_s=2.0,
         scene="ball",
@@ -354,5 +414,28 @@ for _side in ("right", "left"):
                                     "which is how the bench and the arena hand a kick over: the "
                                     "ball is in frame on about a quarter of spawns and the policy "
                                     "has to turn its head to the rest or swing blind.")),
+            CurriculumStage("the ball it has to walk to", 2_000_000,
+                            {"MICRODUCK_KICK_BOX_AHEAD": f"{KICK_BOX_AHEAD[0]},{KICK_BOX_AHEAD[1]}",
+                             "MICRODUCK_KICK_BOX_SIDE": f"{KICK_BOX_SIDE[0]},{KICK_BOX_SIDE[1]}",
+                             "MICRODUCK_LM_GAZE_NECK": f"{NECK_DOWN[0]},{NECK_DOWN[1]}",
+                             "MICRODUCK_LM_GAZE_HEAD": f"{HEAD_DOWN[0]},{HEAD_DOWN[1]}",
+                             "MICRODUCK_LM_GAZE_YAW": f"{LM_GAZE_YAW[0]},{LM_GAZE_YAW[1]}",
+                             "MICRODUCK_LM_FAR_PROB": "0.5",
+                             "MICRODUCK_LM_FAR_AHEAD": f"{LM_FAR_AHEAD[0]},{LM_FAR_AHEAD[1]}",
+                             "MICRODUCK_LM_FAR_SIDE": f"{LM_FAR_SIDE[0]},{LM_FAR_SIDE[1]}",
+                             "MICRODUCK_EPISODE_S": LM_APPROACH_EPISODE_S},
+                            detail=("Half the episodes put the ball 0.20-0.45 m ahead and up to "
+                                    "0.13 m either side - out of reach of any swing from standing - "
+                                    "and the clip doubles to 4 s so a step AND a swing fit in one "
+                                    "episode. The other half is stage 2's world, so the strike is "
+                                    "still being rehearsed. The pay does not change by a point: "
+                                    "the only way to earn `ball_forward` from out there is to "
+                                    "arrive, which is the whole lever (AGENTS.md: ladder the "
+                                    "physics, never the pay). MEASURED: this rung teaches the "
+                                    "approach out to 0.24 m and no further, because obs[52] "
+                                    "clips at LM_RANGE_SCALE (0.25 m) and a ball beyond it is "
+                                    "observationally identical to one at 0.45 m - see the module "
+                                    "docstring. The far window is left at the range it was "
+                                    "trained and measured on.")),
         ),
     ))
