@@ -1,0 +1,222 @@
+"""The kick that SEES the ball (behaviors/lastmetre.py, roadmap 12h / E.1):
+the wide kick's world and the wide kick's pay, with the ball's position
+riding the four HEAD command slots of the 61-obs contract.
+
+Locks the three things a recipe can get silently wrong: the pay (it must be
+the wide kick's, term for term, or "the difference is the observation" is
+not what was trained), the ladder (spawn knobs only, never the reward), and
+the SLOTS — which is the part no reward curve would ever complain about.
+"""
+
+import math
+
+import mujoco
+import numpy as np
+import pytest
+
+from microduck_local import contract as C
+from microduck_local.behaviors import BEHAVIORS, match_behavior
+from microduck_local.behaviors.core import _face_home_pen
+from microduck_local.behaviors.env import BehaviorEnv
+from microduck_local.behaviors.kick import (
+    BALL_Z,
+    HEAD_DOWN,
+    KICK_BOX_AHEAD,
+    KICK_BOX_SIDE,
+    NECK_DOWN,
+    _kick_ball_ids,
+)
+from microduck_local.behaviors.lastmetre import (
+    LM_GAZE_STAGE1,
+    LM_RANGE_SCALE,
+    _lm_sense,
+)
+
+HEAD_YAW_ID = C.JOINT_NAMES.index("head_yaw")
+STAGE_KNOBS = {"MICRODUCK_KICK_BOX_AHEAD", "MICRODUCK_KICK_BOX_SIDE",
+               "MICRODUCK_LM_GAZE_NECK", "MICRODUCK_LM_GAZE_HEAD", "MICRODUCK_LM_GAZE_YAW"}
+
+
+def _env(side: str, **over):
+    return BehaviorEnv(f"kick_{side}_sensed", seed=3, max_episode_s=2.0, domain_rand=False,
+                       random_yaw=False, obs_noise=False, action_delay=False,
+                       spawn_overrides=over or None)
+
+
+def _place(env, ahead: float, side: float, neck: float, head: float, yaw: float = 0.0):
+    """Put the true ball at (ahead, side) in the duck's body frame — + side is
+    to its LEFT — set the gaze, and run one detector report."""
+    env.reset(seed=11)
+    _, qadr, dadr = _kick_ball_ids(env)
+    env.data.qpos[qadr:qadr + 7] = [float(env.data.qpos[0]) + ahead,
+                                    float(env.data.qpos[1]) + side, BALL_Z, 1.0, 0.0, 0.0, 0.0]
+    env.data.qvel[dadr:dadr + 6] = 0.0
+    env.data.qpos[env.joint_qpos_adr[5]] = C.DEFAULT_POSE[5] + neck
+    env.data.qpos[env.joint_qpos_adr[6]] = C.DEFAULT_POSE[6] + head
+    env.data.qpos[env.joint_qpos_adr[HEAD_YAW_ID]] = C.DEFAULT_POSE[HEAD_YAW_ID] + yaw
+    env.data.ctrl[:] = env.data.qpos[env.joint_qpos_adr]
+    mujoco.mj_forward(env.model, env.data)
+    env._lm_world, env._lm_conf, env._lm_det_seen = None, 0.0, False
+    env._lm_det_step = -10 ** 9
+    _lm_sense(env, force=True)
+    return env.head_cmd.copy()
+
+
+def test_the_sensed_kick_is_the_wide_kicks_pay_and_the_wide_kicks_box():
+    """Same terms, same weights, same signs as `kick_<side>_wide` — the two
+    recipes differ in the OBSERVATION, so anything else that differs makes
+    the comparison meaningless."""
+    for side in ("right", "left"):
+        b, wide = BEHAVIORS[f"kick_{side}_sensed"], BEHAVIORS[f"kick_{side}_wide"]
+        assert b.scene == "ball" and b.episode_s == pytest.approx(2.0) and b.terminate_on_fall
+        assert not b.symmetric                                   # it names a foot
+        assert [(t.key, t.weight, t.is_penalty) for t in b.terms] == \
+               [(t.key, t.weight, t.is_penalty) for t in wide.terms]
+        # `_kick_terms` closes a fresh function over the foot each call, so
+        # compare what they ARE, not their identity.
+        assert [t.fn.__name__ for t in b.terms] == [t.fn.__name__ for t in wide.terms]
+        assert [t.friendly for t in b.terms] == [t.friendly for t in wide.terms]
+        assert b.terms[-1].key == "face_line" and b.terms[-1].is_penalty and b.terms[-1].fn is _face_home_pen
+        assert b.obs_fn is not None and b.reset_fn.__name__ == f"_lm_reset_{side}"
+        # By ID, never by identity: `reload_library` (the lab's hot reload,
+        # exercised in tests/test_lab.py) rebuilds every recipe object, and an
+        # `is` check here passes alone and fails in the full suite.
+        assert match_behavior(f"kick_{side}_sensed").id == b.id
+        assert match_behavior(f"last metre {side}").id == b.id
+        # ...and the plain strike keeps the generic phrase, deliberately:
+        # a sensed kick is asked for by name, never by "kick right".
+        assert match_behavior(f"kick {side}").id == f"kick_{side}"
+
+
+def test_the_ladder_moves_the_world_and_never_the_pay():
+    """AGENTS.md: a stage may ladder physics, spawns and strictness. Every
+    stage knob here is a SPAWN window, and the stages are strictly opening."""
+    for side in ("right", "left"):
+        b = BEHAVIORS[f"kick_{side}_sensed"]
+        assert len(b.curriculum) == 3
+        # ...and it only ever OPENS: each rung's box is wider than the last in
+        # both axes (the 6 x 6 rung sits 3 mm inside the strike spot's near
+        # edge, so this is a width test, not a containment one).
+        prev = None
+        for st in b.curriculum:
+            lo_a, hi_a = (float(v) for v in st.env["MICRODUCK_KICK_BOX_AHEAD"].split(","))
+            lo_s, hi_s = (float(v) for v in st.env["MICRODUCK_KICK_BOX_SIDE"].split(","))
+            box = (hi_a - lo_a, hi_s - lo_s)
+            if prev is not None:
+                assert box[0] > prev[0] and box[1] > prev[1], st.label
+            prev = box
+        for st in b.curriculum:
+            assert set(st.env) <= STAGE_KNOBS, st.env
+            assert st.detail
+        assert sum(st.steps for st in b.curriculum) == b.default_steps
+        # Stage 2 IS the finished world: the full box, the full gaze, yaw home.
+        last = b.curriculum[-1].env
+        assert last["MICRODUCK_KICK_BOX_AHEAD"] == f"{KICK_BOX_AHEAD[0]},{KICK_BOX_AHEAD[1]}"
+        assert last["MICRODUCK_KICK_BOX_SIDE"] == f"{KICK_BOX_SIDE[0]},{KICK_BOX_SIDE[1]}"
+        assert last["MICRODUCK_LM_GAZE_NECK"] == f"{NECK_DOWN[0]},{NECK_DOWN[1]}"
+        assert last["MICRODUCK_LM_GAZE_HEAD"] == f"{HEAD_DOWN[0]},{HEAD_DOWN[1]}"
+        assert last["MICRODUCK_LM_GAZE_YAW"] == "0.0,0.0"
+
+
+def test_the_spawn_puts_the_ball_in_the_box_and_the_drill_puts_the_gaze_on_it():
+    """The default world is the wide kick's (ball over the box, head across
+    the gaze range, head yaw HOME as the bench and the arena hand it over);
+    stage 1 narrows the box and turns the gaze onto it."""
+    for side, sgn in (("right", -1.0), ("left", 1.0)):
+        env = _env(side)
+        aheads, sides, necks, heads, yaws = [], [], [], [], []
+        for k in range(40):
+            env.reset(seed=30 + k)
+            _, qadr, _ = _kick_ball_ids(env)
+            aheads.append(float(env.data.qpos[qadr] - env.data.qpos[0]))
+            sides.append(sgn * float(env.data.qpos[qadr + 1] - env.data.qpos[1]))
+            necks.append(float(env.data.qpos[env.joint_qpos_adr[5]] - C.DEFAULT_POSE[5]))
+            heads.append(float(env.data.qpos[env.joint_qpos_adr[6]] - C.DEFAULT_POSE[6]))
+            yaws.append(float(env.data.qpos[env.joint_qpos_adr[HEAD_YAW_ID]]))
+            assert _face_home_pen(env) == 0.0                  # the line is the one it began on
+        assert KICK_BOX_AHEAD[0] - 1e-6 <= min(aheads) and max(aheads) <= KICK_BOX_AHEAD[1] + 1e-6
+        assert KICK_BOX_SIDE[0] - 1e-6 <= min(sides) and max(sides) <= KICK_BOX_SIDE[1] + 1e-6
+        assert max(aheads) - min(aheads) > 0.08 and max(sides) - min(sides) > 0.08
+        assert NECK_DOWN[0] - 1e-6 <= min(necks) and max(heads) <= HEAD_DOWN[1] + 1e-6
+        # Head yaw is HOME in the finished world (the drill's offset is 0,0
+        # there), so only the walk env's own spawn noise is left on it — which
+        # is exactly what the wide kick's spawn leaves.
+        assert max(abs(y) for y in yaws) < 0.05
+
+        st1 = dict(BEHAVIORS[f"kick_{side}_sensed"].curriculum[1].env)   # the 6 x 6 rung
+        env = _env(side, **st1)
+        seen, yaws = [], []
+        for k in range(40):
+            env.reset(seed=30 + k)
+            _, qadr, _ = _kick_ball_ids(env)
+            ahead = float(env.data.qpos[qadr] - env.data.qpos[0])
+            assert 0.06 - 1e-6 <= ahead <= 0.12 + 1e-6
+            yaws.append(float(env.data.qpos[env.joint_qpos_adr[HEAD_YAW_ID]]))
+            seen.append(float(env.head_cmd[2]))
+        lo, hi = (float(v) for v in LM_GAZE_STAGE1[2].split(","))
+        # Yawed AT the ball (the offset is signed by the foot); the window plus
+        # the walk env's own spawn noise on that joint.
+        assert all(lo - 0.05 <= sgn * y <= hi + 0.05 for y in yaws), yaws
+        assert min(sgn * y for y in yaws) > 0.2
+        assert np.mean(seen) > 0.9        # ...and that is what makes it in frame: measured 99%
+
+
+def test_the_ball_rides_the_head_slots_left_positive_right_negative():
+    """The slot contract, and the only thing in this recipe a reward curve
+    could never complain about: obs[51] is the ball's bearing in the DUCK's
+    own frame, + to the left; obs[52] its ground range; obs[53] whether the
+    detector has it; obs[54] how fresh that is. A ball nobody has seen reads
+    all zeros."""
+    env = _env("right")
+    down = (-0.30, 0.60)                                  # a gaze the ball is in frame from
+    left = _place(env, 0.16, +0.06, *down)
+    right = _place(env, 0.16, -0.06, *down)
+    centre = _place(env, 0.16, 0.0, *down)
+    assert left[2] == right[2] == centre[2] == 1.0        # all three are seen
+    assert left[0] > 0.05 and right[0] < -0.05            # LEFT positive, RIGHT negative
+    assert left[0] == pytest.approx(-right[0], abs=0.02)  # and symmetric about the nose
+    assert abs(centre[0]) < 0.02
+    # The range slot is the ground range, normalized, and monotone in it.
+    near = _place(env, 0.08, -0.02, *down)
+    far = _place(env, 0.20, -0.02, *down)
+    assert 0.0 < near[1] < far[1] < 1.0
+    assert far[1] == pytest.approx(math.hypot(0.20, 0.02) / LM_RANGE_SCALE, abs=0.02)
+    # Fresh sighting: seen and full confidence.
+    assert far[3] == pytest.approx(1.0)
+
+
+def test_a_ball_out_of_frame_reads_seen_zero_and_the_estimate_fades():
+    """`seen` is the DETECTOR's, not the truth's. A level head cannot see a
+    ball at its own feet (the camera sits 0.21 m above it; 12k), so the slot
+    must say so rather than leaking the truth."""
+    env = _env("right")
+    blind = _place(env, 0.10, -0.06, 0.0, 0.0)            # level gaze: out of frame below
+    assert blind[2] == 0.0 and blind[3] == 0.0            # not seen, nothing known...
+    assert blind[0] == 0.0 and blind[1] == 0.0            # ...and the position slots say nothing
+    # Seen, then hidden: the estimate is HELD (odometry) and its confidence fades.
+    _place(env, 0.10, -0.06, -0.30, 0.60)
+    assert env.head_cmd[2] == 1.0 and env.head_cmd[3] == pytest.approx(1.0)
+    held = float(env.head_cmd[0])
+    env.data.qpos[env.joint_qpos_adr[6]] = C.DEFAULT_POSE[6]      # look up: the ball leaves the frame
+    env.data.qpos[env.joint_qpos_adr[5]] = C.DEFAULT_POSE[5]
+    mujoco.mj_forward(env.model, env.data)
+    for _ in range(50):                                   # 1 s of detector reports with nothing in them
+        env.step_count += 1
+        _lm_sense(env)
+    assert env.head_cmd[2] == 0.0                                  # the detector says nothing
+    assert 0.0 < env.head_cmd[3] < 0.5                             # confidence has faded (tau 1 s)
+    assert env.head_cmd[0] == pytest.approx(held, abs=0.02)        # the estimate is still there
+
+
+def test_the_slots_reach_the_observation_and_nothing_else_moves():
+    """The 61-obs layout is untouched: the four head slots carry the ball and
+    every other block is the contract's."""
+    env = _env("right", **dict(BEHAVIORS["kick_right_sensed"].curriculum[1].env))
+    obs, _ = env.reset(seed=5)
+    assert obs.shape == (C.OBS_DIM,)
+    assert np.allclose(obs[51:55], env.head_cmd)
+    assert np.allclose(obs[48:51], 0.0)                   # a trick: the twist command stays zero
+    assert obs[53] == 1.0                                 # stage 1 spawns with the ball in frame
+    for _ in range(10):
+        obs, _, _, _, _ = env.step(np.zeros(14, np.float32))
+        assert np.allclose(obs[51:55], env.head_cmd)
