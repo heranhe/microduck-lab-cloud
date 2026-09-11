@@ -199,7 +199,12 @@ def run_one(seed: int, seconds: float, left: str = "chase", right: str = "chase"
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()},
             "team": {d.id: (d.team or d.id) for d in sc.ducks},
-            "simSeconds": round(w.t, 1), "seconds": seconds, **spin.row(), **metrics.row()}
+            # …and the per-kick list, for the same reason `eval_pitch.run_one`
+            # carries it: a striker battery's scripted arm must BE eval-pitch
+            # field for field (`tests/test_striker.py`), and a per-swing claim
+            # is read per swing (`world/metrics.py`, KICK_EVENT).
+            "simSeconds": round(w.t, 1), "seconds": seconds,
+            **spin.row(), **metrics.row(), **metrics.events_row()}
 
 
 # --- reading a battery --------------------------------------------------------

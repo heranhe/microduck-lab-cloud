@@ -112,6 +112,45 @@ EXIT_MIN_M = 0.05
 # rate whose denominator is not the population its numerator came from is
 # about the filter (AGENTS.md, "a rate's denominator").
 
+# --- the per-kick LIST (roadmap E.2, follow-up 2) -----------------------------
+# Everything above is a per-team SUM, and a sum cannot answer a per-swing
+# question. E.2 registered a gym win of +0.28 m a swing and had to read it on
+# the ledger through `kickCarry`, a run total with a 35% MDE over 48 seeds —
+# while the quantity the claim was about, carry PER KICK, was sitting in ~300
+# events the ledger threw away as it accumulated them. So every resolved kick
+# is also kept, in the order it settled:
+KICK_EVENT = ("t", "carry", "adv", "line", "back", "foot")
+#   t      when the swing STARTED (`skill_t0`), seconds of sim time.
+#   carry  the signed metres toward the attacked mouth over CARRY_S — exactly
+#          the quantity summed into `kickCarry`, so the list adds up to the
+#          column (to rounding) and a consumer can never be measuring a
+#          different thing from the total beside it. `carry < 0` is the
+#          `kicksBack` event.
+#   adv    the same displacement over the first EXIT_S — how far the ball ran
+#          BEFORE the duck could walk it back — or None when no exit sample
+#          was taken (the kick was settled inside the window by a goal or a
+#          ball-out). None and not 0.0: "not measured" is not "it went
+#          nowhere" (AGENTS.md).
+#   line   1 if this kick had a readable line (it is in `kickLineCount`).
+#   back   1 if that line was backward (it is in `kicksBackLine`). A kick with
+#          `line` 0 always has `back` 0 — a whiff has no direction.
+#   foot   "L"/"R" for the two shipped kicks, "" when the swing did not come
+#          from one of them (a kick a test appends by hand). 12as's "the right
+#          foot alone" reading needs this column and the ledger had no way to
+#          say it.
+#
+# It is NOT part of `row()`: the /sim page calls that every frame, and a list
+# that grows for as long as the lab is up does not belong in a 50 Hz payload.
+# `events_row()` is the battery's door to it (`eval_pitch.run_one`).
+EVENT_FIELDS = ("kickEvents",)
+
+
+def _foot(skill: str | None) -> str:
+    """Which foot a kick skill is, in one character. Anything that is not one
+    of the two shipped kicks has no foot rather than a guessed one."""
+    return {"kick_left": "L", "kick_right": "R"}.get(skill or "", "")
+
+
 # --- shape (roadmap Track 4.1.3) ----------------------------------------------
 # What "they all pile onto the ball" and "somebody stayed back" are as numbers.
 # Goals cannot say either, and the README's crowding figures ("two teammates
@@ -208,14 +247,17 @@ class PitchMetrics:
         # had a readable line at all, and how many of those left backward.
         self.kick_lines = {t: 0 for t in self.teams}
         self.kicks_back_line = {t: 0 for t in self.teams}
-        # A pending kick is (team, t0, ball at t0, ball at t0 + EXIT_S or None).
-        # The fourth field is filled in by `_sample_exits` when the window
-        # runs out and stays None when the kick is settled before then (a goal
-        # or a ball-out teleports the ball, and a teleport has no direction).
-        # THREE-field entries are still accepted everywhere here: a test that
-        # hands this list a kick by hand writes the old shape
-        # (`tests/test_ball_out.py`), and they simply have no line.
-        self._pending: list[tuple[str, float, tuple[float, float], tuple[float, float] | None]] = []
+        # …and the same kicks ONE BY ONE (KICK_EVENT above), which is what
+        # makes a per-swing claim readable on the pitch at all.
+        self.kick_events: dict[str, list[list]] = {t: [] for t in self.teams}
+        # A pending kick is (team, t0, ball at t0, ball at t0 + EXIT_S or None,
+        # foot). The fourth field is filled in by `_sample_exits` when the
+        # window runs out and stays None when the kick is settled before then
+        # (a goal or a ball-out teleports the ball, and a teleport has no
+        # direction). SHORTER entries are still accepted everywhere here: a
+        # test that hands this list a kick by hand writes the three-field shape
+        # (`tests/test_ball_out.py`), and they simply have no line and no foot.
+        self._pending: list[tuple] = []
         # A kick is read off the DUCK that is taking it (`skill_t0`), not off
         # the World's `last_kick_t`: the World keeps one last-kick stamp, so
         # two ducks kicking on the same control step would silently collapse
@@ -310,7 +352,7 @@ class PitchMetrics:
         for did, d in self.w.ducks.items():
             t0 = self._kick_start(d)
             if t0 is not None and t0 != self._kick_t0.get(did) and did in self.team_of:
-                self._pending.append((self.team_of[did], self.w.t, ball, None))
+                self._pending.append((self.team_of[did], self.w.t, ball, None, _foot(d.skill)))
             self._kick_t0[did] = t0
 
     def _sample_exits(self, ball: tuple[float, float]) -> None:
@@ -326,7 +368,7 @@ class PitchMetrics:
             xy_exit = p[3] if len(p) > 3 else None
             if xy_exit is None and self.w.t - p[1] >= EXIT_S:
                 xy_exit = ball
-            out.append((p[0], p[1], p[2], xy_exit))
+            out.append((p[0], p[1], p[2], xy_exit, p[4] if len(p) > 4 else ""))
         self._pending = out
 
     def _back_line(self, tm: str, xy0: tuple[float, float],
@@ -368,16 +410,24 @@ class PitchMetrics:
             if not force and self.w.t - t0 < CARRY_S:
                 keep.append(p)
                 continue
+            xy_exit = p[3] if len(p) > 3 else None
             d = self.sign[tm] * (ball[0] - xy0[0])
             self.kick_count[tm] += 1
             self.kick_carry[tm] += d
             if d < 0.0:
                 self.kicks_back[tm] += 1
-            back = self._back_line(tm, xy0, p[3] if len(p) > 3 else None)
+            back = self._back_line(tm, xy0, xy_exit)
             if back is not None:
                 self.kick_lines[tm] += 1
                 if back:
                     self.kicks_back_line[tm] += 1
+            # The same event, kept whole (KICK_EVENT). Every column here is
+            # read off the numbers the four columns above were just made of,
+            # in the same place, so the list and the totals cannot drift.
+            self.kick_events[tm].append(
+                [round(t0, 3), round(d, 4),
+                 None if xy_exit is None else round(self.sign[tm] * (xy_exit[0] - xy0[0]), 4),
+                 int(back is not None), int(bool(back)), p[4] if len(p) > 4 else ""])
         self._pending = keep
 
     def _shape(self, ball: tuple[float, float], pos: dict[str, tuple[float, float]]) -> None:
@@ -502,6 +552,21 @@ class PitchMetrics:
                 "crowd": {t: (round(self._crowd[t] / n, 4) if len(self.ducks_of[t]) > 1 else None)
                           for t in self.teams},
                 "depth": {t: round(self._depth[t] / n, 3) for t in self.teams}}
+
+    def events_row(self) -> dict:
+        """The per-kick list (KICK_EVENT), per team, in the order the kicks
+        settled — `{"kickEvents": {team: [[t, carry, adv, line, back, foot], ...]}}`.
+
+        Deliberately NOT in `row()`. The /sim page puts `row()` in every
+        streamed frame, and this list grows for as long as the lab is up; a
+        battery calls it once, at the end of a run (`eval_pitch.run_one`). A
+        row written before the list existed has no key at all, which
+        `load_done` turns into None and `compare_pitch.py` prints as a dash —
+        never as "this arm took no kicks".
+
+        A copy, so a caller that mutates what it gets cannot corrupt the
+        column the run's own totals were made from."""
+        return {"kickEvents": {t: [list(e) for e in ev] for t, ev in self.kick_events.items()}}
 
 
 SPIN_FIELDS = ("spinFrac", "steerFrac", "spinYaw", "spinRate")

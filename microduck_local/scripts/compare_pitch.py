@@ -44,6 +44,17 @@ four have been got wrong in this repo at least once:
   proportions are printed; quote the second for aim. Rows written before
   2026-09-10 carry neither column and print `—` rather than a zero.
 
+* **A per-swing claim is read PER SWING.** `kickCarry` is a run total, and a
+  run holds ~7 kicks: E.2 registered a +0.28 m-a-swing gym win and could only
+  test it at 48 seeds with a 35% MDE, while the ~300 events that would have
+  answered it directly were being summed away. Rows now carry `kickEvents`,
+  one record per resolved kick (`world/metrics.py`, KICK_EVENT), and the
+  footer prints **carry per kick over the events** — mean, MDE, Welch p —
+  beside the run-level total, exactly as `kicksBack` is printed as a
+  proportion over events rather than as a per-run mean. It is NOT paired:
+  arm B's ninth kick is not arm A's ninth kick. What it buys is n.
+  Rows written before 2026-09-11 carry no list and print `—`.
+
 `--side` reads ONE team of an asymmetric matchup (`home` = the side that
 spawns at −x, `away` = the other) instead of pooling both, which is what an
 arm that changes only one side's roster has to be read on. Team names come
@@ -70,6 +81,10 @@ FIELDS: tuple[tuple[str, str, str], ...] = (
     ("crowd", "mean", ""),
     ("depth", "mean", "m"),
     ("ballOwnHalf", "mean", "s/min"),
+    # The run TOTAL of the per-swing column, printed so the per-event footer
+    # below has the thing it is beside. A sum of metres, not a rate: a row's
+    # kicks are its own, and `--seconds` divides out of neither.
+    ("kickCarry", "sum", "m/run"),
 )
 COUNTS: tuple[tuple[str, str], ...] = (
     ("goals", "goals"), ("falls", "falls"), ("ownGoals", "own goals"),
@@ -255,6 +270,48 @@ def two_proportions(x1: int, n1: int, x2: int, n2: int) -> tuple[float, float]:
     return p2 - p1, math.erfc(abs((p2 - p1) / se) / math.sqrt(2))
 
 
+def two_means(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float, int]:
+    """(mean difference b−a, its 95% half-width, p, df) for two UNPAIRED
+    samples, Welch.
+
+    Not `paired()`: events do not pair. Arm B's ninth kick is not arm A's
+    ninth kick — the two arms do not even take the same NUMBER of kicks (E.2:
+    316 against 254) — so the per-seed pairing simply does not exist down
+    here. What the events buy instead is n, hundreds against dozens, and
+    Welch because the arms' counts and spreads both differ."""
+    na, nb = len(a), len(b)
+    if na < 2 or nb < 2:
+        return (float(b.mean() - a.mean()) if (na and nb) else 0.0), float("inf"), 1.0, 0
+    va, vb = a.var(ddof=1) / na, b.var(ddof=1) / nb
+    d = float(b.mean() - a.mean())
+    se = math.sqrt(va + vb)
+    if se == 0:
+        return d, 0.0, (1.0 if d == 0 else 0.0), na + nb - 2
+    df = max(1, int((va + vb) ** 2 / (va * va / (na - 1) + vb * vb / (nb - 1))))
+    return d, float(t_ppf975(df) * se), float(2.0 * t_sf(abs(d / se), df)), df
+
+
+def kick_events(rows: dict[int, dict], seeds: list[int], side: str | None,
+                col: int = 1) -> tuple[list[float], int]:
+    """One column of every resolved kick over the shared seeds, and how many
+    of those seeds carried the list at all.
+
+    `col` indexes `world/metrics.py`'s KICK_EVENT — 1 is `carry`, the metres
+    the ball ran toward the attacked mouth over the 2 s window, which is
+    exactly what `kickCarry` sums. A row from before the list existed carries
+    None and contributes NOTHING, never a zero (the pre-2026-09-11 files)."""
+    out: list[float] = []
+    got = 0
+    for s in seeds:
+        ev = rows[s].get("kickEvents")
+        if not isinstance(ev, dict):
+            continue
+        got += 1
+        for t in teams_of(rows[s], side):
+            out += [float(e[col]) for e in ev.get(t, []) if e[col] is not None]
+    return out, got
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("a", help="the baseline battery (.jsonl)")
@@ -349,6 +406,31 @@ def main() -> None:
         d, p = two_proportions(int(ba), int(ka), int(bb), int(kb))
         print(f"\n{what}:\n  {ba:.0f}/{ka:.0f} = {ba / ka:.1%}"
               f"  →  {bb:.0f}/{kb:.0f} = {bb / kb:.1%}   ({d:+.1%}, p = {p:.4f} on the events)")
+
+    # CARRY PER KICK, over the EVENTS — the rate behind the `kickCarry` total
+    # in the table above. E.2's lesson is that the two move apart: its arm's
+    # total fell 92.1 -> 74.7 m while the rate was 0.291 -> 0.294 m a kick, so
+    # what moved was the kick COUNT and the per-swing claim was untouched.
+    ca, na = kick_events(A, seeds, args.side)
+    cb, nb = kick_events(B, seeds, args.side)
+    what = "carry per kick (m toward the attacked mouth over the 2 s window, per resolved kick)"
+    if not (ca and cb):
+        print(f"\n{what}:\n  — not in these rows: {la} has {na} and {lb} has {nb} of {len(seeds)} "
+              f"seeds carrying `kickEvents` (a battery run before the per-kick list existed).\n"
+              f"  The run-level `kickCarry` above is all these rows can say, and a total is not a rate.")
+    else:
+        x, y = np.array(ca, float), np.array(cb, float)
+        d, half, p, df = two_means(x, y)
+        base = abs(float(x.mean()))
+        pct = 100.0 * half / base if base else float("inf")
+        v = verdict(p, pct, args.tight_pct)
+        pc = "inf" if not math.isfinite(pct) else f"{pct:.0f}%"
+        print(f"\n{what}:\n  {x.mean():+.3f} m over {len(x)} kicks  →  {y.mean():+.3f} m over "
+              f"{len(y)} kicks   (totals {x.sum():.1f} → {y.sum():.1f} m)\n"
+              f"  Δ {d:+.3f} ± {half:.3f} m ({pc} of baseline), p = {p:.4f} on the events "
+              f"(Welch, df {df}) — {v}")
+        if na != len(seeds) or nb != len(seeds):
+            print(f"  (carried by {la}: {na}, {lb}: {nb}, of {len(seeds)} seeds — the rest have no list)")
 
 
 if __name__ == "__main__":

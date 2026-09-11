@@ -188,7 +188,11 @@ def run_one(seed: int, seconds: float, per_side: int = 1, walker: str | None = N
             "kicks": {k: b.kicks for k, b in brains.items()}, "pushes": {k: b.pushes for k, b in brains.items()},
             "falls": {k: d.falls for k, d in w.ducks.items()}, "simSeconds": round(w.t, 1),
             "seconds": seconds,
-            **spin.row(), **metrics.row()}
+            # …and every kick ONE BY ONE (`world/metrics.py`, KICK_EVENT): the
+            # per-swing column `kickCarry` could only be read as a run total,
+            # which is what made E.2's "+0.28 m a swing" a 35% MDE on 48 seeds.
+            # Not in `row()` on purpose — that one is streamed every frame.
+            **spin.row(), **metrics.row(), **metrics.events_row()}
 
 
 def load_done(path: str | None, tag: str, per_side: int, seconds: float,
@@ -269,6 +273,11 @@ def load_done(path: str | None, tag: str, per_side: int, seconds: float,
         for f in ROW_FIELDS:
             r.setdefault(f, None)
         r.setdefault("goalsUnattributed", None)
+        # The per-kick list is not a per-team METRIC (it is a list, not a
+        # number), so it is not in ROW_FIELDS; it needs the same treatment for
+        # the same reason — a row written before it existed took kicks whose
+        # events nobody recorded, which is None and not an empty list.
+        r.setdefault("kickEvents", None)
         done[int(r["seed"])] = r
     return done
 
