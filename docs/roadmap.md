@@ -1122,6 +1122,77 @@ PRACTISED, not what it can read.
       ~4 min), `cat runs/fb2-eval/render-*.txt` (the aim streaks), and the
       sheets `runs/fb2-eval/sheet-*.png`.
 
+      **THE WARM START, RUN (2026-09-10, later). The box's own follow-up: take
+      the blind knob as a warm start from the shipped lineage, not as a fresh
+      curriculum. It fixes the gaze-policy failure — and on that footing the
+      blind knob buys nothing, and the falls win goes with it.**
+
+      Four 1M-step BAM fine-tunes of `runs/teach-find_ball-22f3df` at recipe
+      defaults, `--envs 32`, `--init-from` the base (the deployment path a
+      `/teach` fine-tune runs; no stage env vars), two arms × two seeds:
+      `fbws-blind-s{1,2}` with `MICRODUCK_BALL_PRIOR_PROB=0` against
+      `fbws-ctrl-s{1,2}` with the prior at its default 0.7, identical
+      otherwise (headless CLI runs — the documented exception, four A/B arms
+      cannot share the farm's one slot). Script kept as
+      `runs/fbws-eval/chain-warmstart.sh`. Same eval command and seed as the
+      table above; the shipped export and `22f3df` reproduce their rows
+      EXACTLY, which certifies the tree. Rows under `runs/fbws-eval/`
+      (`summary.txt`, re-read by the reviewer).
+
+      | arm | found | in frame | centred | **head yaw** | **handoff** | **falls** | back found | worst t_first | side t_med |
+      |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+      | shipped export `f31a4f` | 98% | 65% | 55% | 13.4° | 75% | 13 | 94% | 6.70 s | 0.34 s |
+      | **`22f3df` (base)** | **100%** | 74% | 68% | 11.0° | **98%** | 1 | **100%** | 4.64 s | 0.46 s |
+      | `fbws-blind-s1` | 100% | 71% | 65% | **8.2°** | 97% | **0** | **100%** | 6.80 s | 0.59 s |
+      | `fbws-ctrl-s1` | 100% | **76%** | **69%** | 8.6° | **100%** | **0** | **100%** | **3.02 s** | 0.54 s |
+      | `fbws-blind-s2` | 100% | 73% | 66% | 9.3° | 93% | 4 | **100%** | 4.38 s | 0.63 s |
+      | `fbws-ctrl-s2` | 100% | **76%** | **69%** | **6.7°** | 98% | **0** | **100%** | 4.82 s | **0.31 s** |
+
+      **The warm start fixes what the fresh chains broke.** Every arm here —
+      blind included — reads head yaw 6.7-10.4° and handoff 93-100%, against
+      the fresh blind chains' 32-46° and 13-45%. The neck-only gaze policy is
+      gone. Rendered before believing it (`render-rollout`, 4 eps, BAM,
+      `--seed 1`; sheets and logs under `runs/fbws-eval/`): the arms hold
+      real aim streaks — up to 9.2 s at the end of the −80° episode — against
+      0 in 4/4 episodes for both fresh blind tips, and `sheet-blind-s1-ep3.png`
+      shows the body turning from a ball at p+165° to p+18° by 0.92 s. The
+      body still turns; the failure this run was told to catch is not present.
+
+      **And with the body still turning, the blind knob is a small negative.**
+      Paired blind minus control, per training seed:
+
+      | seed | Δ handoff | Δ head yaw | Δ falls | Δ in frame | Δ found | Δ side t_med |
+      |---|---:|---:|---:|---:|---:|---:|
+      | s1 | **−3** | −0.4° | +0 | **−5** | +0 | **+0.05 s** |
+      | s2 | **−5** | +2.6° | +4 | **−3** | +0 | **+0.32 s** |
+      | mean | **−4.0** | +1.1° | +2.0 | **−4.0** | +0.0 | +0.19 s |
+
+      Handoff and in frame are same-signed against blind at both seeds, and so
+      is side-bucket time-to-first-sight — the search-speed column the fresh
+      blind arm won 3× on, now slower at both seeds. Head yaw disagrees on
+      sign. **The falls win does not survive, and it was the only thing that
+      did**: warm-started, both controls fall 0 / 60 and the blind arms 0 and
+      4 — pointing the wrong way and far too few events to call. The
+      fresh-chain falls win was a property of the fresh chain, not of the
+      knob: a 4M scratch pass lands at 19-33 falls wherever it starts, and
+      removing the prior pulled it toward the aim-heavy corner that falls less
+      because it barely steps. Warm-started from a lineage that already walks,
+      there is nothing to win. `log_std` healthy (`std` 0.536-0.540). Runs
+      kept and described: `fbws-{blind,ctrl}-s{1,2}`, group
+      `find_ball-blind-warmstart`.
+
+      → **RECOMMENDATION, unchanged and now for a second reason (the owner's
+      call, not shipped): leave `policies/find_ball/` alone and leave
+      `MICRODUCK_BALL_PRIOR_PROB` at 0.7.** The blind knob's case rested on a
+      fresh-chain artefact at both ends — the win it showed and the control it
+      beat. `runs/teach-find_ball-22f3df` stays the arm to promote if the
+      export is to change; the best thing measured here, `fbws-ctrl-s1` (100%
+      handoff, 8.6° head yaw, 0 falls), is the CONTROL, and says only that a
+      second 1M of BAM on top of the base is worth more than the knob is.
+      Re-read: `cat runs/fbws-eval/summary.txt`, `bash runs/fbws-eval/run.sh
+      && uv run python runs/fbws-eval/tab.py` (~5 min), `runs/fbws-eval/render-*.txt`,
+      `runs/fbws-eval/sheet-*.png`; re-train with `bash runs/fbws-eval/chain-warmstart.sh <seed>`.
+
 
 **Why this section now has a mechanism, not just a hunch (measured
 2026-09-03).** "Which way should it look first?" has a fixed answer: with
