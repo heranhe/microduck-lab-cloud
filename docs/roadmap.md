@@ -9270,7 +9270,8 @@ only `kicksBack`). → **what settles it:** a per-kick in-play exit column
 frame at swing start), both pairs, two gym blocks; if the w12 sidecar is
 off by more than the ± 35° scatter the selector already assumes, re-set
 `policies/kick/*.json` `exit_rad` from play and re-read `kicksBack` on the
-same ledger seeds. Built as 12at, below, when done.
+same ledger seeds. **Built and measured as 12at, below: the left sidecar is
+off by +0.435 rad in play; the ledger's `kicksBack` is a weak-touch measure.**
 
 ### 12ar. The coasting track's bearing (12af, built): the estimate gets better and the behaviour does not (2026-09-10)
 
@@ -9346,3 +9347,147 @@ distances**, which is the "only correcting BOTH won" half of rule 7.
 for a follower: `Follow` builds its tracker from a def-time default
 `TrackerParams()`, so `MICRODUCK_TRACKER` never reaches it (asserted in the
 test; deliberate, the knob is a chase experiment).
+
+### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
+
+12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
+`exit_rad`, which is a BENCH median (`scripts/bench_kick_headdown.py`), and the
+sidecar of the pair it replaced records the same foot reading −0.16 on the bench
+and +0.26 in play. Nothing measured the in-play exit per swing, so the aim error
+was never a number.
+
+`kick_gym.py` now records it: `exit_play` (the ball's travel direction over the
+first 0.5 s after the touch, body frame at the swing, + = the duck's LEFT — the
+`exit_rad` convention), `aim_body` (the line the plan laid, off `Chase.spot`'s
+own heading plus the exit the brain assumed for the foot it swung — exactly
+`kickselect.evaluate`'s `u + model.exit`), `aim_err` between them, `back` (the
+ledger's `advance < 0` rule per touch), and the latched `kick_select` verdict.
+`exit_summ` / `report_exit` give median, IQR and the share outside the 0.6 rad
+scatter `kick_select_dir_sd` already samples; `compare_gym.py` prints two arms
+side by side. `tests/test_kick_gym_exit.py` locks the sign against a real ball
+rolled past a real duck in MuJoCo, the ±180° wrap, the silence on a stationary
+ball, and that a pre-12at row file still summarises to `{}`. Commit 454c4b0.
+
+**Both pairs, both gym blocks.** 40 episodes × 12 seeds per block, pinned via
+`MICRODUCK_SKILL_KICK_{LEFT,RIGHT}` and asserted through `World.skill_path()` /
+`World.kick_exits()` before any compute. Degrees; "off by" is the in-play median
+minus the sidecar the brain aimed with. Rows: `runs/kickexit/gym-{old,w12,w12fix}-b{0,100}.jsonl`
+(re-read by the reviewer: every median and share below reproduces).
+
+| block | foot | n | exit med | IQR | sidecar | off by | aim err med | \|err\| med | >±34° | back |
+|---|---|---|---|---|---|---|---|---|---|---|
+| w12, seeds 0–11 | left | 188 | **+14.2** | −5..+37 | −12.9 | **+27.1** | +28.7 | 29.6 | 44% | 20% |
+| w12, seeds 0–11 | right | 132 | +0.5 | −11..+8 | −2.1 | +2.5 | −3.0 | 10.7 | 8% | 30% |
+| w12, seeds 100–111 | left | 197 | **+10.6** | −4..+32 | −12.9 | **+23.4** | +26.6 | 28.0 | 42% | 22% |
+| w12, seeds 100–111 | right | 120 | +2.9 | −11..+9 | −2.1 | +5.0 | −2.5 | 9.2 | 5% | 29% |
+| old, seeds 0–11 | left | 170 | −0.6 | −14..+15 | +14.9 | −15.5 | −10.9 | 14.9 | 13% | 20% |
+| old, seeds 0–11 | right | 171 | +2.5 | −7..+9 | +0.0 | +2.5 | +1.8 | 11.9 | 5% | 12% |
+| old, seeds 100–111 | left | 181 | −2.2 | −15..+15 | +14.9 | −17.1 | −13.8 | 18.9 | 15% | 20% |
+| old, seeds 100–111 | right | 164 | +2.3 | −6..+12 | +0.0 | +2.3 | −0.1 | 12.5 | 9% | 20% |
+
+Pooled over the 24 seeds, with a distribution-free CI on the median:
+
+| pair | foot | n | exit med | 95% CI of the median | sidecar | off by | >±34° | whiff |
+|---|---|---|---|---|---|---|---|---|
+| w12 | left | 385 | **+12.0°** (+0.209 rad) | +9.6..+15.8° | −12.9° | **+24.9° = +0.435 rad** | 43% | 9% |
+| w12 | right | 252 | +1.7° | −0.1..+3.7° | −2.1° | +3.7° = +0.065 rad | 6% | 10% |
+| old | left | 351 | −1.2° | −4.1..+0.8° | +14.9° | −16.1° = −0.281 rad | 14% | 15% |
+| old | right | 335 | +2.3° | +1.1..+3.6° | +0.0° | +2.3° = +0.040 rad | 7% | 9% |
+
+**The w12 left sidecar is wrong by 0.435 rad, nearly three times the 0.15 rad
+this was to be judged on**, and 43% of its left-foot swings miss by more than
+the scatter the own-goal filter samples — a bias the roll-out cannot see, since
+`kickselect` prices only the 0.6 rad it samples. The right foot is off by
+0.065 rad and needs nothing. The old pair's left is off by −0.28 rad the other
+way; its 0.26 was set from `probe_kick_line` in 2v2, and the gym's −1.2° agrees
+with that probe's own FRESH block (+2.7°, SE 12.2) rather than its discovery
+block (+15.0°), which is the block the sidecar was actually set from.
+
+**The exit is a weak function of the sidecar.** The stance does not depend on
+it (`kick_deflect_*` ship at 0, so `_plan`'s spot heading IS the aim line), but
+the sidecar changes which line and which FOOT `kick_select` picks, and the
+deflection map is 15°/cm near 2 cm. Two points: sidecar −0.225 → exit +0.209;
+sidecar +0.209 → exit +0.155. Slope −0.124, fixed point ≈ +0.161. Both values
+lie inside the other's CI, and +0.209 measures zero residual error in play (aim
+error median −0.6°), so it is the value to set.
+
+**Proposed sidecar — NOT applied; shipping a policy sidecar is the owner's
+call.** `policies/kick/kick_right.json` is unchanged.
+
+```diff
+--- a/microduck_local/policies/kick/kick_left.json
++++ b/microduck_local/policies/kick/kick_left.json
+-  "exit_rad": -0.225,
++  "exit_rad": 0.209,
+   "exit_bench_rad": -0.225,
+-  "exit_measured": "bench median across gaze poses (...)",
++  "exit_measured": "IN PLAY, 2026-09-10, roadmap 12at: kick_gym --episodes 40 --seeds 12 over seeds 0-11 and 100-111, 385 left-foot swings, exit column (ball travel over the first 0.5 s after the touch, body frame at the swing). Median +0.209 rad (+12.0 deg), 95% CI of the median +0.168..+0.276. The bench said -0.225, so the selector was aiming 0.435 rad off and 43% of left swings missed by more than the 0.6 rad scatter kick_select_dir_sd samples. Re-run with 0.209 pinned: aim error median +27.3 -> -0.6 deg, share outside the scatter 43% -> 11%, kicks leaving on a backward line 6.9% -> 4.1% (p 0.025), whiff 9% -> 8%. The right foot measured +1.7 deg against its -0.036 sidecar (0.065 rad) and is unchanged.",
+```
+
+**The corrected arm, run.** A scratch copy of the w12 ONNX pair with the left
+sidecar at +0.209, pinned through `MICRODUCK_SKILL_KICK_*` (`World.kick_exits()`
+returned `(0.209, -0.036)` in the preflight), same two blocks:
+
+| pooled, 24 seeds | foot | n | exit med | sidecar | off by | aim err med | \|err\| med | >±34° |
+|---|---|---|---|---|---|---|---|---|
+| w12 (shipped) | left | 385 | +12.0° | −12.9° | +24.9° | **+27.3°** | 29.6° | **43%** |
+| w12fix | left | 397 | +8.9° | +12.0° | −3.1° | **−0.6°** | 14.1° | **11%** |
+| w12 | right | 252 | +1.7° | −2.1° | +3.7° | −2.5° | 9.9° | 6% |
+| w12fix | right | 264 | +0.8° | −2.1° | +2.9° | −3.0° | 8.9° | 3% |
+
+**The back-kick mechanism, and why the ledger cannot see it.** The selector is
+NOT choosing back lines: of 819 w12 touches, 12 were aimed backward (10 of them
+went back); the other 146 of 169 back kicks were aimed FORWARD. So the lean is
+the kick not going where it was aimed. On the clean measure — the world line the
+ball actually left on at 0.5 s, |world dir| > 90° from the attacked mouth:
+
+| pooled, 24 seeds, both blocks | touches | backward LINE | within 45° of the mouth | ledger `advance < 0` | whiff |
+|---|---|---|---|---|---|
+| old | 820 | 21 / 686 = **3.1%** | 91% | 142 / 820 = 17.3% | 12% |
+| w12 (shipped) | 819 | 44 / 637 = **6.9%** | 82% | 169 / 819 = 20.6% | 9% |
+| w12fix | 818 | 27 / 661 = **4.1%** | 90% | 192 / 818 = 23.5% | 8% |
+
+| shift | backward line | ledger back | whiff |
+|---|---|---|---|
+| old → w12 | +3.8 pp, MDE 2.3, p 0.001, **effect** | +3.3 pp, MDE 3.8, p 0.087, null | −2.9 pp, p 0.054 |
+| w12 → w12fix | −2.8 pp, MDE 2.5, p 0.025, **effect** | +2.8 pp, MDE 4.0, p 0.166, null | −0.6 pp, p 0.667 |
+| old → w12fix | +1.0 pp, MDE 2.0, p 0.311, **null** | +6.2 pp, MDE 3.9, p 0.002, effect | −3.5 pp, p 0.019 |
+
+Per foot: left 4.8% → 9.1% (p 0.025), right 1.2% → 3.6% (p 0.053). The left foot
+carries it in absolute count (17 → 35 backward lines) and is the foot whose
+sidecar is wrong; the right foot's realised exit is +1.4° / −1.4° in both pairs.
+
+**So `kicksBack` is a WEAK-TOUCH measure in this gym, not a direction one.**
+Among touches struck FORWARD (0.5 s line within 45° of the mouth), `advance < 0`
+runs 31–60% below 1 m of travel and 0–5% above it, and only 1% of the shortest
+band ever reached a board — so it is not a far-board rebound; it is the short,
+weak touch the duck walks back into inside the 2 s window. The rate is therefore
+anti-correlated with how well the kick connected, which is why the correction
+that HALVES the backward lines raises the ledger rule (20.6% → 23.5%) while
+whiff falls (9% → 8%). **The 2v2 ledger's 13 → 29% cannot be read as "the kicks
+point backwards" until the pitch carries a direction column too.** The ledger's
+own rows say the same thing in the aggregate: per kick, `kickCarry` fell 0.493 →
+0.325 m while total carry stayed flat (59.2 → 56.2 m over 24 seeds) — more,
+weaker touches, which is the population `kicksBack` counts.
+`runs/kickseed1/pitch-*-200.jsonl` carry only per-seed summaries (no per-kick
+state or position), so the ledger cannot be split by where the back kicks came
+from; that needs the instrument below.
+
+**Verdict.** The sidecar IS wrong (left, +0.435 rad) and correcting it IS a free
+win on the quantity that matters (backward lines −2.8 pp, whiff −0.6 pp, no
+cost found). The back-kick lean 12aq reported is real as a *direction* effect and
+is explained by the sidecar; it is NOT the same quantity the ledger's `kicksBack`
+counts, and that metric moves the wrong way under the fix.
+
+→ **What settles it next:** (1) set `policies/kick/kick_left.json` `exit_rad` to
++0.209 (the owner's call) and re-run the 24 paired ledger seeds — the prediction
+is that `kicksBack` does NOT fall and possession/goals stay flat, because
+`kicksBack` is a weak-touch measure; (2) put the same 0.5 s direction column on
+the pitch (`world/metrics.py` `_resolve_kicks` already holds `(team, t0, xy0)` —
+it needs one sample at `t0 + 0.5 s`) and split `kicksBack` into "left on a
+backward line" and "ended up back", which is the column that would have made
+12aq readable in the first place; (3) the gym's `back` column should not be
+quoted alone in future items — quote the backward-LINE share beside it.
+Caveat: the five arms ran against one PYTHONPATH snapshot of `src/` (the working
+tree at 18:09 with three other agents' uncommitted edits), so they are
+internally consistent but a clean checkout will not reproduce them bit for bit.
