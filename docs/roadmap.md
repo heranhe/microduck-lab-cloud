@@ -10452,6 +10452,168 @@ Reviewer's reproduction (4 seeds, right s1): advance 0.09-0.12 m at 0.28,
 Runs `lastmetre-far-{right,left}-s1{,-rung1,-rung2}` (the finding is written
 into each tip's `behavior.json`). No new code; nothing promoted.
 
+**Follow-up E: the approach rung's falls are a seed too — and so is its reach;
+at four (foot × seed) arms the rung produced four different policies
+(2026-09-10).**
+
+Follow-up D's own "question worth the next 4M steps", run. The same stage-4
+approach rung C measured at seed 0 (half the episodes spawn the ball
+0.20-0.45 m ahead and up to 0.13 m either side, clip 4 s, not one point of new
+pay), stacked on the SEED 1 tips instead of the seed 0 ones:
+`lastmetre-far-{right,left}-s1-approach`, 2M steps a foot warm-started from
+`lastmetre-far-{right,left}-s1`, 32 envs, `face_line` 12.0, group `lastmetre`.
+~5.5 min a foot on this Mac; `log_std` flat at 0.587-0.604 (right) and
+0.582-0.595 (left), no ratchet. Final `ep_rew` 237.3 / 240.3 at `ep_len`
+105.0 / 138.7, against the seed-0 rung's 193.3 / 139.3 at 104.9 / 82.1 — the
+curve says the left arm got better, and the left arm is the one that stopped
+moving.
+
+Every seed-0 row and every no-rung row below re-ran **bit-identical** to
+Follow-ups C and D (right s0-rung 95/98/99 box, falls 12/13/6, turn 31/26/27,
+advance 0.343/0.140 at 0.16 m; left s0-rung 95/86/87, falls 40/87/109, pose
+whiff 0/0/25/33/58, advance 0.480/0.435 at 0.28 m; s1 tips 93/92/94 and
+99/99/99, falls 0/1/4 and 3/0/2) — the positive control for everything new.
+
+**The falls, both seeds of the rung, beside the two tips it was stacked on**
+(`grid_kick_bench_sensed.py`, 2 seeds a cell, level / line-up gaze / neck
+split; poses at 12 seeds; `probe_kick_approach.py` falls are out of 96 four-
+second episodes, 48 a gaze):
+
+| foot | arm | grid falls /180 | pose falls /60 | probe falls /96 |
+|---|---|---|---|---|
+| right | `far-right-v1` (seed 0, no rung) | 0/1/0 | 0 | — |
+| right | `far-right-s1` (seed 1, no rung) | 0/1/4 | 0 | 0 |
+| right | `far-right-approach` (seed 0 + rung) | 12/13/6 | 0 | 8 |
+| right | **`far-right-s1-approach` (seed 1 + rung)** | **21/17/6** | **12** | **18** |
+| left | `far-left-v1` (seed 0, no rung) | 3/10/14 | 0 | — |
+| left | `far-left-s1` (seed 1, no rung) | 3/0/2 | 0 | 1 |
+| left | `far-left-approach` (seed 0 + rung) | 40/87/109 | 23 | 41 |
+| left | **`far-left-s1-approach` (seed 1 + rung)** | **3/1/2** | **0** | **1** |
+
+**The fall cost is neither reproduced nor halved nor gone: it changes SIGN
+between the feet.** The right foot's rung falls got worse at the second seed
+(31 → 44 grid falls summed over the three gazes, 0 → 12 on the pose bench, 8 →
+18 in the probe); the left foot's worst number in this whole section — 236
+grid falls and 23 pose falls — collapses to 6 and 0. Three independent
+instruments agree per arm and disagree across seeds, which is what run-to-run
+variance looks like when the n is one run an arm.
+
+**The near game** (env named per row; `sweet` is the sweet-spot column):
+
+| arm | env | box | sweet | falls /180 | \|turn\| | pose whiff | pose falls /60 | travel |
+|---|---|---|---|---|---|---|---|---|
+| `lastmetre-far-right-s1` (seed 1, no rung) | `kick_right_sensed_far` | 93/92/94 % | 100 % | 0/1/4 | 19/18/23° | 0 % | 0 | 1.06-1.27 m |
+| `lastmetre-far-right-approach` (seed 0 + rung) | `kick_right_sensed_far` | 95/98/99 % | 100 % | 12/13/6 | 31/26/27° | 0 % | 0 | 1.07-1.57 m |
+| **`lastmetre-far-right-s1-approach` (seed 1 + rung)** | `kick_right_sensed_far` | 95/93/**87** % | 100 % | **21/17/6** | **19/13/12°** | 0 % | **12** | 0.73-1.04 m |
+| the same policy, BLINDFOLDED | `kick_right` | 43/38/36 % | 72/72/78 % | 0/6/**98** | 8/16/6° | 17/0/0/0/0 % | 15 | 0.31-0.51 m |
+| `lastmetre-far-left-s1` (seed 1, no rung) | `kick_left_sensed_far` | 99/99/99 % | 100 % | 3/0/2 | 23/21/26° | 0 % | 0 | 0.70-1.15 m |
+| `lastmetre-far-left-approach` (seed 0 + rung) | `kick_left_sensed_far` | 95/86/87 % | 100 % | 40/87/109 | 27/33/37° | 0/0/25/33/58 % | 23 | 0.06-1.23 m |
+| **`lastmetre-far-left-s1-approach` (seed 1 + rung)** | `kick_left_sensed_far` | **76/86/95 %** | 100 % | **3/1/2** | **11/9/8°** | 0 % | **0** | 0.80-1.22 m |
+| the same policy, BLINDFOLDED | `kick_left` | 38/57/61 % | 78/100/100 % | 4/0/1 | 21/20/11° | 92/17/0/0/0 % | 0 | 0.00-0.88 m |
+
+**Trunk advance and ball travel vs ball distance** (`probe_kick_approach.py`,
+8 seeds a cell, 4 s horizon, ball 0.042 m to the kicking foot's side; advance
+at 4 s, `moved` = share of seeds the ball travelled ≥ 0.10 m; level gaze /
+neck −0.30 + head +0.60):
+
+| foot | ball ahead | **s1 + rung** | s0 + rung | s1, no rung |
+|---|---|---|---|---|
+| right | 0.16 m | 0.12/0.11 m, 75/88 % | 0.34/0.14, 100/100 | 0.15/0.14, 100/100 |
+| | 0.22 m | 0.17/0.13, 100/88 | 0.17/0.22, 100/100 | 0.11/0.13, 75/38 |
+| | **0.28 m** | **0.20/0.20, 62/62** | 0.32/0.27, 100/75 | 0.11/0.12, 0/0 |
+| | **0.35 m** | **0.19/0.20, 25/25** | 0.35/0.38, 50/75 | 0.10/0.12, 0/0 |
+| | 0.45 m | 0.18/0.09, **0/0** | 0.47/0.44, 38/38 | 0.09/0.12, 0/0 |
+| | 0.60 m | 0.11/0.06, 0/0 | 0.43/0.42, 12/0 | 0.10/0.10, 0/0 |
+| left | 0.16 m | **0.05/−0.03, 38/75** | 0.24/0.20, 75/50 | 0.14/0.07, 100/100 |
+| | 0.22 m | **−0.00/−0.00, 0/0** | 0.15/0.20, 25/62 | 0.19/0.17, 100/100 |
+| | **0.28 m** | **−0.03/−0.02, 0/0** | 0.48/0.44, 88/88 | 0.18/0.20, 62/62 |
+| | **0.35 m** | **−0.03/−0.03, 0/0** | 0.65/0.42, 88/88 | 0.18/0.18, 0/0 |
+| | 0.45 m | **−0.00/−0.05, 0/0** | 0.57/0.54, 100/88 | 0.18/0.16, 0/0 |
+| | 0.60 m | **−0.06/−0.08, 0/0** | 0.38/0.41, 0/12 | 0.10/0.05, 0/0 |
+
+**The reach does not reproduce either, and on the left it inverts.** The right
+seed-1 rung buys something real over its own no-rung tip — 62 % moved at
+0.28 m and 25 % at 0.35 m where the tip is 0 % past 0.22 m — but it is half
+the seed-0 rung's reach and dies at 0.45 m, where seed 0 still moves the ball
+on 38 % of seeds. The left seed-1 rung buys NOTHING: its trunk advance is
+−0.03 to +0.05 m at every distance in the sweep, the ball moves on 0 % of
+seeds from 0.22 m out, and it is worse than its own no-rung tip inside the box
+(38 % moved at 0.16 m at a level gaze, against 100 %).
+
+**The render says what each one settled into.** `render-rollout`, far window
+pinned to 0.30-0.45 m, 3 episodes, seed 40, no falls in any of the six. The
+RIGHT tip is both behaviours in one policy: at a 0.34 m ball it walks in (both
+feet down 40 % of frames, airborne 2 %, 7 trunk_z reversals, range slot
+0.57 → 0.23, the foot reaching the ball at ~4 s), at 0.43 m it drops into
+exactly the crouched forward lean Follow-up D found on this training seed
+(both feet planted from 0.36 s to the end, trunk_z 0.093-0.103 against the
+0.120 STAND reference, pitch +4..+12°, slot stuck at 0.62 → 0.59, ball never
+touched), and at 0.31 m it walks off-line (the ball ends 0.49 m to the side).
+The LEFT tip does one thing in all three: it stands at full height (trunk_z
+0.114-0.123) and **marches in place** — single support 76-77 % of frames, no
+crouch, no fall — while the range slot climbs 0.57 → 0.68, 0.73 → 0.74 and
+0.53 → 0.69, i.e. it drifts slightly BACKWARD from the ball for the whole
+clip. A gait with nowhere to go.
+
+**The only thing the rung reliably bought at this seed is the turn bar, and
+that is the one number D already showed to be seed.** |turn| median 19/13/12°
+(right) and 11/9/8° (left) — inside the 20° bar at all three gazes on both
+feet, which no arm in 12as has managed before. Follow-up D measured a 17°
+swing in that median between training seeds on one cell of the right foot, so
+at n = 2 this is not creditable to the rung.
+
+**Verdict: the approach rung is a lottery, not a lever.** Follow-up D closed
+by asking whether the rung's falls are themselves a seed. They are — and the
+answer is worse than "yes", because the reach is a seed too. Across the four
+(foot × seed) arms the identical rung, identical pay, identical spawn knobs
+produced four different policies: a long reach with heavy falls (left, seed
+0), a moderate reach with falls (right, seed 0), a weak reach with MORE falls
+(right, seed 1), and no reach at all with no falls and a smaller box (left,
+seed 1). Note what this rules out: the far state IS sampled in all four —
+`MICRODUCK_LM_FAR_PROB=0.5` puts the ball out of reach in half of every run's
+episodes — so this is not the playbook's unsampled-state problem that a
+physics rung fixes. The rung samples the state and half the runs still do not
+learn the walk, which points at the horizon and the credit rather than the
+spawn: 4 s at the shipped gait's 0.13-0.18 m/s leaves under 2 s of swing after
+a 0.45 m approach, and `ball_forward` pays nothing for the walking part.
+**Recommended: keep the recipe; do NOT promote anything into `policies/kick/`
+(unchanged from C and D, now on two seeds of the rung as well as two of the
+slot); and stop quoting EITHER the rung's fall cost or its reach as a property
+of the rung.** If the approach is wanted, the next cut is not another 2M steps
+of the same rung: it is to lengthen the clip (or pay the approach as its own
+observable term, which the slot now makes learnable) and to run 3+ training
+seeds an arm, because at n = 1 this rung cannot be told from its own noise.
+
+    # the chain (both feet, seed 1, 32 envs, ~5.5 min a foot on this Mac; headless
+    # via the CLI, NOT the farm — these runs are not visible in the viewer)
+    MICRODUCK_KICK_BOX_AHEAD=0.04,0.16 MICRODUCK_KICK_BOX_SIDE=0.01,0.13 \
+    MICRODUCK_LM_GAZE_NECK=-0.3,0.0 MICRODUCK_LM_GAZE_HEAD=0.0,0.6 MICRODUCK_LM_GAZE_YAW=0.0,0.0 \
+    MICRODUCK_LM_FAR_PROB=0.5 MICRODUCK_LM_FAR_AHEAD=0.2,0.45 MICRODUCK_LM_FAR_SIDE=-0.13,0.13 \
+    MICRODUCK_EPISODE_S=4.0 \
+      uv run train-behavior kick_right_sensed_far --run-name lastmetre-far-right-s1-approach \
+      --envs 32 --steps 2000000 --seed 1 --weights-json '{"face_line": 12.0}' --group lastmetre \
+      --init-from runs/lastmetre-far-right-s1 --title ... --description ...
+    # ...and the same for the left foot, --init-from runs/lastmetre-far-left-s1
+    uv run python scripts/grid_kick_bench_sensed.py --foot right --seeds 2 \
+      s1-approach:kick_right_sensed_far=runs/lastmetre-far-right-s1-approach/policy.onnx \
+      s0-approach:kick_right_sensed_far=runs/lastmetre-far-right-approach/policy.onnx \
+      s1:kick_right_sensed_far=runs/lastmetre-far-right-s1/policy.onnx \
+      s1-approach-BLIND:kick_right=runs/lastmetre-far-right-s1-approach/policy.onnx
+    # ...and the same with --mode poses --seeds 12
+    uv run python scripts/probe_kick_approach.py --foot right --seeds 8 --seconds 4.0 \
+      --distances 0.16,0.22,0.28,0.35,0.45,0.60 \
+      s1-approach:kick_right_sensed_far=runs/lastmetre-far-right-s1-approach/policy.onnx \
+      s0-approach:kick_right_sensed_far=runs/lastmetre-far-right-approach/policy.onnx \
+      s1:kick_right_sensed_far=runs/lastmetre-far-right-s1/policy.onnx
+    uv run render-rollout --policy runs/lastmetre-far-right-s1-approach/policy.onnx \
+      --behavior kick_right_sensed_far --out /tmp/rr --episodes 3 --seed 40 --camera side \
+      --env MICRODUCK_LM_FAR_PROB=1.0 --env MICRODUCK_LM_FAR_AHEAD=0.30,0.45 --env MICRODUCK_EPISODE_S=4.0
+
+Reviewer's reproduction (4 seeds, left, 4 s): the seed-1 rung's trunk advance
+is −0.01 to −0.05 m at 0.22, 0.28 and 0.35 m with 0 % moved — it drifts
+backward. Runs `lastmetre-far-{right,left}-s1-approach` (the finding is written into each
+`behavior.json`). No new code; nothing promoted.
+
 ### 12at. The kick's exit, measured in play: the shipped left foot leaves 25° from where the selector thinks it does, and correcting the sidecar removes the back-kick excess — but the ledger's own rule cannot see either (2026-09-10)
 
 12aq's "what settles it", built. The selector aims with `policies/kick/*.json`'s
