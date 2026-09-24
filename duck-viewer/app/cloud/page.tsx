@@ -104,11 +104,10 @@ export default function CloudPage() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-    setNow(Date.now());
+    const initialTimer = window.setTimeout(() => { void refresh(); setNow(Date.now()); }, 0);
     const refreshTimer = window.setInterval(() => void refresh(), 15000);
     const clockTimer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => { window.clearInterval(refreshTimer); window.clearInterval(clockTimer); };
+    return () => { window.clearTimeout(initialTimer); window.clearInterval(refreshTimer); window.clearInterval(clockTimer); };
   }, [refresh]);
 
   const request = async (url: string, body?: object) => {

@@ -73,7 +73,7 @@ import { camAspect, renderInset } from "@/lib/inset";
 import { buildBodyGeometries, Duck, type BodyGeometry } from "./Duck";
 import { RobotBody } from "./SimStage";
 import { ArmBlock, GripperBlock, LidarOverlay, LidarPlot } from "./SimLidar";
-import { isDuck, robotCount, robotLook } from "@/lib/robots";
+import { robotCount, robotLook } from "@/lib/robots";
 import CameraKeys from "./CameraKeys";
 import { useTruckSwipe } from "./useTruckSwipe";
 import { CaptureCanvas, Snapshotter } from "./Capture";

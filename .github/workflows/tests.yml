@@ -9,7 +9,7 @@
 name: tests
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 jobs:
