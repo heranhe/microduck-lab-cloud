@@ -3137,7 +3137,7 @@ def make_app(ducks: list[Duck]):
             st.job.stop()
         # A stopped lab must not leave a billable Colab session behind.
         for job in cloud.list():
-            if job["state"] in {"allocating", "starting", "running"}:
+            if job["state"] in {"allocating", "starting", "running", "detached"}:
                 await asyncio.to_thread(cloud.stop, job["id"])
 
     app = FastAPI(title="Duck lab", lifespan=lifespan)
