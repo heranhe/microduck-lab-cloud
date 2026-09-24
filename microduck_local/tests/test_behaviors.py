@@ -30,12 +30,6 @@ def test_behavior_env_steps_clean(behavior_id):
         # vx/vy stay zero like any trick.
         np.testing.assert_allclose(obs[48:50], np.zeros(2, np.float32), atol=1e-6)
         assert abs(float(obs[50])) == pytest.approx(1.0)
-    elif behavior_id == "jump_turn_180":
-        # Mid-air rehearsal starts with the same explicit yaw commander
-        # that standing starts receive later, not a hidden heading reward.
-        np.testing.assert_allclose(obs[48:50], np.zeros(2, np.float32), atol=1e-6)
-        assert 0. <= float(obs[50]) <= 14.
-        assert obs[59] == env._jt['stage']/4
     elif cmd:
         # GPU run mix: standing (vx=vy=wz=0), 55% forward (vy=wz=0, vx>=0.3),
         # remainder omni (vy in ±0.3, wz in ±1). Ceiling starts at 0.4.
@@ -1030,15 +1024,15 @@ def test_only_the_one_sided_recipes_opt_out_of_the_mirror_prior():
     imitates a clip) has to be listed here — the default is True and silence
     would train it under a wrong prior."""
     asymmetric = {b.id for b in BEHAVIORS.values() if not b.symmetric}
-    assert asymmetric == {
-        "one_leg", "one_leg_5s", "imitate", "find_ball", "kick_left", "kick_right",
-        "kick_left_wide", "kick_right_wide",     # the box kicks name a foot too (12b)
-        "kick_left_sensed", "kick_right_sensed",   # ...and so do the sensed ones (12h)
-        # ...and the far-range pair, which is the same recipe with a
-        # 0.60 m range slot instead of 0.25 (12as's next cut).
-        "kick_left_sensed_far", "kick_right_sensed_far",
-        "white_crane", "single_leg_hop", "jump_turn_180",
-    }
+    # find_ball: from a symmetric start (ball unseen, memory empty) a
+    # mirror-consistent policy must output a zero yaw sweep — it cannot pick
+    # a side to look first, so the exported mean would sit and stare.
+    assert asymmetric == {"one_leg", "imitate", "find_ball", "kick_left", "kick_right",
+                          "kick_left_wide", "kick_right_wide",     # the box kicks name a foot too (12b)
+                          "kick_left_sensed", "kick_right_sensed",   # ...and so do the sensed ones (12h)
+                          # ...and the far-range pair, which is the same recipe with a
+                          # 0.60 m range slot instead of 0.25 (12as's next cut).
+                          "kick_left_sensed_far", "kick_right_sensed_far"}
     # spin stays mirror-safe: the direction COMMAND rides the wz slot, and
     # the mirror map negates that slot and the gyro together, so a mirrored
     # episode is just the opposite commanded direction. The rest are sagittal

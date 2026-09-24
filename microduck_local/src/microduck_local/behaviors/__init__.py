@@ -29,17 +29,10 @@ from . import lastmetre as _lastmetre
 from . import locomotion as _locomotion
 from . import mars_tasks as _mars_tasks
 from . import poses as _poses
-from . import white_crane as _white_crane
-from . import single_leg_hop as _single_leg_hop
-from . import jump_turn as _jump_turn
-from . import long_jump as _long_jump
 
-_SUBMODULES = [
-    _core, _poses, _headstand, _backflip, _airflip, _imitate, _kick,
-    _getup, _locomotion, _ball, _lastmetre, _g1_tasks, _mars_tasks,
-    _white_crane, _single_leg_hop, _jump_turn, _long_jump,
-    _envm,
-]
+_SUBMODULES = [_core, _poses, _headstand, _backflip, _airflip, _imitate, _kick,
+               _getup, _locomotion, _ball, _lastmetre, _g1_tasks, _mars_tasks,
+               _envm]
 
 # The BARE submodule names. `from . import core as _core` binds `_core` here
 # AND pins `core` on the package (the import system does that for every

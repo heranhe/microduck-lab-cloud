@@ -13,7 +13,6 @@ commands stay zero-but-alive so the 61-obs contract holds.
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import (  # noqa: F401 — `replace` rides the cascade (weight overrides downstream)
     dataclass,
     field,
@@ -709,8 +708,7 @@ def match_behavior(text: str, robot: str = "microduck") -> Behavior | None:
     key = text.strip().lower()
     if key in BEHAVIORS and BEHAVIORS[key].robot == (robot or "microduck"):
         return BEHAVIORS[key]
-    # Keep the "1 leg" alias without corrupting angles such as 180 -> one80.
-    t = " " + re.sub(r"(?<!\d)1(?!\d)", "one", text.lower()).strip() + " "
+    t = " " + text.lower().replace("1", "one").strip() + " "
     best, best_score = None, 0.0
     for b in for_robot(robot):
         # Score by how much of the message a keyword actually explains, so a

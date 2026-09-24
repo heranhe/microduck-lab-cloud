@@ -780,13 +780,6 @@ class MicroduckWalkEnv(gym.Env):
         self._reset_episode_state()
         self._apply_domain_rand()
 
-        if self.bam is not None:
-            # BAM rewrites these on every substep. Restore its startup values
-            # BEFORE mj_forward: old friction changes the new contact solve,
-            # which then contaminates BAM's first external-load estimate.
-            self.model.dof_frictionloss[self.bam.dof_adr] = 0.0
-            self.model.dof_damping[self.bam.dof_adr] = 0.0
-
         mujoco.mj_resetDataKeyframe(self.model, self.data, self.key_stand)
         r = self._rng
         # Small pose noise + random yaw so the policy never memorizes one init.

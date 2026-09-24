@@ -24,19 +24,13 @@ from .robots.spec import Effector
 
 # microduck_rl checkout providing the MJCF models. Sibling of this project by
 # default; override with MICRODUCK_RL_DIR for a non-standard layout.
-def _find_microduck_rl() -> Path:
-    if "MICRODUCK_RL_DIR" in os.environ:
-        return Path(os.environ["MICRODUCK_RL_DIR"])
-    here = Path(__file__).resolve()
-    # 尝试作为 microduck-lab 同级目录查找
-    for p in (here.parents[3] / "microduck_rl", here.parents[4] / "microduck_rl"):
-        if p.exists():
-            return p
-    return here.parents[3] / "microduck_rl"
-
-MICRODUCK_RL_DIR = _find_microduck_rl()
+MICRODUCK_RL_DIR = Path(
+    os.environ.get(
+        "MICRODUCK_RL_DIR",
+        Path(__file__).resolve().parents[3] / "microduck_rl",
+    )
+)
 SCENE_WALK_XML = MICRODUCK_RL_DIR / "src/mjlab_microduck/robot/microduck/scene_walk.xml"
-
 # Full-collision scene (head/trunk/hips can rest on the floor) — required by
 # inverted/ground tricks (headstand); the walk scene strips those contacts.
 SCENE_ALL_XML = MICRODUCK_RL_DIR / "src/mjlab_microduck/robot/microduck/scene.xml"

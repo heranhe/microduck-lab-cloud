@@ -64,10 +64,3 @@ duck-viewer/viewer-server.log
 # MuJoCo writes this beside whatever process loaded a model (compile
 # warnings from the G1 attach); it is a runtime log, not source.
 MUJOCO_LOG.TXT
-
-# Local training runtime artifacts and scratch
-*.log
-*.pid
-microduck_local/*.ses
-microduck_local/scratch/
-

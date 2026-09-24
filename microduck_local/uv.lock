@@ -688,7 +688,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "google-colab-cli" },
+    { name = "google-colab-cli", specifier = ">=0.7.2" },
     { name = "gymnasium", specifier = ">=1.0" },
     { name = "huggingface-hub", specifier = ">=0.34" },
     { name = "imageio", specifier = ">=2.35" },

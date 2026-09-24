@@ -119,23 +119,3 @@ export function modalIsOpen(): boolean {
   if (typeof document === "undefined") return false;
   return document.querySelector(MODAL_SELECTOR) !== null;
 }
-
-// ☁ 云算力账户弹窗开关状态（供 HUD 及 TeachPanel 算力提示等组件调用）
-let cloudSettingsOpen = false;
-
-export function setCloudSettingsOpen(v: boolean) {
-  if (v === cloudSettingsOpen) return;
-  cloudSettingsOpen = v;
-  listeners.forEach((l) => l());
-}
-
-export function useCloudSettingsOpen(): boolean {
-  return useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb);
-      return () => listeners.delete(cb);
-    },
-    () => cloudSettingsOpen,
-    () => false
-  );
-}

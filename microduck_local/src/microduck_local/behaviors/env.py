@@ -1,9 +1,4 @@
 from .ball import *  # noqa: F401,F403 — cascades the full upstream namespace,
-from .white_crane import *  # noqa: F401,F403
-from .single_leg_hop import *  # noqa: F401,F403
-from .jump_turn import *  # noqa: F401,F403
-from .long_jump import *  # noqa: F401,F403
-from ..goal_training import GOAL_HOLD_SECONDS
 
 # mirroring the flat file's definition order exactly (each module sees
 # everything defined before it, helpers included).
@@ -39,11 +34,6 @@ class BehaviorEnv(MicroduckWalkEnv):
             kwargs.setdefault("scene_xml", str(C.SCENE_ALL_XML))
         elif self.behavior.scene == "ball":
             kwargs.setdefault("scene_xml", str(C.scene_walk_ball_xml()))   # the walk scene + the kick ball
-        if behavior_id in GOAL_HOLD_SECONDS:
-            kwargs["actuator_force"] = "bam"
-            kwargs["bam_current_scale"] = 1.0
-            kwargs["action_delay"] = True
-            kwargs["max_episode_s"] = max(20.0, kwargs["max_episode_s"])
         kwargs.setdefault("terminate_on_fall", self.behavior.terminate_on_fall)
         # Per recipe, like terminate_on_fall: locomotion turns it off (the GPU
         # stack has no z-kill; a bouncing stride dips through 0.07 m without
@@ -110,9 +100,6 @@ class BehaviorEnv(MicroduckWalkEnv):
             (t.key, t.key if not t.is_penalty else t.key + "_penalty",
              t.weight, t.fn)
             for t in self._terms)
-        if behavior_id == 'single_leg_hop':
-            # 单脚深屈下蹲跳跃允许躯干弹性下沉，由_slh_clean严格守护身体各部位不触地
-            kwargs.setdefault('height_termination', False)
         super().__init__(**kwargs)
         # Flat-foot reference: super().__init__ leaves the model posed at the
         # STAND keyframe (that's how stand_z is measured), so each foot's
@@ -121,58 +108,11 @@ class BehaviorEnv(MicroduckWalkEnv):
         for side, gid in self.foot_geoms.items():
             R = self.data.geom_xmat[gid].reshape(3, 3)
             self.foot_flat_ref[side] = R.T @ np.array([0.0, 0.0, -1.0])
-        if behavior_id in ('white_crane', 'single_leg_hop'):
-            _wc_init(self)
 
     def step(self, action):
         if self.spotter:
             self.spotter_active = bool(self.behavior.spotter_fn(self))
         obs, reward, terminated, truncated, info = super().step(action)
-        if self.behavior.id == 'single_leg_hop':
-            terminated = terminated or self._slh['failed'] or not _slh_clean(self)
-            # A finite recovery drill ending on its feet is a time limit,
-            # not a physical fall. Keep it separate from hop certification.
-            truncated = truncated or (self._slh['recovery'] and
-                (self.step_count-self._slh['stage_start'])*C.CTRL_DT >= 2.)
-            fwd_m = self._slh.get('forward_m', 0.0)
-            is_success_10m = fwd_m >= 10.0
-            if is_success_10m:
-                truncated = True
-            info.update(
-                hops=self._slh['hops'],
-                forward_m=fwd_m,
-                is_success=is_success_10m,
-                hold_s=fwd_m,
-                best_hold_s=fwd_m,
-            )
-            if terminated or truncated:
-                info['episode_rewards'] = dict(self.reward_sums)
-        if self.behavior.id == 'jump_turn_180':
-            # Short failed attempts; no head-floor recovery or repeated hops.
-            terminated = terminated or not self._jt['clean']
-            truncated = truncated or self.step_count*C.CTRL_DT >= 6.
-        if self.behavior.id == 'long_jump':
-            lj = getattr(self, '_lj', {})
-            hops = int(lj.get('hop_count', 0))
-            success = hops >= int(lj.get('goal_hops', 5))
-            if lj.get('bad_fall', False) and self.step_count >= 3:
-                terminated = True
-            truncated = truncated or success
-            info.update(
-                hops=hops,
-                forward_m=float(lj.get('total_dist', 0.0)),
-                is_success=success,
-                hold_s=float(hops),
-                best_hold_s=float(hops),
-            )
-            if terminated or truncated:
-                info['episode_rewards'] = dict(self.reward_sums)
-        if self.behavior.id in GOAL_HOLD_SECONDS:
-            info.update(
-                hold_s=self._one_leg_hold_steps * C.CTRL_DT,
-                best_hold_s=self._one_leg_best_steps * C.CTRL_DT,
-                is_success=self._one_leg_best_steps >= round(GOAL_HOLD_SECONDS[self.behavior.id]/C.CTRL_DT),
-            )
         # NO overshoot terminal for the headstand (removed 2026-09-01). The
         # gx < -0.2 terminal (added so mid-flip catches that rolled past
         # wouldn't spend the clip getting up) priced every UNFOLD attempt at
@@ -201,12 +141,6 @@ class BehaviorEnv(MicroduckWalkEnv):
 
     def reset(self, **kwargs):
         self.episode_id += 1
-        if self.behavior.id == 'jump_turn_180':
-            _jt_reset(self)
-        if self.behavior.id == 'single_leg_hop':
-            _slh_reset(self)
-        if self.behavior.id == 'long_jump':
-            _lj_reset(self)
         out = super().reset(**kwargs)
         self.data.qfrc_applied[:] = 0.0   # never carry an assist across episodes
         self.spotter_active = False
@@ -219,10 +153,6 @@ class BehaviorEnv(MicroduckWalkEnv):
         # first post-spawn step re-anchors them to THIS episode's start pose.
         self._hs_prev = None
         self._hs_streak = 0
-        self._one_leg_hold_steps = 0
-        self._one_leg_best_steps = 0
-        if self.behavior.id == 'white_crane':
-            _wc_reset_entry(self)
         # Air-time bookkeeping is per-episode state too. _run_air_time banks
         # time while a foot is off the ground and pays it out at touchdown, so
         # time accrued during a terminal FALL would otherwise be paid on the
@@ -447,8 +377,6 @@ class BehaviorEnv(MicroduckWalkEnv):
                         r.uniform(*_RUN_ANG_VEL_Z),
                     )
         self.head_cmd[:] = [r.uniform(lo, hi) for lo, hi in C.HEAD_CMD_RANGES]
-        if self.behavior.id == 'single_leg_hop':
-            self.head_cmd[:] = 0.
         self.body_cmd[:] = [r.uniform(lo, hi) for lo, hi in C.BODY_CMD_RANGES]
         # Re-anchor the straightness terms to HERE: after an obedient turn
         # segment, the old spawn heading/line is ancient history — measured
@@ -460,13 +388,6 @@ class BehaviorEnv(MicroduckWalkEnv):
             self.home_yaw = _trunk_yaw(self)
 
     def _get_obs(self):
-        if self.behavior.id == 'jump_turn_180':
-            # Before the base observation is built: retain the one-step joint
-            # velocity lag and use the same phase for action and reward.
-            _jt_commands(self)
-        if self.behavior.id == 'single_leg_hop':
-            self.twist_cmd[:] = 0.
-            self.head_cmd[:] = 0.
         # Imitation needs a sense of TIME: the policy is memoryless and the
         # same body pose means different things at different points in a clip.
         # The phase rides in two body-command slots (noise otherwise), so the
@@ -474,12 +395,8 @@ class BehaviorEnv(MicroduckWalkEnv):
         if self.clip is not None:
             s, c = self.clip.phase(self.step_count)
             self.body_cmd[4], self.body_cmd[5] = s, c
-        if self.behavior.id == 'single_leg_hop':
-            _slh_commands(self)
         if self.behavior.id == "spin":
             self.twist_cmd[2] = getattr(self, "_spin_dir", 1.0)
-        if self.behavior.id == "long_jump":
-            _lj_commands(self)
         if self.behavior.obs_fn is not None:
             self.behavior.obs_fn(self)
         return super()._get_obs()

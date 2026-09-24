@@ -16,8 +16,6 @@ import {
   MAX_STEP_BUDGET,
   MIN_STEP_BUDGET,
   clampStepBudget,
-  fetchColabSettings,
-  fetchColabAccelerators,
   fetchLab,
   isRunPolicy,
   loadTeachRun,
@@ -25,8 +23,6 @@ import {
   resolveStageSteps,
   runNameOfPolicy,
   type BehaviorCard,
-  type ColabSettings,
-  type ColabAccelerator,
   type LabClient,
   type Policy,
   type TermCard,
@@ -39,7 +35,7 @@ import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
 import { bestRunFor } from "@/lib/tricks";
 import { useSelectedDuck } from "@/lib/select";
-import { modalIsOpen, setCloudSettingsOpen, setTeachHeight, usePolicyOpen } from "@/lib/ui";
+import { modalIsOpen, setTeachHeight, usePolicyOpen } from "@/lib/ui";
 import { pushToast } from "./Toasts";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -60,43 +56,30 @@ type Msg =
   // log would keep advertising a plan the run never trained under.
   | { kind: "card"; card: BehaviorCard; stageSteps?: number[]; stepBudget?: number };
 
-const GREETING_TEXT = "__GREETING__";
-const GREETING: Msg = {
-  kind: "note",
-  text: GREETING_TEXT,
-};
-const GREETING_ZH = "让我教鸭子一个动作—可以先试试下面的建议。";
-const MSG_CAP = 50;
+const GREETING_TEXT = "Ask me to teach the duck a trick — try one of the suggestions below.";
+const GREETING: Msg = { kind: "note", text: GREETING_TEXT };
 
-const SUGGESTIONS = ["stand still", "stand on one leg", "crouch down", "spin in place",
-                     "do a headstand"];
-const SUGGESTIONS_ZH: Record<string, string> = {
-  "stand still": "原地站稳",
-  "stand on one leg": "单腿站立",
-  "crouch down": "蹲下",
-  "spin in place": "原地旋转",
-  "do a headstand": "倒立",
-};
-
-function fmtSeconds(sec?: number | null): string {
-  if (sec == null || isNaN(sec)) return "00:00:00";
-  const s = Math.floor(sec);
-  const hrs = Math.floor(s / 3600);
-  const mins = Math.floor((s % 3600) / 60);
-  const secs = s % 60;
-  return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-}
-
-/** "the duck" / "the G1" / "MARS" — how a sentence names this body. */
+/** "the duck" / "the G1" / "MARS" — how a sentence names this body.
+ *
+ *  A legged body is "the {noun}"; anything else is its noun alone, because
+ *  the nouns that arrive on a non-legged body are proper names ("MARS") and
+ *  "teach the MARS" reads as a typo. By KIND, never by id. */
 function robotPhrase(r: { noun?: string; title?: string; kind?: string }): string {
   const noun = r.noun ?? r.title ?? "robot";
   return trickNoun(r.kind) === "trick" ? `the ${noun}` : noun;
 }
 
-/** The greeting, for whichever robot the switch is on. */
+/** The greeting, for whichever robot the switch is on. The stored GREETING
+ *  text is only the marker; it is re-worded at render time so a chat log
+ *  saved before the switch still reads right.
+ *
+ *  "a trick" for a duck, "a task" for MARS: Innate's own vocabulary for
+ *  Innate's robot (docs/mars-roadmap.md §4 — in their stack a skill is a
+ *  task an arm performs, and "trick" promises the wrong thing). */
 function greetingFor(r: { noun?: string; title?: string; kind?: string }): string {
   return `Ask me to teach ${robotPhrase(r)} a ${trickNoun(r.kind)} — try one of the suggestions below.`;
 }
+const MSG_CAP = 50;
 
 // What a lab too old to send per-robot suggestions (GET /robots `teach`)
 // still gets: the duck, with the chips this panel always offered.
@@ -169,7 +152,6 @@ export function Tip({ tip, children }: { tip: React.ReactNode; children: React.R
 }
 
 function RecipeRows({ terms }: { terms: BehaviorCard["terms"] }) {
-  const { tr } = useI18n();
   const max = Math.max(...terms.map((t) => t.weight));
   return (
     <div style={{ marginTop: 6 }}>
@@ -211,7 +193,7 @@ function RecipeRows({ terms }: { terms: BehaviorCard["terms"] }) {
         </Tip>
       ))}
       <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 4 }}>
-        {tr("green = points to win · red = points lost · bar = how much it matters", "绿色 = 加分 · 红色 = 扣分 · 长条 = 影响权重")}
+        green = points to win · red = points lost · bar = how much it matters
       </div>
     </div>
   );
@@ -730,9 +712,7 @@ function LiveTraining({
   onStageWeights: (stageWeights: StageWeightsMap) => void;
   onStartStage: (idx: number, stageWeights: StageWeightsMap | null) => void;
 }) {
-  const { tr } = useI18n();
   const p = t.progress;
-  const goal = p.goal;
   const stage = t.stage ?? null;
   // Curriculum jobs count the WHOLE chain in the headline numbers and main
   // bar (per-stage progress gets the thin bar below); overall* fall back to
@@ -802,140 +782,44 @@ function LiveTraining({
     return Object.keys(sw).length ? sw : null;
   };
   const maxAbs = Math.max(0.01, ...terms.map(([, v]) => Math.abs(v)));
-  const defaultStatusLine = {
-    training: tr(`training… ${overallSteps.toLocaleString()} / ${overallTotal.toLocaleString()} practice steps`, `训练中… ${overallSteps.toLocaleString()} / ${overallTotal.toLocaleString()} 练习步数`),
-    done: tr("✔ finished — the trainee duck runs the final result", "✔ 已完成—训练鸭正在运行最终结果"),
-    stopped: tr("■ stopped — trainee keeps the last snapshot", "■ 已停止—保留最后一个快照"),
-    failed: tr("✗ training crashed (see runs/…/train.log)", "✗ 训练崩溃（查看 runs/…/train.log）"),
+  const statusLine = {
+    training: `training… ${overallSteps.toLocaleString()} / ${overallTotal.toLocaleString()} practice steps`,
+    done: "✔ finished — the trainee duck runs the final result",
+    stopped: "■ stopped — trainee keeps the last snapshot",
+    failed: "✗ training crashed (see runs/…/train.log)",
   }[t.status];
-  const statusLine = goal ? (
-    t.status === "failed" ? tr("✗ training/evaluation failed — not certified", "✗ 训练或评估失败—未达标") :
-    goal.status === "passed" ? tr("✔ goal passed — training stopped", "✔ 动作达标—训练已停止") :
-    goal.status === "stalled" ? tr("■ no improvement — paused, not certified", "■ 长期无改善—暂停待调整，未达标") :
-    goal.status === "limit" ? tr("■ resource limit — paused, not certified", "■ 达到资源上限—暂停，未达标") :
-    goal.status === "error" ? tr("✗ evaluation failed — not certified", "✗ 独立评估失败—未达标") :
-    !live ? defaultStatusLine :
-    goal.status === "evaluating" ? tr("Evaluating the exported ONNX…", "正在独立评估导出的 ONNX…") :
-    tr(`Training until certified · ${overallSteps.toLocaleString()} steps`, `达标前持续训练 · 已练习 ${overallSteps.toLocaleString()} 步`)
-  ) : defaultStatusLine;
 
   return (
     <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8, marginTop: 8 }}>
-      <div style={{ fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span>
-          {t.behavior.emoji} {t.behavior.title}
-        </span>
+      <div style={{ fontWeight: 700 }}>
+        {t.behavior.emoji} {t.behavior.title}
         {t.status === "training" && (
           <button
-            onClick={async () => {
-              onStop();
-              if (t.backend === "colab") {
-                await fetch(`${LAB_HTTP}/train/colab/kill-all`, { method: "POST" }).catch(() => {});
-              }
-            }}
+            onClick={onStop}
             style={{
-              background: t.backend === "colab" ? "#3a1e1e" : "#3a2622",
-              color: t.backend === "colab" ? "#e07a5f" : "#e0a08f",
-              border: `1px solid ${t.backend === "colab" ? "#e07a5f" : "#5a3a33"}`,
-              borderRadius: 5,
-              padding: "2px 8px",
-              fontFamily: mono,
-              fontSize: 11,
-              cursor: "pointer",
-              fontWeight: t.backend === "colab" ? 600 : 400,
+              float: "right", background: "#3a2622", color: "#e0a08f",
+              border: "1px solid #5a3a33", borderRadius: 5, padding: "1px 8px",
+              fontFamily: mono, fontSize: 11, cursor: "pointer",
             }}
           >
-            {t.backend === "colab" ? tr("🛑 stop & kill GPU", "🛑 停止并释放GPU") : tr("stop", "停止")}
+            stop
           </button>
         )}
       </div>
-
-      {/* 💻/☁ 训练算力资源来源与实时成本看板 */}
-      <div
-        style={{
-          background: t.backend === "colab" ? "rgba(122, 184, 122, 0.08)" : "rgba(36, 50, 71, 0.25)",
-          border: `1px solid ${t.backend === "colab" ? "rgba(122, 184, 122, 0.25)" : "rgba(125, 184, 216, 0.15)"}`,
-          borderRadius: 6,
-          padding: "6px 8px",
-          margin: "6px 0",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: t.backend === "colab" ? "#7ab87a" : "#7db8d8" }}>
-              {t.backendTitle || (t.backend === "colab" ? "☁ Google Colab (T4 GPU)" : "💻 本地 CPU (Mac)")}
-            </span>
-            <span
-              style={{
-                fontSize: 9,
-                padding: "1px 5px",
-                borderRadius: 4,
-                background: t.backend === "colab" ? "rgba(122,184,122,0.2)" : "rgba(125,184,216,0.15)",
-                color: t.backend === "colab" ? "#7ab87a" : "#9fb4d8",
-              }}
-            >
-              {t.status === "training" ? tr("RUNNING", "运行中") : t.status.toUpperCase()}
-            </span>
-          </div>
-          {t.backend === "colab" && t.status === "training" && (
-            <span style={{ fontSize: 9, color: "#7ab87a", fontFamily: mono }}>
-              ☁ {tr("Drive sync on", "云盘自动备份")}
-            </span>
-          )}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "#8b93a3", fontSize: 10 }}>
-          <span>
-            ⏱ {tr("Elapsed", "时长")}: <span style={{ color: "#dfe5ee" }}>{fmtSeconds(t.elapsedSeconds ?? t.progress?.overallElapsed)}</span>
-          </span>
-          <span>
-            💰 {tr("Cost", "成本")}: <span style={{ color: t.backend === "colab" ? "#d8c97d" : "#7ab87a" }}>{t.estimatedCost || (t.backend === "colab" ? "~0 点" : "0 点 (免费)")}</span>
-            {t.backend === "colab" && (
-              <span style={{ fontSize: 9, color: "#6c788d", marginLeft: 4 }}>
-                ({t.hourlyRate || "~1.96点/时"})
-              </span>
-            )}
-          </span>
-        </div>
-      </div>
-
       <div style={{ color: "#8b93a3", margin: "4px 0" }}>{statusLine}</div>
-      {goal && (
-        <div style={{ color: "#d8c97d", fontSize: 11, margin: "6px 0", lineHeight: 1.6 }}>
-          <div>{t.behavior.id === "single_leg_hop" ? tr(
-            `Pass: ${goal.required}/${goal.trials} independent trials hop forward continuously for ${goal.hold_seconds}s.`,
-            `成功标准：独立测试 ${goal.trials} 次，至少 ${goal.required} 次连续单脚向前跳 ${goal.hold_seconds} 秒。`
-          ) : tr(
-            `Pass: ${goal.required}/${goal.trials} independent trials hold one leg for ${goal.hold_seconds}s.`,
-            `成功标准：独立测试 ${goal.trials} 次，至少 ${goal.required} 次连续单脚站立 ${goal.hold_seconds} 秒。`
-          )}</div>
-          <div>{tr(
-            `Evaluate every ${(goal.eval_interval / 1e6).toFixed(1)}M steps; practice blocks extend automatically.`,
-            `每 ${(goal.eval_interval / 10000).toFixed(0)} 万步评估；未达标自动续训。`
-          )}</div>
-          {goal.successes != null && <div>{tr(
-            `Last evaluation #${goal.round}: ${goal.successes}/${goal.trials} passed · longest hold ${(goal.best_hold_s ?? 0).toFixed(2)}s`,
-            `最近第 ${goal.round} 轮：${goal.successes}/${goal.trials} 次成功 · 最长保持 ${(goal.best_hold_s ?? 0).toFixed(2)} 秒`
-          )}</div>}
-          <div style={{ color: "#8b93a3" }}>{tr(
-            `Safety pause: ${goal.stall_evaluations} evaluations without progress or ${goal.max_steps / 1e6}M steps.`,
-            `保护暂停：连续 ${goal.stall_evaluations} 轮无改善，或达到 ${goal.max_steps / 10000} 万步。`
-          )}</div>
-          {goal.error && <div role="alert">{goal.error}</div>}
-        </div>
-      )}
       {t.status === "training" && (
         <div style={{ color: "#8b93a3", fontSize: 10, marginBottom: 4 }}>
-          {tr(`practicing on ${t.envs} parallel ducks (${t.helpers} helper${t.helpers === 1 ? "" : "s"})`, `使用 ${t.envs} 只并行鸭子练习（${t.helpers} 只辅助鸭）`)}
-          {!goal && traineeSpeed != null && (
+          practicing on {t.envs} parallel ducks ({t.helpers} helper{t.helpers === 1 ? "" : "s"})
+          {traineeSpeed != null && (
             <span title="how fast the trainee duck is actually walking right now, forward, in metres per second">
-              {tr(" · now going ", " · 当前速度 ")}
+              {" · now going "}
               <span style={{ color: "#7db8d8" }}>
                 {traineeSpeed.toFixed(2)} m/s
               </span>
             </span>
           )}
           {t.restarting && (
-            <span style={{ color: "#d8c97d" }}> · {tr("restarting the trainer…", "正在重启训练器…")}</span>
+            <span style={{ color: "#d8c97d" }}> · restarting the trainer…</span>
           )}
         </div>
       )}
@@ -1193,9 +1077,9 @@ function LiveTraining({
           </div>
         </div>
       )}
-      {!goal && <div style={{ height: 6, background: "#262a33", borderRadius: 3, overflow: "hidden" }}>
+      <div style={{ height: 6, background: "#262a33", borderRadius: 3, overflow: "hidden" }}>
         <div style={{ width: `${pct}%`, height: "100%", background: "#7db8d8" }} />
-      </div>}
+      </div>
       {/* Thin secondary bar: THIS stage's progress (the main bar is the
           whole chain — without this the handoffs look like a stall). */}
       {stage && (
@@ -1211,8 +1095,7 @@ function LiveTraining({
       {rewHistory.length > 1 && (
         <div style={{ marginTop: 6 }}>
           <div style={{ color: "#8b93a3", fontSize: 10 }}>
-            {goal ? tr("Training reward (not the pass criterion)", "训练奖励（不作为达标依据）")
-              : tr("Score per practice run", "每回合训练得分")}
+            score per practice run (higher = doing the trick better)
           </div>
           <Sparkline points={rewHistory} />
         </div>
@@ -1268,7 +1151,7 @@ export function TeachPanel({
 }: {
   clientRef: React.MutableRefObject<LabClient | null>;
 }) {
-  const { isZh, tr } = useI18n();
+  const { tr } = useI18n();
   // Collapsed by default, like the PolicyPanel above it — persisted after
   // the first open.
   const [open, setOpen] = useState(() => loadJSON("teachOpen", false));
@@ -1279,21 +1162,6 @@ export function TeachPanel({
     return Array.isArray(stored) && stored.length ? stored.slice(-MSG_CAP) : [GREETING];
   });
   const [input, setInput] = useState("");
-  const [computeBackend, setComputeBackend] = useState<"local" | "colab">(() => {
-    return loadJSON<"local" | "colab">("teachComputeBackend", "local");
-  });
-  const [colabAccount, setColabAccount] = useState<ColabSettings | null>(null);
-  const [colabAccelerators, setColabAccelerators] = useState<ColabAccelerator[]>([
-    { id: "T4", name: "NVIDIA T4", rate: 1.96, desc: "经济入门", recommended: true },
-    { id: "L4", name: "NVIDIA L4", rate: 4.5, desc: "高性价比", recommended: false },
-    { id: "A100", name: "NVIDIA A100", rate: 13.0, desc: "旗舰性能", recommended: false },
-    { id: "H100", name: "NVIDIA H100", rate: 25.0, desc: "极致算力", recommended: false },
-    { id: "CPU", name: "CPU 运行时", rate: 0.0, desc: "免费备用", recommended: false },
-  ]);
-  const [colabGpu, setColabGpu] = useState<string>(() => {
-    return loadJSON<string>("teachColabGpu", "T4");
-  });
-
   // WHICH BODY the next trick is for. Everything robot-specific below — the
   // greeting, the chips, the placeholder — is read off the lab's /robots, so
   // a third robot shows up here by registering recipes, not by editing this.
@@ -1366,34 +1234,6 @@ export function TeachPanel({
   }, [open, trainingStatus]);
   useEffect(() => saveJSON("teachWide", wide), [wide]);
   useEffect(() => saveJSON("teachMsgs", msgs.slice(-MSG_CAP)), [msgs]);
-  useEffect(() => saveJSON("teachComputeBackend", computeBackend), [computeBackend]);
-  useEffect(() => saveJSON("teachColabGpu", colabGpu), [colabGpu]);
-
-  // 获取 Colab 加速卡规格与最新费率列表
-  useEffect(() => {
-    let alive = true;
-    fetchColabAccelerators()
-      .then((accs) => {
-        if (alive && accs && accs.length > 0) {
-          setColabAccelerators(accs);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // 当切换到云算力时自动查询一次账号连接状态
-  useEffect(() => {
-    let alive = true;
-    fetchColabSettings()
-      .then((s) => alive && setColabAccount(s))
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [computeBackend]);
 
   // Poll the streamed frame for training progress + one-shot events.
   useEffect(() => {
@@ -1498,18 +1338,14 @@ export function TeachPanel({
     stageSteps?: Record<string, number>;
     startStage?: number;
     initFrom?: string;
-    backend?: string;
     robot?: string;
   }) {
     try {
-      const activeBackend = body.backend || computeBackend;
       const res = await fetch(`${LAB_HTTP}/teach`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...body,
-          backend: activeBackend,
-          gpuType: activeBackend === "colab" ? colabGpu : undefined,
           ...(budgetSteps != null ? { steps: budgetSteps } : {}),
         }),
       });
@@ -1524,13 +1360,9 @@ export function TeachPanel({
         behaviorRef.current = data.job.behavior.id;
         setBudgetSteps(null);
         setStagePins({});
-        const cardDesc = colabGpu.toUpperCase() === "CPU" ? "CPU 运行时" : `${colabGpu} GPU`;
-        const noteText = activeBackend === "colab"
-          ? `☁ 已派遣至 Google Colab (${cardDesc}) 训练，稍后将回传 live.onnx 并同步至 Google Drive。`
-          : "On it! Here's the deal I'm offering the duck:";
         setMsgs((m) => [
           ...m,
-          { kind: "note", text: noteText },
+          { kind: "note", text: "On it! Here's the deal I'm offering the duck:" },
           {
             kind: "card",
             card: data.job.behavior,
@@ -1747,7 +1579,7 @@ export function TeachPanel({
           backdropFilter: "blur(6px)",
         }}
       >
-        🎓 {tr("teach", "训练")}
+        🎓 {tr("teach", "教学")}
       </button>
     );
 
@@ -1762,7 +1594,7 @@ export function TeachPanel({
           display: "flex", alignItems: "center", flexShrink: 0,
         }}
       >
-        <span style={{ flex: 1 }}>🎓 {tr("teach", "训练")}</span>
+        <span style={{ flex: 1 }}>🎓 {tr("teach", "教学")}</span>
         <button
           onClick={() => {
             setMsgs([GREETING]);
@@ -1781,7 +1613,7 @@ export function TeachPanel({
         </button>
         <button
           onClick={() => setWide((w) => !w)}
-          title={wide ? tr("back to the narrow panel", "恢复窄面板") : tr("widen the panel — full recipe sentences", "加宽面板—显示完整配方说明")}
+          title={wide ? tr("back to the narrow panel", "恢复窄面板") : tr("widen the panel — full recipe sentences", "展开面板以显示完整训练说明")}
           style={{
             background: "none", border: "none", color: "#8b93a3",
             cursor: "pointer", fontFamily: mono, fontSize: 12, padding: "0 4px",
@@ -1811,7 +1643,7 @@ export function TeachPanel({
             </div>
           ) : m.kind === "note" ? (
             <div key={i} style={{ color: "#aab3c0", margin: "6px 0" }}>
-              {m.text === GREETING_TEXT ? (isZh ? GREETING_ZH : greetingFor(robot)) : m.text}
+              {m.text === GREETING_TEXT ? tr(greetingFor(robot), `请告诉我想让${noun}学习什么动作，或选择下方建议。`) : m.text}
             </div>
           ) : (
             <div
@@ -1830,7 +1662,7 @@ export function TeachPanel({
               {m.card.curriculum && m.card.curriculum.length > 0 && (
                 <div style={{ margin: "4px 0" }}>
                   <div style={{ color: "#8b93a3", fontSize: 10 }}>
-                    {tr(`how it trains — ${m.card.curriculum.length} stages, each building on the last:`, `训练方式—共 ${m.card.curriculum.length} 个阶段，每个阶段承接上一阶段：`)}
+                    {tr("how it trains", "训练过程")} — {m.card.curriculum.length} {tr("stages, each building on the last", "个阶段，逐步递进")}:
                   </div>
                   {m.card.curriculum.map((s, i) => (
                     // Hovering a stage shows its detail — what the practice
@@ -1842,7 +1674,7 @@ export function TeachPanel({
                           {/* The steps this run actually got, not the
                               recipe's — the two differ the moment a budget
                               is chosen. */}
-                          {" "}· {fmtSteps(m.stageSteps?.[i] ?? s.steps)} steps
+                          {" "}· {fmtSteps(m.stageSteps?.[i] ?? s.steps)} {tr("steps", "步")}
                         </span>
                       </div>
                     </Tip>
@@ -1851,18 +1683,16 @@ export function TeachPanel({
               )}
               <details style={{ margin: "4px 0" }}>
                 <summary style={{ cursor: "pointer", color: "#7db8d8" }}>
-                  {tr("how will it learn this?", "它会怎样学会？")}
+                  {tr("how will it learn this?", "它如何学会这个动作？")}
                 </summary>
                 <div style={{ color: "#aab3c0", marginTop: 4 }}>{m.card.howItLearns}</div>
                 <div style={{ color: "#8b93a3", marginTop: 4, fontSize: 10 }}>
-                  {tr(
-                    `The sim runs far faster than real life, so ${fmtSteps(m.stepBudget ?? cardSteps(m.card))} practice steps run on this Mac without you waiting on a real robot.`,
-                    `仿真速度远快于现实，因此这台 Mac 可以完成 ${fmtSteps(m.stepBudget ?? cardSteps(m.card))} 步练习，无需等待实体机器人。`
-                  )}
+                  {tr("The simulation runs faster than real life;", "仿真速度高于真实时间；")}{" "}
+                  {fmtSteps(m.stepBudget ?? cardSteps(m.card))} {tr("practice steps run on this Mac.", "步练习将在这台 Mac 上运行。")}
                 </div>
               </details>
               <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 2 }}>
-                {tr("the scorecard (checked 50× per second):", "评分表（每秒评估 50 次）：")}
+                {tr("the scorecard (checked 50× per second):", "评分卡（每秒检查 50 次）：")}
               </div>
               <RecipeRows terms={m.card.terms} />
             </div>
@@ -1894,7 +1724,7 @@ export function TeachPanel({
             aria-label="robot to teach"
             style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 6 }}
           >
-            <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("teach", "对象")}</span>
+            <span style={{ color: "#8b93a3", fontSize: 10 }}>teach</span>
             {robots.map((r) => {
               const on = r.id === robot.id;
               return (
@@ -1926,129 +1756,6 @@ export function TeachPanel({
             })}
           </div>
         )}
-
-        {/* 算力后端选择与 Colab 显卡规格选择 */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={() => setComputeBackend("local")}
-              style={{
-                background: computeBackend === "local" ? "#243247" : "#141822",
-                color: computeBackend === "local" ? "#7db8d8" : "#6c788d",
-                border: computeBackend === "local" ? "1px solid #7db8d8" : "1px solid rgba(255,255,255,0.06)",
-                borderRadius: 4,
-                padding: "2px 7px",
-                fontFamily: mono,
-                fontSize: 10,
-                cursor: "pointer",
-              }}
-            >
-              💻 {tr("Local CPU", "本地 CPU")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setComputeBackend("colab")}
-              style={{
-                background: computeBackend === "colab" ? "rgba(122,184,122,0.18)" : "#141822",
-                color: computeBackend === "colab" ? "#7ab87a" : "#6c788d",
-                border: computeBackend === "colab" ? "1px solid #7ab87a" : "1px solid rgba(255,255,255,0.06)",
-                borderRadius: 4,
-                padding: "2px 7px",
-                fontFamily: mono,
-                fontSize: 10,
-                cursor: "pointer",
-              }}
-            >
-              ☁ Colab
-            </button>
-            {computeBackend === "colab" && (
-              <select
-                value={colabGpu}
-                onChange={(e) => setColabGpu(e.target.value)}
-                title={tr("Select Colab Accelerator Card", "选择 Colab 显卡型号")}
-                style={{
-                  background: "#17202c",
-                  color: "#7ab87a",
-                  border: "1px solid rgba(122,184,122,0.4)",
-                  borderRadius: 4,
-                  padding: "1px 4px",
-                  fontFamily: mono,
-                  fontSize: 10,
-                  cursor: "pointer",
-                  outline: "none",
-                }}
-              >
-                {colabAccelerators.map((acc) => (
-                  <option key={acc.id} value={acc.id} style={{ background: "#1c2230", color: "#dfe5ee" }}>
-                    {acc.id} ({acc.rate > 0 ? `~${acc.rate}点/h` : "免费"})
-                  </option>
-                ))}
-              </select>
-            )}
-            <button
-              type="button"
-              disabled
-              title={tr("Hugging Face Jobs launcher coming soon (T4, A10G, A100)", "Hugging Face 调度器即将推出 (支持 T4/A10G/A100)")}
-              style={{
-                background: "#12151c",
-                color: "#464d5c",
-                border: "1px solid rgba(255,255,255,0.04)",
-                borderRadius: 4,
-                padding: "2px 7px",
-                fontFamily: mono,
-                fontSize: 10,
-                cursor: "not-allowed",
-              }}
-            >
-              🤗 HF Jobs
-            </button>
-          </div>
-          {computeBackend === "colab" && (
-            colabAccount?.configured ? (
-              <button
-                type="button"
-                onClick={() => setCloudSettingsOpen(true)}
-                title={tr("Colab connected. Click to manage cloud compute accounts", "Colab 已连接。点击管理云算力账户")}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "#7ab87a",
-                  fontFamily: mono,
-                  fontSize: 9,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 3,
-                  padding: "0 2px",
-                }}
-              >
-                <span>☁ {colabAccount.email ? `${colabAccount.email.split("@")[0]}…` : tr("Connected", "已连接")} · {tr("Drive sync on", "云盘已开启")}</span>
-                <span style={{ color: "#8b93a3", fontSize: 10 }}>⚙</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setCloudSettingsOpen(true)}
-                title={tr("Google account not connected. Click to authorize", "未绑定 Google 账号，点击立即授权")}
-                style={{
-                  background: "rgba(224, 122, 95, 0.15)",
-                  border: "1px solid rgba(224, 122, 95, 0.4)",
-                  borderRadius: 4,
-                  color: "#e07a5f",
-                  fontFamily: mono,
-                  fontSize: 9,
-                  cursor: "pointer",
-                  padding: "1px 6px",
-                  fontWeight: 600,
-                }}
-              >
-                ⚠ {tr("Not authorized (click to connect)", "未绑定账号 (点击设置)")}
-              </button>
-            )
-          )}
-        </div>
-
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
           {suggestions.map(({ text: s, title, emoji, behavior }) => {
             const best = bestRunFor(policies, behavior, robot.id);
@@ -2057,7 +1764,6 @@ export function TeachPanel({
               border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12,
               padding: "2px 8px", fontFamily: mono, fontSize: 10, cursor: "pointer",
             };
-            const zhLabel = isZh && SUGGESTIONS_ZH[s] ? SUGGESTIONS_ZH[s] : s;
             return (
               <span key={s} style={{ display: "inline-flex", alignItems: "stretch" }}>
                 <button
@@ -2065,13 +1771,13 @@ export function TeachPanel({
                   onClick={() => submit(s)}
                   style={best ? { ...chip, borderRadius: "12px 0 0 12px", borderRight: "none" } : chip}
                 >
-                  {emoji ? `${emoji} ${zhLabel}` : zhLabel}
+                  {emoji ? `${emoji} ${s}` : s}
                 </button>
                 {best && (
                   <Tip
                     tip={
                       <>
-                        <div>{tr("▶ watch the best run so far — spawns a duck running it.", "▶ 观察历史最佳训练成果—在场景中生成预览鸭。")}</div>
+                        <div>▶ watch the best run so far — spawns a {noun} running it.</div>
                         <div style={{ color: "#8b93a3", marginTop: 3 }}>
                           {policyTitle(best)}
                           {best.note ? ` — ${best.note}` : ""}
@@ -2082,8 +1788,10 @@ export function TeachPanel({
                     <button
                       aria-label={`watch the best ${title} run`}
                       onClick={() => {
+                        // Same message the palette's ▶ chip sends: a chain stage
+                        // spawns in showcase mode so the whole trick gets performed.
                         clientRef.current?.sendSpawnDuck(best.id, !!best.chain);
-                        pushToast(`⚡ ${tr("spawning", "生成预览")} ${policyTitle(best)}…`);
+                        pushToast(`⚡ spawning ${policyTitle(best)}…`);
                       }}
                       style={{
                         ...chip,
@@ -2091,6 +1799,7 @@ export function TeachPanel({
                         border: "1px solid rgba(216, 198, 125, 0.45)",
                         borderRadius: "0 12px 12px 0",
                         padding: "2px 7px 2px 5px",
+                        // The chip beside it is as tall as its emoji; match it.
                         height: "100%",
                       }}
                     >
@@ -2102,24 +1811,27 @@ export function TeachPanel({
             );
           })}
         </div>
-
-        {/* 练习预算与阶段配置 */}
+        {/* How long should it practice? LAST of the three questions (who, what,
+            how long) and folded to one line, because the recipe's own plan is
+            the right answer for nearly everyone. It applies to whatever you
+            start next: a typed trick, a suggestion, retrain, fine-tune, or a
+            start-from-stage. */}
         <div style={{ marginBottom: 6 }}>
           <button
             type="button"
             onClick={() => setBudgetOpen((v) => !v)}
             aria-expanded={budgetOpen}
-            title={tr("how long the next run practices — click to change it", "修改下次训练的总练习步数")}
+            title={tr("how long the next run practices — click to change it", "下一次训练的步数；点击修改")}
             style={{
               background: "none", border: "none", padding: 0, color: "#8b93a3",
               fontFamily: mono, fontSize: 10, cursor: "pointer",
             }}
           >
-            <span style={{ fontSize: 8 }}>{budgetOpen ? "▾" : "▸"}</span> ⏱ {tr("practice:", "练习预算:")}{" "}
+            <span style={{ fontSize: 8 }}>{budgetOpen ? "▾" : "▸"}</span> ⏱ {tr("practice", "练习")}:{" "}
             <span style={{ color: offRecipe || budgetSteps != null ? "#e8e6e1" : "#9fb4d8" }}>
               {planTotal > 0
                 ? `${fmtSteps(planTotal)} ${tr("steps", "步")}${plan.length > 1 ? ` · ${plan.length} ${tr("stages", "阶段")}` : ""}`
-                : tr("as long as the recipe says", "按默认配方训练")}
+                : tr("as long as the recipe says", "按动作方案默认步数")}
             </span>
           </button>
           {budgetOpen && (
@@ -2130,26 +1842,26 @@ export function TeachPanel({
                 <Tip
                   tip={
                     <>
-                      <div>{tr(`How long ${robotPhrase(robot)} gets to practice, in millions of tries.`, `机器人练习多久，单位为百万步。`)}</div>
+                      <div>How long the {noun} gets to practice, in millions of tries.</div>
                       <div style={{ color: "#8b93a3", marginTop: 3 }}>
-                        {tr(
-                          `More practice usually means a better trick and a longer wait. Type any number between ${fmtSteps(MIN_STEP_BUDGET)} and ${fmtSteps(MAX_STEP_BUDGET)}, or tap a preset. A trick with stages splits this across them, keeping the recipe's proportions.`,
-                          `练习越多通常动作越好，但等待也越久。输入 ${fmtSteps(MIN_STEP_BUDGET)} 到 ${fmtSteps(MAX_STEP_BUDGET)} 之间的数字，或选择预设。多阶段动作会按配方比例分配步数。`
-                        )}
+                        More practice usually means a better trick and a longer wait. Type
+                        any number between {fmtSteps(MIN_STEP_BUDGET)} and{" "}
+                        {fmtSteps(MAX_STEP_BUDGET)}, or tap a preset. A trick with stages
+                        splits this across them, keeping the recipe&apos;s proportions.
                       </div>
                     </>
                   }
                 >
-                  <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("practice for", "练习")}</span>
+                  <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("practice for", "练习步数")}</span>
                 </Tip>
                 <MStepsInput
                   value={budgetShown}
                   placeholder={tr("recipe", "默认")}
                   onCommit={setBudgetSteps}
                 />
-                <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("M steps", "百万步")}</span>
+                <span style={{ color: "#8b93a3", fontSize: 10 }}>M steps</span>
                 {offRecipe && (
-                  <Tip tip={tr("back to the practice plan the recipe ships with", "恢复配方默认步数")}>
+                  <Tip tip={tr("back to the practice plan the recipe ships with", "恢复动作方案的默认练习计划")}>
                     <button
                       onClick={resetToRecipe}
                       style={{
@@ -2163,7 +1875,7 @@ export function TeachPanel({
                         cursor: "pointer",
                       }}
                     >
-                      ↺ {tr("recipe", "默认配方")}
+                      ↺ {tr("recipe", "默认")}
                     </button>
                   </Tip>
                 )}
@@ -2195,8 +1907,8 @@ export function TeachPanel({
               </div>
               <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 2 }}>
                 {planTotal > 0
-                  ? tr(`${fmtSteps(planTotal)} practice steps in total`, `共 ${fmtSteps(planTotal)} 步练习`)
-                  : tr("each trick practices for as long as its own recipe says — set a number to change that", "每个动作按自带配方训练—设置数字可修改")}
+                  ? `${fmtSteps(planTotal)} ${tr("practice steps in total", "步练习总计")}`
+                  : tr("each trick practices for as long as its own recipe says — set a number to change that", "每个动作使用默认练习步数；输入数字可修改")}
               </div>
               {plan.length > 1 && (
                 <div style={{ color: "#8b93a3", fontSize: 10 }}>
@@ -2206,7 +1918,6 @@ export function TeachPanel({
             </div>
           )}
         </div>
-
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -2216,7 +1927,7 @@ export function TeachPanel({
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={isZh ? `输入想让${robotPhrase(robot)}学习的新动作…` : `teach ${robotPhrase(robot)} a new policy…`}
+            placeholder={tr(`teach ${robotPhrase(robot)} a new policy…`, `教${noun}学习新策略…`)}
             style={{
               width: "100%", boxSizing: "border-box", background: "#12151b",
               border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6,

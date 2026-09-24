@@ -1,30 +1,38 @@
-<div align="right">
-  <strong>English</strong> | <a href="README_CN.md">简体中文</a>
-</div>
+# Microduck Lab 🦆: RL experimentation on your Mac
 
-# Microduck Lab Cloud 🦆☁️
+## Google Colab GPU (optional)
 
-Advanced reinforcement learning experimentation, cloud training workflows, and interactive 3D simulation suite for the [Microduck](https://pollen-robotics.com/microduck) bipedal robot.
+The `/cloud` page runs the official `microduck_rl` trainer on a Colab GPU under
+**your own Google account**. Local training and the viewer work without Google.
+On macOS or Linux, `cd microduck_local && uv sync` installs the Colab CLI.
+Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Next.js](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org/)
+1. In a terminal, run `cd microduck_local && uv run colab usage`. On first use,
+   follow the CLI's Google authorization link and verify the actual balance.
+   Credentials stay in the CLI's local store; the lab never accepts a Google
+   password or token.
+2. Start `duck-lab` and the viewer as described below, then open `/cloud`.
+3. Choose a task and GPU. The page shows job status, a stop control and an ONNX
+   download when export succeeds. Lab shutdown also attempts to release active
+   Colab sessions.
 
-> **Microduck Lab Cloud** extends the [microduck-lab](https://github.com/jonathanhawkins/microduck-lab) research harness with expanded RL behavior libraries (White Crane, Single-Leg Hop, Jump Turn, Long Jump), bilingual (EN/CN) interactive Web 3D visualization, automated goal-based curriculum training, and cloud/Colab runner support.
+Colab controls GPU availability, compute-unit use and runtime lifetime. The
+first version downloads the final checkpoint and ONNX after training; automatic
+resume, Drive backup and live ONNX preview are not yet implemented.
 
-### 🆚 Key Evolutions vs. Upstream (microduck-lab)
-
-| Dimension | Upstream `microduck-lab` | **`microduck-lab-cloud` Enhanced** |
-| :--- | :--- | :--- |
-| **🌐 Language Support** | English only | **Full-Stack Bilingual (EN / 简体中文)**: Instant one-click toggle for Web 3D UI, telemetry panels, trick recipes, and technical documentation. |
-| **☁️ Cloud GPU Provisioning** | Local Mac CPU / basic MPS only; constrained by laptop compute and memory | **Google Colab & Google AI Pro Engine**: Seamlessly dispatches training to cloud accelerators (**NVIDIA T4, L4, A100, H100**) directly from the harness. |
-| **⏱️ Training Endurance** | Typically short bursts of a few minutes due to thermal throttling | Supports continuous **12 to 24 hours** long-horizon RL training runs with multi-stage checkpointing and automatic resumption. |
-| **🚨 Cost & Safety Kill-Switch** | None | **One-Click Circuit Breaker**: Dedicated safety kill-switch in HUD; terminates all billable cloud GPU sessions immediately on demand to prevent unexpected charges. |
-| **📡 Real-Time Snapshot Stream** | Local-only socket | **30s Hot-Swap Stream**: Automatically pulls `live.onnx` snapshots every 30s from the cloud into the local 3D viewer; dual-archives full runs to Google Drive upon completion. |
-| **🥋 Agile Behavior Suite** | Basic walk, trot, backflip | **Extended Agile Behaviors**: White Crane (single-leg crane stance balance), Single-Leg Hop, 90° In-Air Jump Turn, High-Thrust Long Jump, with pre-baked reference clips. |
+The language switch persists across pages. Navigation, the cloud workflow,
+training charts and primary simulation controls have Chinese and English copy.
+Some original advanced panels and server-provided recipe text remain English
+while translation work continues.
 
 Train reinforcement-learning policies for the
-open-source ~25 cm bipedal robot, **on Apple Silicon Macs or Cloud GPUs (Google Colab)**. Watch every policy walk, learn, and perform agile tricks live in your browser — then put the ducks in a room with simulated senses and a brain, and watch them follow a person, tidy a playroom, or play 3v3 soccer. Two more bodies ride the same harness: Unitree's **G1** humanoid, and **MARS**, [Innate](https://www.innate.bot)'s wheeled robot with an arm.
+[Microduck](https://pollen-robotics.com/microduck), Pollen Robotics'
+open-source ~25 cm bipedal robot, **on an ordinary Apple Silicon Mac with no
+CUDA GPU**. Watch every policy walk, learn, and backflip live in your browser —
+then put the ducks in a room with simulated senses and a brain, and watch them
+follow a person, tidy a playroom, or play 3v3 soccer. Two more bodies ride the
+same harness: Unitree's **G1** humanoid, and **MARS**, [Innate](https://www.innate.bot)'s
+wheeled robot with an arm.
 
 ![The duck lab viewer: nine ducks running live, mid-backflip and mid-headstand](docs/media/viewer.png)
 
@@ -71,7 +79,7 @@ open-source ~25 cm bipedal robot, **on Apple Silicon Macs or Cloud GPUs (Google 
 
 The official [microduck_rl](https://github.com/pollen-robotics/microduck_rl)
 stack trains through MuJoCo Warp and needs a CUDA GPU. This project runs on the
-laptop you already have or cloud instances. It's a rapid prototyping loop for reward design, curricula,
+laptop you already have. It's a prototyping loop for reward design, curricula,
 and new tricks, built on the same MJCF robot model, the same 61-obs /
 14-action deployment contract, and the same 50 Hz timing. A behavior you invent
 here ports straight to the official stack for the final sim2real run, and the
@@ -85,17 +93,9 @@ vendored here.
 ## What's in the box
 
 - **`microduck_local/`**: CPU-MuJoCo + Stable Baselines 3 PPO harness
-  - `train-walk` / `train-behavior`: velocity-command walking and an expanded library of
+  - `train-walk` / `train-behavior`: velocity-command walking and a library of
     teachable tricks, with mjlab-distilled rewards, symmetry augmentation,
     obs normalization, and a penalty-sign guard
-  - **✨ Expanded Agile Behaviors**:
-    - 🕊️ `white_crane`: Dynamic one-leg posture balance and sustained crane stand
-    - 🦿 `single_leg_hop`: Continuous dynamic hopping on a single leg with landing compliance
-    - 🔄 `jump_turn`: Agile in-air yaw rotational jump and steady re-landing
-    - 🦘 `long_jump`: High-thrust forward leap with touchdown stability
-  - **☁️ Cloud & Optimization Pipelines**:
-    - `colab_runner.py`: Streamlined pipeline for remote execution on Google Colab and cloud compute
-    - `goal_training.py` & `search_hop.py`: Automated curriculum parameter search and reward tuning
   - Two actuator models: fast linearized XML servos, or the honest
     BAM XL330 voltage model (numba-fused) for maneuvers that saturate servos
   - `export-walk`: ONNX export with the obs normalizer baked in
@@ -125,7 +125,6 @@ vendored here.
     (`fetch-robot mars`), and any MuJoCo Menagerie model as a
     stand-and-look body (`fetch-robot menagerie:unitree_go2`)
 - **`duck-viewer/`**: Next.js + react-three-fiber viewer, three pages
-  - **🌐 Bilingual UI (EN / 简体中文)**: Instant one-click toggle for telemetry, panels, and trick recipes
   - **`/` the lab**: many robots side by side, live over WebSocket at 25 Hz;
     drag policy chips onto ducks to hot-swap brains mid-stride
   - **`/sim` the world**: one room, many ducks, what each one senses and
@@ -672,11 +671,6 @@ holds 5/8 seeds against a bar of 8/8, `pick` lifts 11/20 against 80 %, and
 nothing has trained a *brain* on it yet — all written up in
 [docs/mars-roadmap.md](docs/mars-roadmap.md). A null result anywhere here comes
 with its minimum detectable effect, so "we tried that" means something.
-
-## Acknowledgements & Upstream
-
-- **[microduck-lab](https://github.com/jonathanhawkins/microduck-lab)** by Jonathan Hawkins: The original CPU-MuJoCo training harness and interactive Next.js viewer architecture.
-- **[microduck](https://github.com/pollen-robotics/microduck)** & **[microduck_rl](https://github.com/pollen-robotics/microduck_rl)** by Pollen Robotics: The foundational Microduck biped robot hardware design, MJCF models, and official RL stack.
 
 ## License
 

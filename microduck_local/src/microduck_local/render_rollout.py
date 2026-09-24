@@ -702,9 +702,6 @@ def main() -> None:
                     help="episode length (default: the behavior's own; an explicit "
                          "--env MICRODUCK_EPISODE_S wins)")
     ap.add_argument("--seed", type=int, default=0, help="episode N uses seed+N")
-    ap.add_argument("--env-seed", type=int, default=None,
-                    help="startup BAM battery seed (default: --seed); keep fixed "
-                         "when replaying a trial from an evaluation cohort")
     ap.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
                     help="behavior env knob, repeatable (MICRODUCK_BF_SPAWN_LO/HI, "
                          "MICRODUCK_SPAWN_FAMILY_PROBS, MICRODUCK_EPISODE_S)")
@@ -784,8 +781,7 @@ def main() -> None:
             task = _json.loads((Path(args.policy).parent / "run.json").read_text()).get("task")
         except (OSError, ValueError):
             task = None
-    env_seed = args.seed if getattr(args, "env_seed", None) is None else args.env_seed
-    env = build_env(behavior, overrides, seed=env_seed, robot=robot,
+    env = build_env(behavior, overrides, seed=args.seed, robot=robot,
                     task=task or "walk")
     probe = Probe(env)
     cam = make_camera(args.camera, args.distance,
@@ -799,7 +795,7 @@ def main() -> None:
     knobs = " ".join(f"{k}={v}" for k, v in sorted(overrides.items())) or "(none)"
     print(f"policy: {args.policy}  robot: {robot}  behavior: {behavior}  "
           f"camera: {args.camera}")
-    print(f"env seed: {env_seed}; env knobs: {knobs}")
+    print(f"env knobs: {knobs}")
     print(f"render {width}x{height} @ {real_fps:.1f} fps "
           f"(stride {stride} of the 50 Hz control loop), backend "
           f"{mujoco.GLContext.__module__}")
@@ -830,7 +826,7 @@ def main() -> None:
         header = [
             f"{args.policy}   behavior={behavior}   episode {ep} (seed "
             f"{args.seed + ep})   camera={args.camera}",
-            f"env seed: {env_seed}; env knobs: {knobs}",
+            f"env knobs: {knobs}",
             "  |  ".join(summarize(diags, meta, probe)[:1]
                          + [f"handoff={args.handoff or 'none'}"]),
         ]

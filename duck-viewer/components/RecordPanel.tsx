@@ -12,8 +12,8 @@ import { useEffect, useRef, useState } from "react";
 import { LAB_HTTP, type LabClient } from "@/lib/lab";
 import { useSelectedDuck } from "@/lib/select";
 import { useHudRight } from "@/lib/ui";
-import { useI18n } from "@/lib/i18n";
 import { captureReset } from "@/lib/record";
+import { useI18n } from "@/lib/i18n";
 import { slug, stamp, useTake } from "./useTake";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -112,11 +112,11 @@ export function RecordPanel({
     content = (
       <>
         {selected && (
-          <button style={btnStyle} onClick={start} title={tr("film the selected duck — the camera frames it, then mp4 + gif land in captures/", "录制已选鸭子—摄像机自动取景并生成 mp4 + gif")}>
-            🎥 {tr("record", "录像")}
+          <button style={btnStyle} onClick={start} title={tr("film the selected duck — the camera frames it, then mp4 + gif land in captures/", "拍摄选中的鸭子；镜头自动取景并导出 MP4 与 GIF")}>
+            🎥 {tr("record", "录制")}
           </button>
         )}
-        <button style={btnStyle} onClick={snap} title={tr("download a PNG of the current view (selection ring hidden for the shot)", "下载当前视图 PNG（截图时隐藏选中圆环）")}>
+        <button style={btnStyle} onClick={snap} title={tr("download a PNG of the current view (selection ring hidden for the shot)", "下载当前画面的 PNG 截图")}>
           📷 {tr("shot", "截图")}
         </button>
       </>
@@ -135,13 +135,13 @@ export function RecordPanel({
             </button>
           </>
         )}
-        <button style={btnStyle} onClick={take.cancel} title={tr("discard the take", "丢弃本次录像")}>
+        <button style={btnStyle} onClick={take.cancel} title={tr("discard the take", "丢弃录制内容")}>
           ✕
         </button>
       </>
     );
   } else if (cap.phase === "processing") {
-    content = <span>⏳ {tr("making mp4 + gif…", "正在生成 mp4 + gif…")}</span>;
+    content = <span>⏳ {tr("making mp4 + gif…", "正在生成 MP4 和 GIF…")}</span>;
   } else if (cap.phase === "done" && cap.result) {
     content = (
       <>
@@ -161,7 +161,7 @@ export function RecordPanel({
     content = (
       <>
         <span style={{ color: "#e07a5f" }}>
-          ⚠ {cap.error ?? tr("capture failed", "采集失败")}
+          ⚠ {cap.error ?? tr("capture failed", "捕获失败")}
         </span>
         <button style={btnStyle} onClick={captureReset}>
           ✕

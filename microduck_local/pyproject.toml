@@ -23,6 +23,7 @@ dependencies = [
     # BYOK Hugging Face access: token validation now, and the Jobs API
     # (run_job/inspect_job, >=0.34) for the real GPU training step.
     "huggingface_hub>=0.34",
+    "google-colab-cli>=0.7.2",
     "uvicorn[standard]>=0.32",
     # System/trainer stats in the lab's frame stream.
     "psutil>=6.0",
@@ -32,8 +33,6 @@ dependencies = [
     "imageio-ffmpeg>=0.5",
     "pillow>=10.1",
     "numba>=0.67.0",
-    # Google Colab 官方 CLI 工具，提供开箱即用的云端 GPU 调度能力
-    "google-colab-cli",
 ]
 
 [project.scripts]
@@ -90,4 +89,3 @@ select = ["E4", "E7", "E9", "F", "I"]
 # flat file's definition order (see behaviors/__init__.py) — F403/405
 # are the design, not an accident.
 "src/microduck_local/behaviors/*" = ["F403", "F405"]
-

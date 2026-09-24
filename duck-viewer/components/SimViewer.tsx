@@ -23,6 +23,7 @@ import { fetchScene, type DuckFrame, type Scene } from "@/lib/lab";
 import { assignDrag, nearestDuck, type AssignTarget } from "@/lib/assign";
 import { getSelectedDuck, setSelectedDuck } from "@/lib/select";
 import { loadJSON, saveJSON } from "@/lib/persist";
+import { useI18n } from "@/lib/i18n";
 import { Voices } from "@/lib/quack";
 import { duckAudio } from "@/lib/quackaudio";
 import { duckMouths } from "@/lib/mouth";
@@ -1281,6 +1282,7 @@ function DuckVoices({ client, sound }: { client: SimClient; sound: boolean }) {
 }
 
 export default function SimViewer() {
+  const { tr, locale, toggle } = useI18n();
   const [scene, setScene] = useState<Scene | null>(null);
   const [g1Scene, setG1Scene] = useState<Scene | null>(null);
   // Mesh sets for the non-duck BODIES a room holds (a MARS in the playroom,
@@ -1809,16 +1811,18 @@ export default function SimViewer() {
         style={{ ...PANEL, top: PAD, left: PAD, right: PAD, display: "flex", flexWrap: "wrap", gap: 10, rowGap: 6, alignItems: "center", zIndex: 30 }}
       >
         <Link href="/" style={{ color: "#9aa5b1", textDecoration: "none" }}>
-          ← lab
+          ← {tr("lab", "实验室")}
         </Link>
         <b>🌍 /sim</b>
         <Link
           href="/train"
           style={{ ...BTN, textDecoration: "none", lineHeight: 1.4 }}
-          title="brain training runs — live curves from train-brain"
+          title={tr("brain training runs — live curves from train-brain", "智能体训练记录与实时曲线")}
         >
-          🎓 train
+          🎓 {tr("train", "训练")}
         </Link>
+        <Link href="/cloud" style={{ ...BTN, textDecoration: "none", lineHeight: 1.4 }}>☁ {tr("cloud", "云端")}</Link>
+        <button style={BTN} onClick={toggle} title={tr("Switch language", "切换语言")}>{locale === "en" ? "中文" : "EN"}</button>
         <ScenePicker
           scenarios={scenarios}
           pick={pick}
@@ -1827,10 +1831,10 @@ export default function SimViewer() {
           busy={loading}
         />
         <button style={BTN} disabled={loading} onClick={() => doLoad(pick)}>
-          {loading ? "loading…" : "load"}
+          {loading ? tr("loading…", "加载中…") : tr("load", "加载")}
         </button>
         <button style={BTN} onClick={() => client?.sendReset()} title="R">
-          ↺ restart
+          ↺ {tr("restart", "重启")}
         </button>
         {/* Wall-clock speed. Amber when the lab cannot keep the promise —
             a 3v3 pitch costs ~6.6 ms of the 20 ms tick, so it runs out of
@@ -1868,7 +1872,7 @@ export default function SimViewer() {
           onClick={() => setDriving((v) => !v)}
           title="P"
         >
-          {driving ? (possessed ? `🎮 driving ${possessed}` : "🎮 driving ducks") : "🎮 drive"}
+          {driving ? (possessed ? `🎮 ${tr("driving", "控制中")} ${possessed}` : `🎮 ${tr("driving ducks", "控制鸭子中")}`) : `🎮 ${tr("drive", "驾驶")}`}
         </button>
         {(scenario?.persons?.length ?? 0) > 0 && (
           <select
@@ -1880,10 +1884,10 @@ export default function SimViewer() {
             style={{ ...BTN, padding: "3px 6px" }}
             title="possess a person: your keys move them, the ducks keep their brains"
           >
-            <option value="">drive: ducks</option>
+            <option value="">{tr("drive: ducks", "驾驶：鸭子")}</option>
             {scenario!.persons!.map((q) => (
               <option key={q.id} value={q.id}>
-                be {q.id}
+                {tr("be", "扮演")} {q.id}
               </option>
             ))}
           </select>
@@ -2307,7 +2311,7 @@ export default function SimViewer() {
         return (
         <div ref={pitchRef} style={{ position: "absolute", top: inspectorTop, left: PAD, maxWidth: `calc(100vw - ${INSPECTOR_W + PAD * 3}px)`, boxSizing: "border-box", background: "rgba(16,18,22,0.9)", border: "1px solid #2b313b", borderRadius: 6, color: "#e9edf1", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, padding: "8px 10px", zIndex: 20 }}>
           <div style={{ display: "flex", alignItems: "flex-start" }}>
-            <div style={{ flex: 1, color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>Pitch</div>
+            <div style={{ flex: 1, color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>{tr("Pitch", "球场")}</div>
             <PanelToggle open={scoreOpen} onToggle={() => setScoreOpen((v) => !v)} what="the scoreboard" hint="B" />
           </div>
           <div style={{ fontSize: 22, fontWeight: 600, display: "flex", gap: 10, alignItems: "center" }}
@@ -2361,7 +2365,7 @@ export default function SimViewer() {
           ) : soc.state === "kickoff" ? (
             <div style={{ color: "#ffd166" }}>{soc.kickoffTeam ?? "the side that conceded"} kicks off · the ball is on the spot</div>
           ) : scoreOpen ? (
-            <div style={{ color: "#9aa5b1" }}>one ball · a goal restarts from the spawns</div>
+            <div style={{ color: "#9aa5b1" }}>{tr("one ball · a goal restarts from the spawns", "一个足球 · 进球后从起点重新开始")}</div>
           ) : null}
         </div>
         );
@@ -2369,11 +2373,11 @@ export default function SimViewer() {
       {status.tidy && (
         <div style={{ ...PANEL, top: inspectorTop, left: editor ? 270 : PAD, maxWidth: `calc(100vw - ${INSPECTOR_W + PAD * 3}px)`, boxSizing: "border-box", color: "#c9d0d8" }}>
           <div style={{ display: "flex", alignItems: "flex-start" }}>
-            <div style={{ flex: 1, color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>Tidy score</div>
+            <div style={{ flex: 1, color: "#9aa5b1", letterSpacing: ".08em", textTransform: "uppercase", fontSize: 10 }}>{tr("Tidy score", "整理得分")}</div>
             <PanelToggle open={scoreOpen} onToggle={() => setScoreOpen((v) => !v)} what="the tidy score" hint="B" />
           </div>
           <div style={{ fontSize: 20, fontVariantNumeric: "tabular-nums" }}>
-            {status.tidy.inBasket} / {status.tidy.total} <span style={{ fontSize: 12, color: "#9aa5b1" }}>in the basket</span>
+            {status.tidy.inBasket} / {status.tidy.total} <span style={{ fontSize: 12, color: "#9aa5b1" }}>{tr("in the basket", "已放入篮筐")}</span>
           </div>
           {scoreOpen && status.tidy.held.length > 0 && <div style={{ color: "#9aa5b1" }}>carrying {status.tidy.held.join(", ")}</div>}
           {scoreOpen && selDuck?.brain.inputs.tidy && (

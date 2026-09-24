@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { loadJSON, saveJSON } from "@/lib/persist";
+import { useI18n } from "@/lib/i18n";
 import { groupLearned } from "@/lib/sim";
 import {
   BrainRun,
@@ -57,6 +58,7 @@ function useNarrow() {
 }
 
 export default function TrainPanel() {
+  const { tr, locale, toggle: toggleLocale } = useI18n();
   const [runs, setRuns] = useState<BrainRun[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -150,21 +152,23 @@ export default function TrainPanel() {
     <main style={narrow ? { ...S.page, ...S.pageNarrow } : S.page}>
       <header style={S.header}>
         <Link href="/sim" style={S.back}>
-          ← sim
+          ← {tr("sim", "仿真")}
         </Link>
         <span style={S.title}>/train</span>
-        <span style={S.sub}>brain training · train-brain</span>
+        <span style={S.sub}>{tr("brain training", "智能体训练")} · train-brain</span>
         <span style={{ flex: 1 }} />
+        <Link href="/cloud" style={S.back}>☁ {tr("cloud", "云端")}</Link>
+        <button style={S.tab} onClick={toggleLocale} title={tr("Switch language", "切换语言")}>{locale === "en" ? "中文" : "EN"}</button>
         <span style={{ ...S.dot, background: err ? "#f87171" : live.length ? "#6ee7b7" : "#4b5563" }} />
         <span style={S.status}>
-          {err ? `lab offline — ${err}` : live.length ? `${live.length} training` : "idle"}
+          {err ? `${tr("lab offline", "实验室离线")} — ${err}` : live.length ? `${live.length} ${tr("training", "训练中")}` : tr("idle", "空闲")}
         </span>
       </header>
 
       {runs.length === 0 && !err ? (
         <p style={S.empty}>
-          No brain runs on disk yet. Start one and it appears here within a
-          couple of seconds:
+          {tr("No brain runs on disk yet. Start one and it appears here within a couple of seconds:",
+            "磁盘上暂无训练记录。启动训练后，记录会在几秒内显示于此：")}
           <code style={S.code}>uv run train-brain --run-name follow-v4 --variety</code>
         </p>
       ) : (
@@ -172,7 +176,7 @@ export default function TrainPanel() {
           <section style={narrow ? { ...S.listCol, ...S.listColNarrow } : S.listCol}>
             <div style={S.listHead}>
               <span style={S.colLabel}>
-                runs · {shown.length}/{runs.length} charted
+                {tr("runs", "运行记录")} · {shown.length}/{runs.length} {tr("charted", "已绘图")}
               </span>
               <span style={{ flex: 1 }} />
               {/* Two buttons, not one flip-flop: a lone button reading
@@ -180,17 +184,17 @@ export default function TrainPanel() {
                   it does. These light up like the chart's metric tabs. */}
               <button
                 style={{ ...S.tab, ...(allOn ? S.tabOn : null) }}
-                title="chart every run"
+                title={tr("chart every run", "绘制所有运行记录")}
                 onClick={() => setHidden(new Set())}
               >
-                all
+                {tr("all", "全部")}
               </button>
               <button
                 style={{ ...S.tab, ...(noneOn ? S.tabOn : null) }}
-                title="clear the chart — then add runs with their swatches"
+                title={tr("clear the chart — then add runs with their swatches", "清空图表，然后通过色块添加记录")}
                 onClick={() => setHidden(new Set(runs.map((r) => r.name)))}
               >
-                none
+                {tr("none", "清空")}
               </button>
             </div>
             {/* The one scrolling region on the page. */}
@@ -207,12 +211,12 @@ export default function TrainPanel() {
                       onClick={() => toggleGroup(label)}
                       aria-expanded={open}
                       style={S.groupHead}
-                      title={open ? "fold this group" : "unfold this group"}
+                      title={open ? tr("fold this group", "折叠此组") : tr("unfold this group", "展开此组")}
                     >
                       <span style={{ display: "inline-block", width: 12 }}>{open ? "▾" : "▸"}</span>
                       {label}
                       <span style={S.groupCount}>
-                        {" "}· {members.length}{charted ? ` · ${charted} charted` : ""}
+                        {" "}· {members.length}{charted ? ` · ${charted} ${tr("charted", "已绘图")}` : ""}
                       </span>
                     </button>
                     {open && members.map(({ name }) => {
@@ -238,7 +242,7 @@ export default function TrainPanel() {
           <section style={narrow ? { ...S.chartCol, ...S.chartColNarrow } : S.chartCol}>
             <div style={S.chartHead}>
               <span style={S.colLabel}>
-                {view === "matrix" ? "sweep matrix" : metric === "ep_rew" ? "episode reward" : "episode length"}
+                {view === "matrix" ? tr("sweep matrix", "参数矩阵") : metric === "ep_rew" ? tr("episode reward", "回合奖励") : tr("episode length", "回合长度")}
               </span>
               <span style={{ flex: 1 }} />
               {view === "chart" &&
@@ -248,7 +252,7 @@ export default function TrainPanel() {
                     onClick={() => setMetric(m)}
                     style={{ ...S.tab, ...(metric === m ? S.tabOn : null) }}
                   >
-                    {m === "ep_rew" ? "reward" : "ep len"}
+                    {m === "ep_rew" ? tr("reward", "奖励") : tr("ep len", "回合长度")}
                   </button>
                 ))}
               <span style={{ width: 10 }} />
@@ -257,9 +261,9 @@ export default function TrainPanel() {
                   key={v}
                   onClick={() => setView(v)}
                   style={{ ...S.tab, ...(view === v ? S.tabOn : null) }}
-                  title={v === "matrix" ? "every run against the knobs that changed, with its benchmark score" : "reward over training steps"}
+                  title={v === "matrix" ? tr("every run against the knobs that changed, with its benchmark score", "对照各运行的参数变化与基准得分") : tr("reward over training steps", "训练步数与奖励")}
                 >
-                  {v}
+                  {v === "chart" ? tr("chart", "图表") : tr("matrix", "矩阵")}
                 </button>
               ))}
             </div>
@@ -267,10 +271,8 @@ export default function TrainPanel() {
               <>
                 <Chart runs={shown} colors={colors} metric={metric} />
                 <p style={S.note}>
-                  The bold line is a 9-rollout trailing mean; the faint one is the raw
-                  per-rollout value. Hover the chart for exact values at a step. A run
-                  still climbing at its last point is undertrained, whatever its final
-                  number says.
+                  {tr("The bold line is a 9-rollout trailing mean; the faint one is the raw per-rollout value. Hover the chart for exact values at a step. A run still climbing at its last point is undertrained, whatever its final number says.",
+                    "粗线表示最近 9 次 rollout 的移动平均，淡线表示原始值。悬停可查看具体数值。若末尾仍在上升，说明训练尚未充分收敛。")}
                 </p>
               </>
             ) : (
@@ -303,6 +305,7 @@ function RunCard({
   baseline: BrainRun | null;
   onToggle: () => void;
 }) {
+  const { tr } = useI18n();
   const pct = run.progress != null ? Math.round(run.progress * 100) : null;
   const isBase = baseline?.name === run.name;
   // What the chips say depends on the card's role. The baseline (and every
@@ -317,7 +320,7 @@ function RunCard({
   return (
     <div
       onClick={onToggle}
-      title={hidden ? "add to the chart" : "remove from the chart"}
+      title={hidden ? tr("add to the chart", "添加到图表") : tr("remove from the chart", "从图表移除")}
       style={{
         ...S.card,
         border: `1px solid ${hidden ? "#1f2937" : color}`,
@@ -330,7 +333,7 @@ function RunCard({
             e.stopPropagation();   // the card handles it; don't toggle twice
             onToggle();
           }}
-          title={hidden ? "add to the chart" : "remove from the chart"}
+          title={hidden ? tr("add to the chart", "添加到图表") : tr("remove from the chart", "从图表移除")}
           style={{
             ...S.swatch,
             background: hidden ? "transparent" : color,
@@ -339,14 +342,14 @@ function RunCard({
         />
         <span style={S.name}>{displayName(run)}</span>
         {run.title && <span style={S.runId} title="the run's name on disk — what --init-from and learned:<name> address">{run.name}</span>}
-        {run.active && <span style={S.live}>● live</span>}
-        {!run.active && run.shipped && <span style={S.ship}>shipped</span>}
+        {run.active && <span style={S.live}>● {tr("live", "实时")}</span>}
+        {!run.active && run.shipped && <span style={S.ship}>{tr("shipped", "已发布")}</span>}
       </div>
       {run.description ? (
         <p style={S.desc}>{run.description}</p>
       ) : (
         <p style={{ ...S.desc, ...S.dim }} title={`uv run describe-brain ${run.name} --title ... --description ...`}>
-          no description — describe-brain {run.name}
+          {tr("no description", "暂无描述")} — describe-brain {run.name}
         </p>
       )}
 
@@ -365,29 +368,29 @@ function RunCard({
 
       {run.rollouts === 0 && (
         <p style={S.noCurve}>
-          no training log on disk — only brain.onnx and brain.json are committed,
-          so a brain from a clone has no curve to draw
+          {tr("No training log on disk; a cloned brain has no curve to draw.",
+            "磁盘上没有训练日志；克隆的智能体没有可绘制的曲线。")}
         </p>
       )}
 
       <div style={S.stats}>
-        <Stat k="steps" v={`${humanSteps(run.last?.steps)} / ${humanSteps(run.steps)}`} />
-        <Stat k="reward" v={run.last ? run.last.ep_rew.toFixed(1) : "—"} />
-        <Stat k="elapsed" v={humanDuration(run.last?.elapsed_s)} />
+        <Stat k={tr("steps", "步数")} v={`${humanSteps(run.last?.steps)} / ${humanSteps(run.steps)}`} />
+        <Stat k={tr("reward", "奖励")} v={run.last ? run.last.ep_rew.toFixed(1) : "—"} />
+        <Stat k={tr("elapsed", "耗时")} v={humanDuration(run.last?.elapsed_s)} />
         {run.active ? (
-          <Stat k="eta" v={humanDuration(run.eta_s)} />
+          <Stat k={tr("eta", "剩余时间")} v={humanDuration(run.eta_s)} />
         ) : (
-          <Stat k="rollouts" v={String(run.rollouts)} />
+          <Stat k={tr("rollouts", "轨迹数")} v={String(run.rollouts)} />
         )}
         <Stat k="steps/s" v={run.steps_per_s != null ? String(run.steps_per_s) : "—"} />
       </div>
 
       {run.selected && (
         <div style={S.shipped} title="select-brain probed every checkpoint on the follow benchmark and shipped the best one as brain.onnx — the number is that probe's score, not the curve's">
-          <span style={{ color }}>◆</span> shipped from {shippedAt != null ? humanSteps(shippedAt) : run.selected.tag} ·{" "}
+          <span style={{ color }}>◆</span> {tr("shipped from", "发布自")} {shippedAt != null ? humanSteps(shippedAt) : run.selected.tag} ·{" "}
           {run.selected.metric} {run.selected.score.toFixed(3)}
           {run.selected.final_score !== run.selected.score && (
-            <span style={S.dim}> (final {run.selected.final_score.toFixed(3)})</span>
+            <span style={S.dim}> ({tr("final", "最终")} {run.selected.final_score.toFixed(3)})</span>
           )}
         </div>
       )}
@@ -397,7 +400,7 @@ function RunCard({
           <>
             {isBase && (
               <span style={{ ...S.tag, ...S.tagBase, borderColor: color, color }} title="the first charted run — every other card shows what it changed against this one">
-                baseline
+                {tr("baseline", "基准")}
               </span>
             )}
             {recipe.map((c) => (

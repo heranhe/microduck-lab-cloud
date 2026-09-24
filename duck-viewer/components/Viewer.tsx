@@ -41,7 +41,6 @@ import { AnimPanel } from "./AnimPanel";
 import { RecordPanel } from "./RecordPanel";
 import { CaptureCanvas, Snapshotter } from "./Capture";
 import { PoseDuck } from "./PoseDuck";
-import { LanguageToggle } from "./LanguageToggle";
 
 /** FALLBACK layout only — one duck-sized pitch for the whole roster. The
  *  server sends each slot its own offset now (DuckFrame.offset), because the
@@ -209,7 +208,6 @@ function loadSavedCamera(): SavedCamera | null {
 }
 
 const HOME_CAM = { p: [1.2, 0.7, 1.4] as const, t: [0, 0.12, 0] as const };
-
 
 /** Inside-the-Canvas helper: persist the camera pose after every orbit/pan/zoom
  *  gesture (OrbitControls "end"). Restore happens via the Canvas/OrbitControls
@@ -638,7 +636,6 @@ export default function Viewer() {
         <Snapshotter />
       </Canvas>
       <Hud clientRef={clientRef} connected={connected} error={error} />
-      <LanguageToggle />
       <RecordPanel clientRef={clientRef} />
       <PolicyPanel clientRef={clientRef} />
       <TeachPanel clientRef={clientRef} />

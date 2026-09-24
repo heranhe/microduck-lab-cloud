@@ -473,7 +473,7 @@ export function PolicyPanel({
 }: {
   clientRef: React.MutableRefObject<LabClient | null>;
 }) {
-  const { isZh, tr } = useI18n();
+  const { tr } = useI18n();
   // Starts collapsed to its pill: the scene, not the roster, is the first
   // thing to see. The choice is persisted, so a user who opens it keeps it.
   const [open, setOpen] = useState(() => loadJSON("policyOpen", false));
@@ -1200,7 +1200,7 @@ export function PolicyPanel({
           marginTop: 1,
         }}
       >
-        {tr("drop to spawn", "放下以生成")}
+        drop to spawn
       </div>
     </div>
   );
@@ -1281,7 +1281,7 @@ export function PolicyPanel({
           <span style={{ flex: 1 }}>🧠 {tr("policies", "策略")}</span>
           <button
             onClick={refresh}
-            title={tr("refresh policy list", "刷新策略列表")}
+            title="refresh policy list"
             style={{
               background: "none",
               border: "none",
@@ -1296,7 +1296,7 @@ export function PolicyPanel({
           </button>
           <button
             onClick={() => setOpen(false)}
-            title={tr("collapse", "收起")}
+            title="collapse"
             style={{
               // keep clear of the Next.js dev-tools badge that floats in
               // this corner during development
@@ -1424,8 +1424,8 @@ export function PolicyPanel({
               <button
                 type="button"
                 onClick={() => setQuery("")}
-                aria-label={tr("clear filter", "清除筛选")}
-                title={tr("clear filter", "清除筛选")}
+                aria-label="clear filter"
+                title="clear filter"
                 style={{
                   flexShrink: 0,
                   background: "none",
@@ -1529,12 +1529,10 @@ export function PolicyPanel({
           )}
           {err && (
             <div style={{ color: "#e07a5f", margin: "6px 0" }}>
-              ⚠ {tr("can't load policies from :8788", "无法从 :8788 加载策略")}
+              ⚠ can&apos;t load policies from :8788
             </div>
           )}
           {sections.map(({ key, title }) => {
-            const zhTitles: Record<string, string> = { runs: "我的训练", checkpoints: "检查点", pollen: "Pollen（官方内置）" };
-            const shownTitle = isZh ? (zhTitles[key] ?? title) : title;
             const list = shown.filter((p) => p.group === key);
             if (!list.length) return null;
             const isFolded = !!folded[key] && !terms.length;
@@ -1544,7 +1542,7 @@ export function PolicyPanel({
                   type="button"
                   onClick={() => toggleFold(key)}
                   aria-expanded={!isFolded}
-                  title={isFolded ? tr(`expand ${title}`, `展开${shownTitle}`) : tr(`collapse ${title}`, `收起${shownTitle}`)}
+                  title={isFolded ? `expand ${title}` : `collapse ${title}`}
                   style={{
                     display: "flex",
                     alignItems: "baseline",
@@ -1562,7 +1560,7 @@ export function PolicyPanel({
                   }}
                 >
                   <span style={{ fontSize: 8 }}>{isFolded ? "▸" : "▾"}</span>
-                  <span>{shownTitle}</span>
+                  <span>{title}</span>
                   {/* Folded count matches what the section shows unfolded:
                       chains collapse to one row each in "Our runs". */}
                   {isFolded && (

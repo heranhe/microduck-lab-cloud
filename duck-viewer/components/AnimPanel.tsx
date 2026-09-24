@@ -20,6 +20,7 @@
 // count or a section name — both come from the metadata.
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useI18n } from "@/lib/i18n";
 import {
   type Balance,
   animStore,
@@ -67,7 +68,6 @@ import { robotChipLabel, setActiveRobot, useActiveRobot } from "@/lib/activeRobo
 import { robotEmoji } from "@/lib/robots";
 import { LAB_HTTP } from "@/lib/lab";
 import { loadJSON, saveJSON } from "@/lib/persist";
-import { useI18n } from "@/lib/i18n";
 import {
   rigApply,
   rigBodies,
@@ -81,23 +81,6 @@ import {
 import { pushToast } from "./Toasts";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
-const GROUPS_ZH: Record<string, string> = {
-  "left leg": "左腿",
-  "head + neck": "头部与颈部",
-  "right leg": "右腿",
-};
-
-const RIG_ZH: Record<string, string> = {
-  squat: "蹲起",
-  lean: "前后倾",
-  "L swing": "左腿摆动",
-  "R swing": "右腿摆动",
-  sway: "侧摆",
-  stance: "站距",
-  twist: "扭转",
-  toes: "足尖",
-  look: "视线",
-};
 const TRACK_PAD = 10; // px inset of the timeline track inside its box
 
 /** "left_hip_pitch" and "left_hip_pitch_joint" both read as "hip pitch" in
@@ -142,7 +125,7 @@ const field: React.CSSProperties = {
 };
 
 export function AnimPanel() {
-  const { isZh, tr } = useI18n();
+  const { tr } = useI18n();
   const [open, setOpen] = useState(() => loadJSON("animOpen", false));
   // Which body is being posed. Persisted; a loaded clip can switch it.
   const [robot, setRobot] = useState<RobotId>(() => loadJSON<RobotId>("animRobot", "microduck"));
@@ -469,7 +452,7 @@ export function AnimPanel() {
 
   const addKey = () => {
     setClip((c) => withKey(c, playhead, poseRef.current));
-    pushToast(tr(`◆ key at ${playhead.toFixed(2)}s`, `◆ 已在 ${playhead.toFixed(2)} 秒添加关键帧`));
+    pushToast(`◆ key at ${playhead.toFixed(2)}s`);
   };
 
   const deleteKey = () => {
@@ -505,7 +488,7 @@ export function AnimPanel() {
     setSaving(true);
     try {
       await putClip(clip);
-      if (announce) pushToast(tr(`💾 saved “${clip.name}” (${clip.keys.length} keys)`, `💾 已保存“${clip.name}”（${clip.keys.length} 个关键帧）`));
+      if (announce) pushToast(`💾 saved “${clip.name}” (${clip.keys.length} keys)`);
       refreshClips();
       return true;
     } catch (e) {
@@ -530,7 +513,8 @@ export function AnimPanel() {
         pushToast(`⚠ ${data.message ?? "the lab wouldn't start that run"}`);
         return;
       }
-      pushToast(tr(`⚡ training a policy to perform “${name}” — watch the 🎓 trainee`, `⚡ 正在训练“${name}”动作—请观看 🎓 机器人`));
+      setBrowsing(false);
+      pushToast(`⚡ training a policy to perform “${name}” — watch the 🎓 trainee`);
     } catch (e) {
       pushToast(`⚠ ${String((e as Error)?.message ?? e)}`);
     }
@@ -554,8 +538,7 @@ export function AnimPanel() {
       if (clipRobot(c) !== robot) switchRobot(clipRobot(c));
       else setPose(sampleClip(c, 0, meta?.numJoints));
       setBrowsing(false);
-      const robotSuffix = clipRobot(c) !== robot ? ` (${robotEmoji(clipRobot(c))} ${clipRobot(c)})` : "";
-      pushToast(tr(`📂 loaded “${name}”${robotSuffix}`, `📂 已加载“${name}”${robotSuffix}`));
+      pushToast(`📂 loaded “${name}”${clipRobot(c) !== robot ? ` (${robotEmoji(clipRobot(c))} ${clipRobot(c)})` : ""}`);
     } catch (e) {
       pushToast(`⚠ ${String((e as Error)?.message ?? e)}`);
     }
@@ -565,7 +548,7 @@ export function AnimPanel() {
     try {
       await removeClip(name);
       refreshClips();
-      pushToast(tr(`🗑 deleted “${name}”`, `🗑 已删除“${name}”`));
+      pushToast(`🗑 deleted “${name}”`);
     } catch (e) {
       pushToast(`⚠ ${String((e as Error)?.message ?? e)}`);
     }
@@ -643,7 +626,7 @@ export function AnimPanel() {
     return (
       <button
         onClick={() => setOpen(true)}
-        title={tr("keyframe animation editor — pose the robot, key it, save a clip", "关键帧动画编辑器—调整姿态、添加关键帧并保存动作")}
+        title={tr("keyframe animation editor — pose the robot, key it, save a clip", "关键帧动画编辑器：调整姿态、设置关键帧并保存片段")}
         style={{
           position: "absolute",
           bottom: 14,
@@ -762,16 +745,16 @@ export function AnimPanel() {
         })}
         <button
           style={btn}
-          title={tr("frame the preview robot", "将预览机器人置于画面中心")}
+          title="frame the preview robot"
           onClick={() => {
             animStore.focusRequest = 1;
           }}
         >
-          ◎ {tr("focus", "聚焦")}
+          ◎ focus
         </button>
         <button
           onClick={() => setOpen(false)}
-          title={tr("collapse", "收起")}
+          title="collapse"
           style={{
             background: "none",
             border: "none",
@@ -788,7 +771,7 @@ export function AnimPanel() {
 
       {metaErr && (
         <div style={{ color: "#e07a5f", padding: "6px 12px" }}>
-          ⚠ {tr(`can't reach the lab's /joints${robot !== "microduck" ? `?robot=${robot}` : ""} on :8788`, `无法访问 :8788 实验室的 /joints${robot !== "microduck" ? `?robot=${robot}` : ""}`)} — {metaErr}
+          ⚠ can&apos;t reach the lab&apos;s /joints{robot !== "microduck" ? `?robot=${robot}` : ""} on :8788 — {metaErr}
         </div>
       )}
 
@@ -807,12 +790,12 @@ export function AnimPanel() {
         <input
           value={clip.name}
           onChange={(e) => setClip((c) => ({ ...c, name: e.target.value }))}
-          placeholder={tr("clip name", "动作名称")}
-          title={tr("saved as clips/<name>.json", "保存为 clips/<名称>.json")}
+          placeholder={tr("clip name", "片段名称")}
+          title="saved as clips/<name>.json"
           style={{ ...field, width: 132 }}
         />
         <label style={{ color: "#8b93a3", fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}>
-          {tr("dur", "时长")}
+          dur
           <input
             type="number"
             min={0.1}
@@ -826,28 +809,28 @@ export function AnimPanel() {
         </label>
         <label
           style={{ color: "#8b93a3", fontSize: 10, display: "flex", alignItems: "center", gap: 3 }}
-          title={tr("loop the clip (the RL side reads this flag)", "循环播放动作（RL 训练会读取此标记）")}
+          title="loop the clip (the RL side reads this flag)"
         >
           <input
             type="checkbox"
             checked={clip.loop}
             onChange={(e) => setClip((c) => ({ ...c, loop: e.target.checked }))}
           />
-          {tr("loop", "循环")}
+          loop
         </label>
         <div style={{ flex: 1 }} />
-        <button style={btn} onClick={() => save()} disabled={saving} title={tr("save to clips/", "保存到 clips/")}>
+        <button style={btn} onClick={() => save()} disabled={saving} title="save to clips/">
           {saving ? "…" : `💾 ${tr("save", "保存")}`}
         </button>
-        <button style={btn} onClick={() => setBrowsing((b) => !b)} title={tr("saved clips", "已保存动作")}>
+        <button style={btn} onClick={() => setBrowsing((b) => !b)} title="saved clips">
           📂
         </button>
         <button
           style={{ ...btn, color: "#e8c87d", borderColor: "rgba(216,198,125,0.4)" }}
           onClick={trainThis}
-          title={tr("save the clip so a policy can be trained to track it", "保存动作并训练策略进行跟随")}
+          title="save the clip so a policy can be trained to track it"
         >
-          ⚡ {tr("train this", "训练此动作")}
+          ⚡ train this
         </button>
       </div>
 
@@ -868,7 +851,7 @@ export function AnimPanel() {
           }}
         >
           {!clips.length && (
-            <div style={{ color: "#8b93a3", fontSize: 10 }}>{tr("no saved clips yet", "暂无已保存动作")}</div>
+            <div style={{ color: "#8b93a3", fontSize: 10 }}>{tr("no saved clips yet", "暂无已保存片段")}</div>
           )}
           {clips.map((c) => (
             <div
@@ -879,7 +862,7 @@ export function AnimPanel() {
                 {c.name}
               </button>
               <span style={{ color: "#8b93a3", fontSize: 9, flexShrink: 0 }}>
-                {c.keys?.length ?? 0} {tr("keys", "关键帧")} · {c.duration}s{c.loop ? ` · ${tr("loop", "循环")}` : ""}
+                {c.keys?.length ?? 0} keys · {c.duration}s{c.loop ? " · loop" : ""}
               </span>
               <button
                 style={{ ...btn, color: "#e8c87d", padding: "3px 6px" }}
@@ -903,14 +886,14 @@ export function AnimPanel() {
       {/* ---- timeline ---- */}
       <div style={{ padding: "8px 12px", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
-          <button style={btn} title={tr("back to start", "回到开始")} onClick={() => { setPlaying(false); seek(0); }}>
+          <button style={btn} title="back to start" onClick={() => { setPlaying(false); seek(0); }}>
             ⏮
           </button>
-          <button style={btn} onClick={() => setPlaying((p) => !p)} title={tr("play / pause", "播放 / 暂停")}>
+          <button style={btn} onClick={() => setPlaying((p) => !p)} title="play / pause">
             {playing ? "⏸" : "▶"}
           </button>
-          <button style={btn} onClick={addKey} title={tr("key the current pose at the playhead", "在播放头处为当前姿态添加关键帧")}>
-            ◆ {tr("key", "关键帧")}
+          <button style={btn} onClick={addKey} title="key the current pose at the playhead">
+            ◆ key
           </button>
           <button
             style={{ ...btn, opacity: keyIdx > 0 ? 1 : 0.4 }}
@@ -924,13 +907,11 @@ export function AnimPanel() {
                   : "no key under the playhead"
             }
           >
-            ✕ {tr("key", "关键帧")}
+            ✕ key
           </button>
           <div style={{ flex: 1 }} />
           <span style={{ color: keyIdx >= 0 ? "#ffd166" : "#8b93a3", fontSize: 10 }}>
-            {keyIdx >= 0
-              ? tr(`● on key ${keyIdx + 1} — edits auto-key`, `● 当前为第 ${keyIdx + 1} 关键帧—编辑会自动记录`)
-              : tr("○ unkeyed pose", "○ 未记录的姿态")}
+            {keyIdx >= 0 ? `● on key ${keyIdx + 1} — edits auto-key` : "○ unkeyed pose"}
           </span>
           <span style={{ color: "#a5adbb", fontSize: 11 }}>
             {playhead.toFixed(2)} / {clip.duration.toFixed(2)}s
@@ -1061,7 +1042,7 @@ export function AnimPanel() {
             flexShrink: 0,
           }}
         >
-          <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("clicking the robot edits", "点击机器人时编辑")}</span>
+          <span style={{ color: "#8b93a3", fontSize: 10 }}>clicking the robot edits</span>
           <button
             style={{
               ...btn,
@@ -1071,10 +1052,10 @@ export function AnimPanel() {
                 ? { color: "#ffd166", border: "1px solid rgba(255,209,102,0.55)", background: "#2a2612" }
                 : {}),
             }}
-            title={tr("a click selects one servo; dragging rotates just that hinge", "点击选择一个舵机，拖动只旋转该关节")}
+            title="a click selects one servo; dragging rotates just that hinge"
             onClick={() => setMode("joints")}
           >
-            🦴 {tr("joints", "关节")}
+            🦴 joints
           </button>
           <button
             style={{
@@ -1083,10 +1064,10 @@ export function AnimPanel() {
                 ? { color: "#8ee6d6", border: "1px solid rgba(95,208,189,0.55)", background: "#0e2a26" }
                 : {}),
             }}
-            title={tr("a click selects the rig control for that part (feet → toes, thigh → swing, shin → squat, trunk → lean, head → look, hip sides → sway/twist); dragging drives the whole coupling", "点击选择该部位的联动控制，拖动会驱动整组关节")}
+            title="a click selects the rig control for that part (feet → toes, thigh → swing, shin → squat, trunk → lean, head → look, hip sides → sway/twist); dragging drives the whole coupling"
             onClick={() => setMode("rig")}
           >
-            🎮 {tr("rig", "联动")}
+            🎮 rig
           </button>
           <button
             style={{
@@ -1154,7 +1135,7 @@ export function AnimPanel() {
       {/* ---- joints ---- */}
       <div style={{ overflowY: "auto", padding: "0 12px 8px" }}>
         {!meta && !metaErr && (
-          <div style={{ color: "#8b93a3", padding: "8px 0" }}>{tr("loading joint limits…", "正在加载关节限位…")}</div>
+          <div style={{ color: "#8b93a3", padding: "8px 0" }}>loading joint limits…</div>
         )}
         {meta && (
           <>
@@ -1164,7 +1145,7 @@ export function AnimPanel() {
                   style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}
                   title="each control drives several servos in a fixed coupling; its range ends where the first servo hits its MJCF limit"
                 >
-                  🎮 {tr("rig", "联动控制")}
+                  🎮 rig
                 </div>
                 {rigVectors.map((v) => (
                   <RigRow
@@ -1184,7 +1165,7 @@ export function AnimPanel() {
                   style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}
                   title="each handle is a point the solver can be asked to put somewhere: drag it in the scene, and the joints on that limb follow. The readout is how far short the last solve fell."
                 >
-                  🎯 {tr("ik handles", "IK 手柄")}
+                  🎯 ik handles
                 </div>
                 {effectors.map((e) => {
                   const sel = selectedEffector === e.id;
@@ -1213,17 +1194,17 @@ export function AnimPanel() {
                         {e.kind === "foot" ? "🦶" : e.kind === "hand" ? "✋" : "👤"} {e.label}
                       </span>
                       <span style={{ flex: 1, fontSize: 9, color: short ? "#e8b24a" : "#566072" }}>
-                        {short ?? (sel ? tr("drag the handle in the scene", "在场景中拖动手柄") : "")}
+                        {short ?? (sel ? "drag the handle in the scene" : "")}
                       </span>
                     </div>
                   );
                 })}
               </>
             )}
-            <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>{tr("trunk", "躯干")}</div>
+            <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>trunk</div>
             <JointRow
-              label={tr("root pitch", "躯干俯仰")}
-              hint={tr("− lean back", "− 向后倾")}
+              label="root pitch"
+              hint="− lean back"
               min={meta.rootPitchRange[0]}
               max={meta.rootPitchRange[1]}
               value={pose.rootPitch}
@@ -1237,7 +1218,7 @@ export function AnimPanel() {
             />
             {meta.groups.map((g) => (
               <div key={g}>
-                <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>{isZh ? GROUPS_ZH[g] : g}</div>
+                <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>{g}</div>
                 {jointRows(g).map((j) => (
                   <JointRow
                     key={j.name}
@@ -1262,7 +1243,7 @@ export function AnimPanel() {
                 title="every joint back to DEFAULT_POSE"
                 onClick={() => applyPose(defaultPose(meta))}
               >
-                ↺ {tr("default pose", "默认姿态")}
+                ↺ default pose
               </button>
               <button
                 style={btn}
@@ -1276,16 +1257,22 @@ export function AnimPanel() {
                   setPose(sampleClip(c, 0, meta.numJoints));
                 }}
               >
-                ✧ {tr("new clip", "新建动作")}
+                ✧ {tr("new clip", "新建片段")}
               </button>
             </div>
           </>
         )}
         <div style={{ color: "#566072", fontSize: 9, marginTop: 8, lineHeight: 1.45 }}>
-          {tr(
-            "click a body part to edit it — 🦴 drags one servo, 🎮 drags that part's rig control (feet→toes, thigh→swing, shin→squat, trunk→lean, head→look, shift = fine), 🎯 drags that limb's IK handle in the view plane and the solver finds the joints · the ⇕ handle drags the selected rig control (squat when none) and parks on the part it moves · rig sliders end where a servo hits its limit — hover one to see which · keys interpolate linearly and the RL side resamples the saved clip at 50 Hz",
-            "点击身体部位进行编辑—🦴 拖动单个舵机，🎮 拖动联动控制（Shift = 精细调整），🎯 在视图平面拖动肢体 IK 手柄由求解器计算关节 · ⇕ 手柄拖动已选联动控制 · 滑块在舵机到达限位时停止 · 关键帧线性插值，RL 以 50 Hz 重采样已保存动作"
-          )}
+          click a body part to edit it — 🦴 drags one servo, 🎮 drags that
+          part&apos;s rig control (feet→toes, thigh→swing, shin→squat,
+          trunk→lean, head→look, shift = fine), 🎯 drags that limb&apos;s
+          IK handle in the view plane and the solver finds the joints (the
+          other feet stay planted; an amber handle is a point the limb
+          can&apos;t reach) · the ⇕ handle drags the selected rig control
+          (squat when none) and parks on the part it moves ·
+          rig sliders end where a servo hits its limit — hover one to see
+          which · keys interpolate linearly and the RL side resamples the
+          saved clip at 50 Hz
           {poseErr && <span style={{ color: "#e07a5f" }}> · preview: {poseErr}</span>}
         </div>
       </div>
@@ -1379,7 +1366,6 @@ function RigRow({
   onSelect: () => void;
   onChange: (value: number) => void;
 }) {
-  const { isZh, tr } = useI18n();
   const value = rigMeasure(v, pose);
   // round3(…) || 0 folds the projection's float dust (and −0) into true zero
   // so the readout never says “−0.000”.
@@ -1412,7 +1398,7 @@ function RigRow({
         style={{ width: 74, flexShrink: 0, fontSize: 10, color: selected ? "#8ee6d6" : "#6fbfae", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         title={`${v.ctrl.title}\ndrives: ${joints}`}
       >
-        {isZh ? (RIG_ZH[v.ctrl.label] ?? v.ctrl.label) : v.ctrl.label}
+        {v.ctrl.label}
       </span>
       <input
         type="range"
@@ -1444,7 +1430,7 @@ function RigRow({
       </span>
       <button
         onClick={() => onChange(0)}
-        title={tr("back to the default pose along this control", "将此联动控制恢复到默认姿态")}
+        title="back to the default pose along this control"
         style={{ background: "none", border: "none", color: "#8b93a3", cursor: "pointer", fontFamily: mono, fontSize: 11, padding: "0 2px", flexShrink: 0 }}
       >
         ↺
@@ -1478,7 +1464,6 @@ function JointRow({
   onSelect: () => void;
   onChange: (v: number) => void;
 }) {
-  const { tr } = useI18n();
   const atLimit = value <= min + 1e-4 || value >= max - 1e-4;
   return (
     <div
@@ -1532,7 +1517,7 @@ function JointRow({
       />
       <span
         style={{ width: 78, flexShrink: 0, textAlign: "right", fontSize: 9, color: "#566072" }}
-        title={tr("joint limits from the MJCF", "来自 MJCF 的关节限位")}
+        title="joint limits from the MJCF"
       >
         {hint ?? `${min.toFixed(2)}…${max.toFixed(2)}`}
       </span>
@@ -1541,7 +1526,7 @@ function JointRow({
           e.stopPropagation();
           onChange(def);
         }}
-        title={tr(`reset to ${def.toFixed(3)}`, `重置为 ${def.toFixed(3)}`)}
+        title={`reset to ${def.toFixed(3)}`}
         style={{
           background: "none",
           border: "none",
