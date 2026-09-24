@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import textwrap
@@ -38,8 +39,30 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     pass  # 仅类型检查时用
 
-# colab CLI 路径（在安装该模块的系统中可直接调用 "colab"）
-COLAB_BIN = shutil.which("colab") or os.path.expanduser("~/.local/bin/colab")
+
+def _resolve_colab_bin() -> str:
+    """自动解析 colab 可执行文件路径（优先匹配当前虚拟环境，做到完全开箱即用）。"""
+    # 1. 优先检查当前 Python 虚拟环境（如 uv/venv 的 .venv/bin/colab）
+    venv_bin = Path(sys.executable).parent / "colab"
+    if venv_bin.exists() and os.access(venv_bin, os.X_OK):
+        return str(venv_bin)
+    # 2. 检查系统 PATH
+    which_bin = shutil.which("colab")
+    if which_bin:
+        return which_bin
+    # 3. 检查用户主目录 ~/.local/bin/colab
+    user_local = Path.home() / ".local" / "bin" / "colab"
+    if user_local.exists() and os.access(user_local, os.X_OK):
+        return str(user_local)
+    # 4. 常见系统级路径备选
+    for p in ["/usr/local/bin/colab", "/opt/homebrew/bin/colab"]:
+        if Path(p).exists():
+            return p
+    return "colab"
+
+
+# colab CLI 路径
+COLAB_BIN = _resolve_colab_bin()
 
 # Google Drive 备份目标文件夹（Drive 根目录下的路径，自动创建）
 DRIVE_BACKUP_FOLDER = "MicroDuck/training-backups"

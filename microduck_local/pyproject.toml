@@ -32,6 +32,8 @@ dependencies = [
     "imageio-ffmpeg>=0.5",
     "pillow>=10.1",
     "numba>=0.67.0",
+    # Google Colab 官方 CLI 工具，提供开箱即用的云端 GPU 调度能力
+    "google-colab-cli",
 ]
 
 [project.scripts]
