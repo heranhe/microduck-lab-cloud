@@ -12,6 +12,17 @@ Advanced reinforcement learning experimentation, cloud training workflows, and i
 
 > **Microduck Lab Cloud** extends the [microduck-lab](https://github.com/jonathanhawkins/microduck-lab) research harness with expanded RL behavior libraries (White Crane, Single-Leg Hop, Jump Turn, Long Jump), bilingual (EN/CN) interactive Web 3D visualization, automated goal-based curriculum training, and cloud/Colab runner support.
 
+### 🆚 Key Evolutions vs. Upstream (microduck-lab)
+
+| Dimension | Upstream `microduck-lab` | **`microduck-lab-cloud` Enhanced** |
+| :--- | :--- | :--- |
+| **🌐 Language Support** | English only | **Full-Stack Bilingual (EN / 简体中文)**: Instant one-click toggle for Web 3D UI, telemetry panels, trick recipes, and technical documentation. |
+| **☁️ Cloud GPU Provisioning** | Local Mac CPU / basic MPS only; constrained by laptop compute and memory | **Google Colab & Google AI Pro Engine**: Seamlessly dispatches training to cloud accelerators (**NVIDIA T4, L4, A100, H100**) directly from the harness. |
+| **⏱️ Training Endurance** | Typically short bursts of a few minutes due to thermal throttling | Supports continuous **12 to 24 hours** long-horizon RL training runs with multi-stage checkpointing and automatic resumption. |
+| **🚨 Cost & Safety Kill-Switch** | None | **One-Click Circuit Breaker**: Dedicated safety kill-switch in HUD; terminates all billable cloud GPU sessions immediately on demand to prevent unexpected charges. |
+| **📡 Real-Time Snapshot Stream** | Local-only socket | **30s Hot-Swap Stream**: Automatically pulls `live.onnx` snapshots every 30s from the cloud into the local 3D viewer; dual-archives full runs to Google Drive upon completion. |
+| **🥋 Agile Behavior Suite** | Basic walk, trot, backflip | **Extended Agile Behaviors**: White Crane (single-leg crane stance balance), Single-Leg Hop, 90° In-Air Jump Turn, High-Thrust Long Jump, with pre-baked reference clips. |
+
 Train reinforcement-learning policies for the
 [Microduck](https://pollen-robotics.com/microduck), Pollen Robotics'
 open-source ~25 cm bipedal robot, **on Apple Silicon Macs or Cloud GPUs**. Watch every policy walk, learn, and perform complex agile tricks live in your browser.
