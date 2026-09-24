@@ -1,6 +1,10 @@
-# Microduck Lab 🦆: RL experimentation on your Mac
+# Microduck Lab 🦆: Train MicroDuck with Google Colab GPUs
 
 [简体中文（默认）](README.md) · **English**
+
+> 🚀 **Google Colab is this fork's headline feature.** Eligible paid **Google AI Pro members receive 200 Colab compute units (CCUs) each month**. At an illustrative rate of **about 13.3 CCUs/hour**, that is **roughly 15 cumulative hours of A100 use**—an appealing way to learn MicroDuck reinforcement learning without owning an NVIDIA GPU. 🦆 [Google AI Pro benefits](https://support.google.com/googleone/answer/14534406?hl=en) · [Colab FAQ](https://research.google.com/colaboratory/faq.html)
+
+**The 15-hour figure is an estimate, not a promise of A100 availability or one uninterrupted 15-hour run.** Actual compute-unit rates, GPU supply, and runtime limits vary; check the rate shown by Colab for your account.
 
 This repository builds on [Jonathan Hawkins' original Microduck Lab](https://github.com/jonathanhawkins/microduck-lab). The original local training, simulation, viewer, and robot support remain the foundation. The table below identifies the additions made in this fork; the rest of this document describes the underlying project in detail.
 

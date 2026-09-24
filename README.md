@@ -1,6 +1,10 @@
-# Microduck Lab 🦆：本地机器人学习实验室
+# Microduck Lab 🦆：让 Colab GPU 帮你训练 MicroDuck
 
 **简体中文（默认）** · [English](README_EN.md)
+
+> 🚀 **本项目的亮点是 Google Colab 云端训练。**Google 现在为符合条件的付费 **Google AI Pro 会员每月提供 200 个 Colab 算力单位（CCU）**。按 **约 13.3 CCU/小时的示例费率**粗略折算，相当于**累计约 15 小时 A100 使用量**。对想学习 MicroDuck 强化学习、却没有本地 NVIDIA GPU 的人，这是一项很有吸引力的权益。🦆 [Google AI Pro 权益说明](https://support.google.com/googleone/answer/14534406?hl=en) · [Colab FAQ](https://research.google.com/colaboratory/faq.html)
+
+**15 小时只是估算，不代表保证分配到 A100 或一次连续运行 15 小时。**Colab 的实际 CCU 扣费率、GPU 供应和会话时长会变化；请以自己账号在 Colab 中显示的信息为准。
 
 本项目基于 [Jonathan Hawkins 原作者的 Microduck Lab](https://github.com/jonathanhawkins/microduck-lab)。原作提供 Mac 上的本地强化学习训练、浏览器 3D 可视化、模拟场景与机器人行为实验；这个分支在此基础上加入 **Google Colab GPU 训练入口**和**中英文切换**。它是社区实验项目，与 Pollen Robotics、Innate 和 Unitree 没有关联。
 
@@ -49,6 +53,8 @@ npm run dev
 ## 使用 Google Colab GPU
 
 云端训练运行的是 Pollen Robotics 官方 [`microduck_rl`](https://github.com/pollen-robotics/microduck_rl) GPU 训练栈，而非把本地 CPU 训练代码直接搬到 Colab。Colab 的费用、GPU 供应和账号权益由 Google 管理；本项目只管理它启动的任务。
+
+💡 Google AI Pro 的 200 CCU 是**每月权益**，不是固定小时数。选择 A100 后，先查看 `/cloud` 页面显示的余额与当前扣费率，再决定训练规模；不需要 A100 时可以选较低规格的 GPU，把算力留给更多实验。
 
 1. 在 `microduck_local` 目录安装依赖并查看账号状态：
 

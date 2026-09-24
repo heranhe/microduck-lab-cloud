@@ -55,6 +55,10 @@ export default function CloudPage() {
     </nav>
     <h1>{tr("Google Colab training", "Google Colab 云端训练")}</h1>
     <p>{tr("Train with your own Google account and Colab compute units. GPU availability depends on your account and Colab capacity.", "使用您自己的 Google 账号和 Colab 算力单位训练。GPU 是否可用取决于账号权益及 Colab 资源。")}</p>
+    <p style={{ color: "#b9dcff" }}>{tr(
+      "🚀 Eligible paid Google AI Pro members receive 200 Colab CCUs monthly. At an illustrative 13.3 CCUs/hour, that is about 15 cumulative A100 hours. Your actual rate and GPU availability may differ.",
+      "🚀 符合条件的付费 Google AI Pro 会员每月可获得 200 Colab CCU。按示例费率 13.3 CCU/小时估算，约相当于累计 15 小时 A100 使用量；实际扣费率和 GPU 可用性可能不同。"
+    )}</p>
     <section style={box}>
       <h2>{tr("Account", "账号")}</h2>
       {account?.connected ? <p>✓ {tr("Connected", "已连接")} · {tr("Balance", "余额")}: {account.balance ?? "—"} CCU · {tr("Current rate", "当前费率")}: {account.rate ?? "—"} CCU/h</p> :
