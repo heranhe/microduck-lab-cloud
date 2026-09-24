@@ -1,3 +1,7 @@
+<div align="right">
+  <strong>English</strong> | <a href="README_CN.md">简体中文</a>
+</div>
+
 # Microduck Lab Cloud 🦆☁️
 
 Advanced reinforcement learning experimentation, cloud training workflows, and interactive 3D simulation suite for the [Microduck](https://pollen-robotics.com/microduck) bipedal robot.
