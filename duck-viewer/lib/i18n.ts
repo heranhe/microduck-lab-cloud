@@ -4,7 +4,7 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 export type Locale = "en" | "zh";
 const KEY = "microduck-locale";
-let locale: Locale = "en";
+let locale: Locale = "zh";
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void) {
@@ -19,10 +19,10 @@ export function setLocale(next: Locale) {
 }
 
 export function useI18n() {
-  const current = useSyncExternalStore(subscribe, () => locale, () => "en" as Locale);
+  const current = useSyncExternalStore(subscribe, () => locale, () => "zh" as Locale);
   useEffect(() => {
     const saved = window.localStorage.getItem(KEY);
-    if (saved === "zh" && locale !== "zh") setLocale("zh");
+    if (saved === "en" && locale !== "en") setLocale("en");
   }, []);
   useEffect(() => { document.documentElement.lang = current === "zh" ? "zh-CN" : "en"; }, [current]);
   const tr = useCallback((en: string, zh: string) => current === "zh" ? zh : en, [current]);
