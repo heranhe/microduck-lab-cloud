@@ -105,14 +105,6 @@ vendored here.
     contacts ([example](docs/media/contact-sheet.png))
   - `bench-walk` / `bench-envs`: find the right worker count for *your* machine
   - `duck-lab`: the streaming backend that drives the browser viewer
-<<<<<<< HEAD
-- **`duck-viewer/`**: Next.js + react-three-fiber viewer
-  - **🌐 Bilingual UI (EN / 中文)**: Instant language switching for telemetry, panels, and trick recipes
-  - Many ducks side by side, live over WebSocket at 25 Hz; drag policy chips
-    onto ducks to hot-swap brains mid-stride
-  - **🎓 Teach panel**: ask for one of nine built-in tricks ("stand on one
-    leg") — keyword-matched, no LLM in the loop — see its reward recipe in
-=======
   - **World mode** (`duck-lab --world playroom`): rooms, pitches, people, toys
     and N ducks composed into one MuJoCo model; simulated senses in `sensors/`
     (the head's 8×8 ToF matrix, a camera-detector stand-in, drifting
@@ -133,6 +125,7 @@ vendored here.
     (`fetch-robot mars`), and any MuJoCo Menagerie model as a
     stand-and-look body (`fetch-robot menagerie:unitree_go2`)
 - **`duck-viewer/`**: Next.js + react-three-fiber viewer, three pages
+  - **🌐 Bilingual UI (EN / 简体中文)**: Instant one-click toggle for telemetry, panels, and trick recipes
   - **`/` the lab**: many robots side by side, live over WebSocket at 25 Hz;
     drag policy chips onto ducks to hot-swap brains mid-stride
   - **`/sim` the world**: one room, many ducks, what each one senses and
@@ -140,7 +133,6 @@ vendored here.
   - **`/train`**: charts for brain-training runs
   - **🎓 Teach panel**: ask for a built-in recipe ("stand on one leg") —
     keyword-matched, no LLM in the loop — see its reward recipe in
->>>>>>> upstream/main
     plain English, watch the trainee improve every ~15 s as live snapshots
     hot-load, then drag the reward sliders and fine-tune. Reward shaping with
     no Python in the loop. The library now covers tricks, ball kicks, a floor
@@ -667,17 +659,6 @@ behavior works here, port the env design to an mjlab cfg in `microduck_rl` and
 retrain on GPU (that repo's `AGENTS.md` is the sim2real recipe). Everything
 here keeps the deployment contract so that port is mechanical.
 
-<<<<<<< HEAD
-## Acknowledgements & Upstream
-
-- **[microduck-lab](https://github.com/jonathanhawkins/microduck-lab)** by Jonathan Hawkins: The original CPU-MuJoCo training harness and interactive Next.js viewer architecture.
-- **[microduck](https://github.com/pollen-robotics/microduck)** & **[microduck_rl](https://github.com/pollen-robotics/microduck_rl)** by Pollen Robotics: The foundational Microduck biped robot hardware design, MJCF models, and official RL stack.
-
-## License
-
-This project is licensed under the [Apache License 2.0](LICENSE) (consistent with upstream Microduck repositories).  
-Not affiliated with or endorsed by Pollen Robotics. "Microduck" is a trademark of Pollen Robotics.
-=======
 ## What's being worked on
 
 `docs/roadmap.md` is the working list: what to run next, the command for each,
@@ -692,6 +673,11 @@ nothing has trained a *brain* on it yet — all written up in
 [docs/mars-roadmap.md](docs/mars-roadmap.md). A null result anywhere here comes
 with its minimum detectable effect, so "we tried that" means something.
 
+## Acknowledgements & Upstream
+
+- **[microduck-lab](https://github.com/jonathanhawkins/microduck-lab)** by Jonathan Hawkins: The original CPU-MuJoCo training harness and interactive Next.js viewer architecture.
+- **[microduck](https://github.com/pollen-robotics/microduck)** & **[microduck_rl](https://github.com/pollen-robotics/microduck_rl)** by Pollen Robotics: The foundational Microduck biped robot hardware design, MJCF models, and official RL stack.
+
 ## License
 
 Apache-2.0 (same as the upstream Microduck repos). Not affiliated with or
@@ -700,4 +686,3 @@ endorsed by Pollen Robotics, [Innate](https://www.innate.bot) or Unitree;
 No robot description is vendored here — `fetch-robot` downloads each one from
 its upstream repository at a pinned sha, under that repository's own licence
 (MARS's is Apache-2.0, from `innate-inc/innate-os`).
->>>>>>> upstream/main
