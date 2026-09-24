@@ -31,7 +31,10 @@ Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
    Credentials stay in the CLI's local store; the lab never accepts a Google
    password or token.
 2. Start `duck-lab` and the viewer as described below, then open `/cloud`.
-3. Choose a task and GPU. The page shows job status, a stop control and an ONNX
+3. Choose a task and GPU. Once a job starts, a pinned top bar shows elapsed
+   time beside a one-click control that disconnects this lab's Colab sessions.
+   The timer starts when GPU allocation succeeds; it is not Google's
+   billable time. The job list has individual disconnect controls and an ONNX
    download when export succeeds. Lab shutdown also attempts to release active
    Colab sessions.
 

@@ -107,7 +107,7 @@ class ColabJobs:
             try:
                 job = json.loads(path.read_text())
                 if re.fullmatch(r"[0-9a-f]{12}", job["id"]):
-                    if job["state"] in {"allocating", "starting", "running"}:
+                    if job["state"] in {"allocating", "starting", "running", "finalizing", "stopping"}:
                         job["state"] = "detached"
                         job["message"] = "Lab restarted; check and stop this Colab session."
                     self.jobs[job["id"]] = job
@@ -130,7 +130,7 @@ class ColabJobs:
         directory = self.runs / job_id
         directory.mkdir(parents=True)
         job = {"id": job_id, "session": session, "task": task, "gpu": gpu,
-               "state": "allocating", "started": time.time(), "message": ""}
+               "state": "allocating", "started": time.time(), "released": False, "message": ""}
         with self.lock:
             self.jobs[job_id] = job
         (directory / "job.json").write_text(json.dumps(job, indent=2))
@@ -139,13 +139,12 @@ class ColabJobs:
 
     def _run(self, job: dict, directory: Path, iterations: int, envs: int) -> None:
         session = job["session"]
-        allocated = False
         try:
             result = cli(["new", "-s", session, "--gpu", job["gpu"]], timeout=180)
             if result.returncode:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-            allocated = True
-            if job["state"] == "stopped":
+            job["allocated_at"] = time.time()
+            if job["state"] in {"stopping", "stopped"}:
                 return
             job["state"] = "starting"
             runner = _remote_runner(job["task"], iterations, envs)
@@ -158,7 +157,7 @@ class ColabJobs:
             result = cli(["exec", "-s", session], code=bootstrap, timeout=60)
             if result.returncode:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-            if job["state"] == "stopped":
+            if job["state"] in {"stopping", "stopped"}:
                 return
             job["state"] = "running"
             while job["state"] == "running":
@@ -189,38 +188,46 @@ class ColabJobs:
                         job["state"] = "failed"
                         job["message"] = job["message"] or "Training or ONNX export did not complete"
         except Exception as exc:
-            if job["state"] != "stopped":
+            if job["state"] not in {"stopping", "stopped"}:
                 job["state"] = "failed"
                 job["message"] = str(exc)
         finally:
-            if allocated and not job.get("released"):
+            if not job.get("released"):
                 try:
                     result = cli(["stop", "-s", session], timeout=60)
                     job["released"] = result.returncode == 0
                     if not job["released"]:
-                        job["message"] = result.stderr.strip() or result.stdout.strip()
+                        reason = result.stderr.strip() or result.stdout.strip()
+                        job["message"] = f"{job['message']} · Release: {reason}" if job["message"] else reason
                 except Exception as exc:
                     job["released"] = False
-                    job["message"] = str(exc)
+                    job["message"] = f"{job['message']} · Release: {exc}" if job["message"] else str(exc)
+            if job["state"] == "stopping":
+                job["state"] = "stopped"
             (directory / "job.json").write_text(json.dumps(job, indent=2))
 
     def stop(self, job_id: str) -> dict:
         job = self.jobs.get(job_id)
         if not job:
             raise KeyError(job_id)
-        if job["state"] not in {"done", "failed", "stopped"}:
-            was_allocated = job["state"] in {"starting", "running", "detached"}
-            job["state"] = "stopped"
-            if was_allocated:
-                try:
-                    result = cli(["stop", "-s", job["session"]], timeout=60)
-                    job["released"] = result.returncode == 0
-                    if not job["released"]:
-                        job["message"] = result.stderr.strip() or result.stdout.strip()
-                except Exception as exc:
-                    job["released"] = False
-                    job["message"] = str(exc)
+        if job.get("released") is True:
+            return dict(job)
+        if job["state"] in {"allocating", "stopping"}:
+            # The allocation thread must finish `new` before it can release
+            # the session. Keep the pending state visible to the UI.
+            job["state"] = "stopping"
             (self.runs / job_id / "job.json").write_text(json.dumps(job, indent=2))
+            return dict(job)
+        job["state"] = "stopped" if job["state"] not in {"done", "failed"} else job["state"]
+        try:
+            result = cli(["stop", "-s", job["session"]], timeout=60)
+            job["released"] = result.returncode == 0
+            if not job["released"]:
+                job["message"] = result.stderr.strip() or result.stdout.strip()
+        except Exception as exc:
+            job["released"] = False
+            job["message"] = str(exc)
+        (self.runs / job_id / "job.json").write_text(json.dumps(job, indent=2))
         return dict(job)
 
     def list(self) -> list[dict]:
@@ -229,4 +236,5 @@ class ColabJobs:
     def stop_all(self) -> list[dict]:
         """Release every session started by this lab, leaving other Colab work alone."""
         return [self.stop(job_id) for job_id, job in list(self.jobs.items())
-                if job["state"] in {"allocating", "starting", "running", "detached"}]
+                if job["state"] in {"allocating", "starting", "running", "finalizing", "detached", "stopping"}
+                or job.get("released") is False]
