@@ -6,18 +6,25 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  deleteColabToken,
   deleteHfToken,
   duckRowKeys,
+  fetchColabSettings,
   fetchHfSettings,
+  finishColabAuth,
+  killAllColabSessions,
   saveHfToken,
+  startColabAuth,
+  type ColabSettings,
   type DuckFrame,
   type Frame,
   type HfSettings,
   type LabClient,
 } from "@/lib/lab";
 import { loadJSON, saveJSON } from "@/lib/persist";
+import { useI18n } from "@/lib/i18n";
 import { setSelectedDuck, useSelectedDuck } from "@/lib/select";
-import { setDuckLabels, setHudRight } from "@/lib/ui";
+import { setCloudSettingsOpen, setDuckLabels, setHudRight, useCloudSettingsOpen } from "@/lib/ui";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
@@ -27,7 +34,15 @@ const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
  *  token after Save resolves. Unlocks the coming real-GPU training step
  *  (microduck_rl on HF Jobs, the user's own account and billing). */
 function HfSettingsModal({ onClose }: { onClose: () => void }) {
+  const { tr } = useI18n();
   const [settings, setSettings] = useState<HfSettings | null>(null);
+  const [colabSettings, setColabSettings] = useState<ColabSettings | null>(null);
+  const [colabBusy, setColabBusy] = useState(false);
+  const [colabError, setColabError] = useState<string | null>(null);
+  const [colabCode, setColabCode] = useState("");
+  const [authStep, setAuthStep] = useState<"idle" | "awaiting_code">("idle");
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [killMsg, setKillMsg] = useState<string | null>(null);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +66,9 @@ function HfSettingsModal({ onClose }: { onClose: () => void }) {
     fetchHfSettings()
       .then((s) => alive && setSettings(s))
       .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)));
+    fetchColabSettings()
+      .then((c) => alive && setColabSettings(c))
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -78,6 +96,65 @@ function HfSettingsModal({ onClose }: { onClose: () => void }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const startColabLogin = async () => {
+    setColabBusy(true);
+    setColabError(null);
+    try {
+      const { authUrl: url } = await startColabAuth();
+      setAuthUrl(url);
+      setAuthStep("awaiting_code");
+      window.open(url, "_blank");
+    } catch (e) {
+      setColabError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setColabBusy(false);
+    }
+  };
+
+  const finishColabLogin = async () => {
+    if (!colabCode.trim()) return;
+    setColabBusy(true);
+    setColabError(null);
+    try {
+      const res = await finishColabAuth(colabCode);
+      setColabSettings(res);
+      setAuthStep("idle");
+      setColabCode("");
+    } catch (e) {
+      setColabError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setColabBusy(false);
+    }
+  };
+
+  const disconnectColab = async () => {
+    setColabBusy(true);
+    setColabError(null);
+    try {
+      await deleteColabToken();
+      setColabSettings({ configured: false });
+    } catch (e) {
+      setColabError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setColabBusy(false);
+    }
+  };
+
+  const handleKillAll = async () => {
+    if (!confirm(tr("Stop all active Colab cloud VMs immediately to prevent charges?", "确定立即停止所有正在运行的 Colab 云端虚拟机以防扣费？"))) return;
+    setColabBusy(true);
+    setKillMsg(null);
+    setColabError(null);
+    try {
+      const res = await killAllColabSessions();
+      setKillMsg(res.message);
+    } catch (e) {
+      setColabError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setColabBusy(false);
     }
   };
 
@@ -118,7 +195,7 @@ function HfSettingsModal({ onClose }: { onClose: () => void }) {
         }}
       >
         <div style={{ display: "flex", alignItems: "baseline", marginBottom: 8 }}>
-          <span style={{ color: "#dfe5ee", fontSize: 12 }}>⚙ settings</span>
+          <span style={{ color: "#dfe5ee", fontSize: 12, fontWeight: 700 }}>☁ {tr("cloud compute accounts", "云算力账户")}</span>
           <span style={{ flex: 1 }} />
           <button
             onClick={onClose}
@@ -131,7 +208,7 @@ function HfSettingsModal({ onClose }: { onClose: () => void }) {
         {settings?.configured ? (
           <>
             <div style={{ marginBottom: 8 }}>
-              connected as <span style={{ color: "#7ab87a" }}>{settings.username}</span>{" "}
+              {tr("connected as", "已连接账号")} <span style={{ color: "#7ab87a" }}>{settings.username}</span>{" "}
               <span style={{ color: "#566072" }}>({settings.masked})</span>
             </div>
             <button
@@ -148,14 +225,16 @@ function HfSettingsModal({ onClose }: { onClose: () => void }) {
                 padding: "3px 10px",
               }}
             >
-              disconnect
+              {tr("disconnect", "断开连接")}
             </button>
           </>
         ) : (
           <>
             <div style={{ marginBottom: 8 }}>
-              Paste an access token to unlock GPU training on HF Jobs — your own
-              account, your own billing. Create one at{" "}
+              {tr(
+                "Paste an access token to unlock GPU training on HF Jobs — your own account and billing. Create one at ",
+                "粘贴访问令牌以启用 HF Jobs GPU 训练，使用你自己的账号和账单。请在此创建："
+              )}
               <a
                 href="https://huggingface.co/settings/tokens"
                 target="_blank"
@@ -164,7 +243,7 @@ function HfSettingsModal({ onClose }: { onClose: () => void }) {
               >
                 hf.co/settings/tokens
               </a>{" "}
-              (write access).
+              {tr(" (write access).", "（需要写入权限）。")}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <input
@@ -204,16 +283,200 @@ function HfSettingsModal({ onClose }: { onClose: () => void }) {
                   padding: "3px 10px",
                 }}
               >
-                {busy ? "checking…" : "save"}
+                {busy ? tr("checking…", "验证中…") : tr("save", "保存")}
               </button>
             </div>
             <div style={{ color: "#566072", marginTop: 6 }}>
-              stored only on this machine (hf-token.json, gitignored) — never
-              sent anywhere but huggingface.co.
+              {tr(
+                "stored only on this machine (hf-token.json, gitignored) — never sent anywhere but huggingface.co.",
+                "仅保存在本机（hf-token.json，已忽略 Git），除 huggingface.co 外不会发送到其他地方。"
+              )}
             </div>
           </>
         )}
         {error && <div style={{ color: "#e07a5f", marginTop: 8 }}>{error}</div>}
+
+        {/* 分隔线 */}
+        <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "14px 0 10px 0" }} />
+
+        {/* ☁ Google Colab 区块 */}
+        <div style={{ color: "#dfe5ee", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+          <span>☁ Google Colab</span>
+          <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "rgba(122,184,122,0.18)", color: "#7ab87a" }}>
+            T4 / L4 / A100 / H100
+          </span>
+          <span style={{ fontSize: 9, color: "#6c788d" }}>
+            动态计费
+          </span>
+        </div>
+
+        {colabSettings?.configured ? (
+          <div>
+            <div style={{ marginBottom: 6, display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+              <div>
+                {tr("connected as", "已连接账号")}{" "}
+                <span style={{ color: "#7ab87a" }}>{colabSettings.email}</span>
+              </div>
+              <button
+                onClick={disconnectColab}
+                disabled={colabBusy}
+                style={{
+                  background: "#1c2230",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  borderRadius: 6,
+                  color: "#e07a5f",
+                  cursor: "pointer",
+                  fontFamily: mono,
+                  fontSize: 10,
+                  padding: "2px 8px",
+                }}
+              >
+                {tr("disconnect", "断开连接")}
+              </button>
+            </div>
+            <div style={{ color: "#8b93a3", fontSize: 10, lineHeight: 1.4, marginBottom: 8 }}>
+              {tr(
+                "✓ Cloud compute ready. You can switch between T4/L4/A100 models in Teach panel. Checkpoints will auto-backup to Google Drive.",
+                "✓ 云端算力已就绪。训练面板支持自由选择 T4/L4/A100 等显卡型号，训练产物自动备份至 Google Drive 云盘。"
+              )}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div style={{ marginBottom: 6, color: "#aab3c0", fontSize: 10 }}>
+              {tr(
+                "Connect your Google account to run fast GPU training using your free or Pro Colab compute units.",
+                "连接你的 Google 账号，即可调度云端免费或 Pro 会员的 GPU 算力点数进行加速训练。"
+              )}
+            </div>
+
+            {authStep === "idle" ? (
+              <button
+                onClick={startColabLogin}
+                disabled={colabBusy}
+                style={{
+                  background: "#243247",
+                  border: "1px solid #7db8d8",
+                  borderRadius: 6,
+                  color: "#cfe4f5",
+                  cursor: colabBusy ? "default" : "pointer",
+                  fontFamily: mono,
+                  fontSize: 11,
+                  padding: "4px 12px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <span>🔗</span>
+                <span>{colabBusy ? tr("generating auth link…", "生成授权链接中…") : tr("Sign in with Google", "登录并授权 Google 账号")}</span>
+              </button>
+            ) : (
+              <div style={{ background: "#11141c", border: "1px solid rgba(125,184,216,0.25)", borderRadius: 6, padding: "8px 10px" }}>
+                <div style={{ color: "#7db8d8", fontSize: 10, fontWeight: 600, marginBottom: 4 }}>
+                  {tr("Step 1: Authorize in browser", "步骤 1：在浏览器中完成授权")}
+                </div>
+                {authUrl && (
+                  <a
+                    href={authUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: "inline-block",
+                      color: "#9fb4d8",
+                      fontSize: 10,
+                      textDecoration: "underline",
+                      marginBottom: 8,
+                    }}
+                  >
+                    {tr("Click here if the Google login tab didn't open ↗", "如果授权页面未自动打开，请点击此处 ↗")}
+                  </a>
+                )}
+                <div style={{ color: "#7db8d8", fontSize: 10, fontWeight: 600, marginBottom: 4 }}>
+                  {tr("Step 2: Paste the authorization code below", "步骤 2：将页面上显示的授权码粘贴在下方")}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    value={colabCode}
+                    onChange={(e) => setColabCode(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && colabCode && !colabBusy && finishColabLogin()}
+                    placeholder="4/0A..."
+                    style={{
+                      flex: 1,
+                      background: "#0a0c10",
+                      border: "1px solid rgba(255,255,255,0.15)",
+                      borderRadius: 4,
+                      color: "#dfe5ee",
+                      fontFamily: mono,
+                      fontSize: 11,
+                      padding: "4px 6px",
+                      outline: "none",
+                    }}
+                  />
+                  <button
+                    onClick={finishColabLogin}
+                    disabled={colabBusy || !colabCode.trim()}
+                    style={{
+                      background: "#243247",
+                      border: "1px solid #7db8d8",
+                      borderRadius: 4,
+                      color: "#cfe4f5",
+                      cursor: colabBusy || !colabCode.trim() ? "default" : "pointer",
+                      opacity: colabBusy || !colabCode.trim() ? 0.5 : 1,
+                      fontFamily: mono,
+                      fontSize: 11,
+                      padding: "3px 8px",
+                    }}
+                  >
+                    {colabBusy ? tr("verifying…", "验证中…") : tr("confirm", "完成绑定")}
+                  </button>
+                </div>
+              </div>
+            )}
+            <div style={{ color: "#566072", fontSize: 10, marginTop: 6 }}>
+              {tr(
+                "credentials stored only on your machine (~/.config/colab-cli/token.json) — never shared.",
+                "凭证仅保存在本机 (~/.config/colab-cli/token.json)，不会发送给任何第三方。"
+              )}
+            </div>
+          </div>
+        )}
+
+        {colabError && <div style={{ color: "#e07a5f", marginTop: 6, fontSize: 10 }}>{colabError}</div>}
+        {killMsg && <div style={{ color: "#7ab87a", marginTop: 6, fontSize: 10 }}>{killMsg}</div>}
+
+        {/* 🚨 紧急防扣费熔断专区 */}
+        <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "10px 0 8px 0" }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(224,122,95,0.08)", border: "1px solid rgba(224,122,95,0.2)", borderRadius: 6, padding: "6px 8px" }}>
+          <div>
+            <div style={{ color: "#e07a5f", fontSize: 10, fontWeight: 600 }}>
+              🛡 {tr("Cost & VM Safety Kill-Switch", "算力防扣费安全熔断")}
+            </div>
+            <div style={{ color: "#8b93a3", fontSize: 9 }}>
+              {tr("Stop all cloud VMs and cut off billing immediately", "强制关停所有云端虚拟机，立即切断计费")}
+            </div>
+          </div>
+          <button
+            onClick={handleKillAll}
+            disabled={colabBusy}
+            style={{
+              background: "#321d1d",
+              border: "1px solid #e07a5f",
+              borderRadius: 4,
+              color: "#e07a5f",
+              cursor: colabBusy ? "default" : "pointer",
+              fontFamily: mono,
+              fontSize: 10,
+              padding: "3px 8px",
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            🛑 {tr("Kill All VMs", "一键关停全部")}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -253,10 +516,10 @@ function CpuSparkline({ samples }: { samples: number[] }) {
   );
 }
 
-function trainFpsLabel(fps: number | null): string {
+function trainFpsLabel(fps: number | null, isZh = false): string {
   if (fps == null) return "—";
-  if (fps >= 1000) return `${(fps / 1000).toFixed(1)}k steps/s`;
-  return `${Math.round(fps)} steps/s`;
+  if (fps >= 1000) return `${(fps / 1000).toFixed(1)}k ${isZh ? "步/秒" : "steps/s"}`;
+  return `${Math.round(fps)} ${isZh ? "步/秒" : "steps/s"}`;
 }
 
 /** Finished-run badge for the stats strip's "train …" cell. */
@@ -297,15 +560,16 @@ const STALL_MS = 3000;
 /** The corner badge. "live" has to mean frames are ARRIVING, not merely that
  *  the WebSocket is open — a lab whose duck loop died kept the socket up and
  *  the badge sat green over a frozen, empty scene. */
-function linkBadge(connected: boolean, stalled: boolean) {
+function linkBadge(connected: boolean, stalled: boolean, isZh = false) {
   if (!connected)
-    return { dot: "○", label: "offline", color: "#e07a5f",
-             title: "not connected to the lab" };
+    return { dot: "○", label: isZh ? "离线" : "offline", color: "#e07a5f",
+             title: isZh ? "未连接到实验室" : "not connected to the lab" };
   if (stalled)
-    return { dot: "●", label: "stalled", color: "#d8c97d",
-             title: "connected, but no frames for 3s — the lab is still there, "
-                    + "its duck loop may have stopped" };
-  return { dot: "●", label: "live", color: "#7dd87d", title: "frames arriving" };
+    return { dot: "●", label: isZh ? "卡顿" : "stalled", color: "#d8c97d",
+             title: isZh ? "已连接，但 3 秒未收到画面，仿真循环可能已停止"
+               : "connected, but no frames for 3s — the lab is still there, its duck loop may have stopped" };
+  return { dot: "●", label: isZh ? "实时" : "live", color: "#7dd87d",
+           title: isZh ? "正在接收画面" : "frames arriving" };
 }
 
 /** One duck's forward speed: "0.21 / 0.45" — achieved over asked-for, m/s.
@@ -386,15 +650,16 @@ export function Hud({
   connected: boolean;
   error: string | null;
 }) {
+  const { isZh, tr } = useI18n();
   const [frame, setFrame] = useState<Frame | null>(null);
   // Collapsed ⇄ open state of the top-left stats panel (the bottom-left cmd
   // bar is unaffected). Persisted like the PolicyPanel/TeachPanel toggles.
   // Hooks below run regardless of `open` so the poll keeps hook order stable.
   const [open, setOpen] = useState(() => loadJSON("hudOpen", true));
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpen = useCloudSettingsOpen();
   // Stable: this HUD re-renders ~4x/s, and an inline arrow would make the
   // modal's keyboard-gate effect tear down and re-run on every one of them.
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => setCloudSettingsOpen(false), []);
   // Same treatment for the bottom-left camera-help bar — it's pure reference
   // text, so folding it away frees corner space (and the Next dev badge sits
   // right under it in dev). Starts collapsed: first sight of the scene should
@@ -471,7 +736,7 @@ export function Hud({
   const training = frame?.training ?? null;
   const restarting = training?.restarting ?? false;
   const rowKeys = frame ? duckRowKeys(frame.ducks) : [];
-  const link = linkBadge(connected, stalled);
+  const link = linkBadge(connected, stalled, isZh);
   // Stage selection (click a duck / a row): the selected row echoes the amber
   // ring under the duck, and Delete removes it.
   const selectedDuck = useSelectedDuck();
@@ -498,13 +763,13 @@ export function Hud({
             alignItems: "center",
           }}
         >
-          <span style={{ flex: 1 }}>🦆 duck lab</span>
+          <span style={{ flex: 1 }}>🦆 {tr("duck lab", "鸭子实验室")}</span>
           <span style={{ color: link.color }} title={link.title}>
             {link.dot} {link.label}
           </span>
           <button
             onClick={() => setLabels((v) => !v)}
-            title={labels ? "hide duck name labels" : "show duck name labels"}
+            title={labels ? tr("hide duck name labels", "隐藏鸭子名称") : tr("show duck name labels", "显示鸭子名称")}
             style={{
               background: "none",
               border: "none",
@@ -521,24 +786,55 @@ export function Hud({
           >
             🏷
           </button>
+          {training?.status === "training" && training?.backend === "colab" && (
+            <button
+              onClick={async () => {
+                if (confirm(tr("Stop Colab training and kill cloud GPU immediately?", "确定立即停止 Colab 训练并释放云端 GPU 虚拟机？"))) {
+                  await killAllColabSessions();
+                }
+              }}
+              title={tr("Emergency kill cloud GPU to stop billing", "紧急释放云端 GPU 停止计费")}
+              style={{
+                background: "rgba(224, 122, 95, 0.2)",
+                border: "1px solid #e07a5f",
+                color: "#e07a5f",
+                borderRadius: 4,
+                cursor: "pointer",
+                fontFamily: mono,
+                fontSize: 10,
+                padding: "1px 5px",
+                marginLeft: 4,
+                fontWeight: 600,
+              }}
+            >
+              🛑 {tr("Kill GPU", "释放GPU")}
+            </button>
+          )}
           <button
-            onClick={() => setSettingsOpen(true)}
-            title="settings — connect Hugging Face for real GPU training"
+            onClick={() => setCloudSettingsOpen(true)}
+            title={tr("Cloud compute accounts — Google Colab & Hugging Face", "云算力账户—Google Colab 与 Hugging Face")}
             style={{
-              background: "none",
-              border: "none",
-              color: "#8b93a3",
+              background: "rgba(125,184,216,0.12)",
+              border: "1px solid rgba(125,184,216,0.3)",
+              borderRadius: 4,
+              color: "#cfe4f5",
               cursor: "pointer",
               fontFamily: mono,
-              fontSize: 12,
-              padding: "0 4px",
+              fontSize: 10,
+              padding: "2px 7px",
+              marginLeft: 6,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 3,
+              whiteSpace: "nowrap",
             }}
           >
-            ⚙
+            <span>☁</span>
+            <span>{tr("Cloud Accounts", "云算力账户")}</span>
           </button>
           <button
             onClick={() => setOpen(false)}
-            title="collapse"
+            title={tr("collapse", "收起")}
             style={{
               background: "none",
               border: "none",
@@ -558,16 +854,16 @@ export function Hud({
           <table style={{ borderSpacing: "10px 1px", marginLeft: -10 }}>
             <thead>
               <tr style={{ color: "#8b93a3", textAlign: "left" }}>
-                <th>policy</th>
+                <th>{tr("policy", "策略")}</th>
                 <th
                   title="forward speed in metres per second, averaged over the
  last half second — what it manages / what it was asked for"
                 >
                   m/s
                 </th>
-                <th>t</th>
-                <th>falls</th>
-                <th>r̄</th>
+                <th>{tr("t", "时间")}</th>
+                <th>{tr("falls", "跌倒")}</th>
+                <th title={tr("average reward", "平均奖励")}>r̄</th>
                 <th />
               </tr>
             </thead>
@@ -612,10 +908,10 @@ export function Hud({
                       label="＋"
                       title={
                         atHelperCap
-                          ? `helper cap (${helperCap})`
+                          ? tr(`helper cap (${helperCap})`, `辅助鸭上限（${helperCap}）`)
                           : restarting
-                            ? "loading…"
-                            : "add a helper — another viewer of the same live policy (does not change training speed)"
+                            ? tr("loading…", "加载中…")
+                            : tr("add a helper — another viewer of the same live policy (does not change training speed)", "添加辅助鸭—展示同一实时策略（不影响训练速度）")
                       }
                       color="#7db8d8"
                       disabled={restarting || atHelperCap}
@@ -626,10 +922,10 @@ export function Hud({
                       label="✕"
                       title={
                         isHelper && restarting
-                          ? "restarting…"
+                          ? tr("restarting…", "重启中…")
                           : isHelper
-                            ? "remove this helper"
-                            : "remove this duck from the lab"
+                            ? tr("remove this helper", "移除这只辅助鸭")
+                            : tr("remove this duck from the lab", "从实验室移除这只鸭子")
                       }
                       color="#e0a08f"
                       disabled={isHelper && restarting}
@@ -649,7 +945,7 @@ export function Hud({
                       if ((e.target as HTMLElement).closest("button")) return;
                       setSelectedDuck(isSelected ? null : d.id);
                     }}
-                    title={isSelected ? "selected — ⌫ removes it" : "click to select"}
+                    title={isSelected ? tr("selected — ⌫ removes it", "已选中—按 ⌫ 移除") : tr("click to select", "点击选中")}
                     style={{ cursor: "pointer" }}
                   >
                     <td
@@ -661,6 +957,13 @@ export function Hud({
                     >
                       {isSelected ? "▸ " : ""}
                       {name}
+                      {d.hold && (
+                        <div style={{ color: d.hold.success ? "#7dd87d" : "#e8b24a", fontSize: 11 }}>
+                          {tr(d.name.includes("single_leg_hop") || d.name.includes("long_jump") ? "two-foot hopping" : "single-leg hold",
+                              d.name.includes("single_leg_hop") ? "单脚跳跃" : (d.name.includes("long_jump") ? "双脚连续跳跃" : "单脚保持"))} {d.name.includes("long_jump") ? `${Math.round(d.hold.seconds)} / ${Math.round(d.hold.target)} 次` : `${d.hold.seconds.toFixed(2)} / ${d.hold.target.toFixed(0)}s`}
+                          {d.hold.success ? tr(" · achieved this episode ✓", " · 本回合已达标 ✓") : ""}
+                        </div>
+                      )}
                     </td>
                     <td
                       style={{
@@ -707,7 +1010,7 @@ export function Hud({
               cpu {cpuBar(stats.cpu)} {Math.round(stats.cpu)}%
             </span>
             <CpuSparkline samples={cpuHistory.current} />
-            <span>· mem {Math.round(stats.mem)}%</span>
+            <span>· {tr("mem", "内存")} {Math.round(stats.mem)}%</span>
             {/* live steps/s only while the trainer actually runs — a finished
                 job kept showing its last rate, which read as "still going"
                 (and the server only nulls trainFps after its next restart).
@@ -718,13 +1021,17 @@ export function Hud({
             {training &&
               (training.status === "training" || training.restarting ? (
                 <span>
-                  · train {trainFpsLabel(stats.trainFps)}
+                  · {tr("train", "训练")} {trainFpsLabel(stats.trainFps, isZh)}
                   {training.progress.overallElapsed != null &&
                     ` · ${abbrevElapsed(training.progress.overallElapsed)}`}
                 </span>
               ) : (
                 <span style={{ color: "#566072" }}>
-                  · train {TRAIN_STATE_BADGE[training.status]}
+                  · {tr("train", "训练")} {{
+                    done: tr("✔ done", "✔ 已完成"),
+                    stopped: tr("■ stopped", "■ 已停止"),
+                    failed: tr("✗ failed", "✗ 失败"),
+                  }[training.status]}
                   {training.progress.overallElapsed != null &&
                     ` · ${abbrevElapsed(training.progress.overallElapsed)}`}
                 </span>
@@ -754,7 +1061,7 @@ export function Hud({
             backdropFilter: "blur(6px)",
           }}
         >
-          🦆 duck lab{" "}
+          🦆 {tr("duck lab", "鸭子实验室")}{" "}
           <span style={{ color: link.color }} title={link.title}>
             {link.dot}
           </span>
@@ -775,17 +1082,19 @@ export function Hud({
                   bottom edge — so the last line is the one the `next dev`
                   badge sits on top of. Camera list keeps the tail. */}
               <div style={{ color: "#a5adbb", marginBottom: 3 }}>
-                ↺ R restart sim — every duck&apos;s episode from zero
+                {tr("↺ R restart sim — every duck's episode from zero", "↺ R 重启仿真—所有鸭子从第 0 步开始")}
               </div>
               <div style={{ color: "#a5adbb", marginBottom: 3 }}>
-                🖱 click a duck to select · ⌫ remove it · esc deselect
+                {tr("🖱 click a duck to select · ⌫ remove it · esc deselect", "🖱 点击鸭子选中 · ⌫ 移除 · Esc 取消选中")}
               </div>
-              🎥 drag orbit · scroll zoom · 2-finger swipe slide · A/D slide ·
-              W/S·↑↓ dolly · ←/→ orbit · Q/E up·down · Shift+R reset view
+              {tr(
+                "🎥 drag orbit · scroll zoom · 2-finger swipe slide · A/D slide · W/S·↑↓ dolly · ←/→ orbit · Q/E up·down · Shift+R reset view",
+                "🎥 拖动旋转 · 滚轮缩放 · 双指滑动平移 · A/D 平移 · W/S·↑↓ 推进 · ←/→ 旋转 · Q/E 升降 · Shift+R 重置视角"
+              )}
             </div>
             <button
               onClick={() => setCmdBarOpen(false)}
-              title="collapse"
+              title={tr("collapse", "收起")}
               style={{
                 background: "none",
                 border: "none",
@@ -802,7 +1111,7 @@ export function Hud({
           </div>
           {!pageFocused && (
             <div style={{ color: "#566072", marginTop: 3 }}>
-              ⌨ click the scene to enable keys
+              ⌨ {tr("click the scene to enable keys", "点击场景以启用键盘")}
             </div>
           )}
         </div>
@@ -811,7 +1120,7 @@ export function Hud({
         // squats in the very corner during `next dev`.
         <button
           onClick={() => setCmdBarOpen(true)}
-          title="keyboard controls"
+          title={tr("keyboard controls", "键盘操作")}
           style={{
             position: "absolute",
             zIndex: 20,
@@ -828,7 +1137,7 @@ export function Hud({
             backdropFilter: "blur(6px)",
           }}
         >
-          🎥 controls
+          🎥 {tr("controls", "操作说明")}
         </button>
       )}
     </>

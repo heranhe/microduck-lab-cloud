@@ -1,9 +1,16 @@
-# Microduck Lab 🦆: RL experimentation on your Mac
+# Microduck Lab Cloud 🦆☁️
+
+Advanced reinforcement learning experimentation, cloud training workflows, and interactive 3D simulation suite for the [Microduck](https://pollen-robotics.com/microduck) bipedal robot.
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org/)
+
+> **Microduck Lab Cloud** extends the [microduck-lab](https://github.com/jonathanhawkins/microduck-lab) research harness with expanded RL behavior libraries (White Crane, Single-Leg Hop, Jump Turn, Long Jump), bilingual (EN/CN) interactive Web 3D visualization, automated goal-based curriculum training, and cloud/Colab runner support.
 
 Train reinforcement-learning policies for the
 [Microduck](https://pollen-robotics.com/microduck), Pollen Robotics'
-open-source ~25 cm bipedal robot, **on an ordinary Apple Silicon Mac with no
-CUDA GPU**. Watch every policy walk, learn, and backflip live in your browser.
+open-source ~25 cm bipedal robot, **on Apple Silicon Macs or Cloud GPUs**. Watch every policy walk, learn, and perform complex agile tricks live in your browser.
 
 ![The duck lab viewer: nine ducks running live, mid-backflip and mid-headstand](docs/media/viewer.png)
 
@@ -13,7 +20,7 @@ CUDA GPU**. Watch every policy walk, learn, and backflip live in your browser.
 
 The official [microduck_rl](https://github.com/pollen-robotics/microduck_rl)
 stack trains through MuJoCo Warp and needs a CUDA GPU. This project runs on the
-laptop you already have. It's a prototyping loop for reward design, curricula,
+laptop you already have or cloud instances. It's a rapid prototyping loop for reward design, curricula,
 and new tricks, built on the same MJCF robot model, the same 61-obs /
 14-action deployment contract, and the same 50 Hz timing. A behavior you invent
 here ports straight to the official stack for the final sim2real run, and the
@@ -25,9 +32,17 @@ side-by-side checkouts (see setup).
 ## What's in the box
 
 - **`microduck_local/`**: CPU-MuJoCo + Stable Baselines 3 PPO harness
-  - `train-walk` / `train-behavior`: velocity-command walking and a library of
+  - `train-walk` / `train-behavior`: velocity-command walking and an expanded library of
     teachable tricks, with mjlab-distilled rewards, symmetry augmentation,
     obs normalization, and a penalty-sign guard
+  - **✨ Expanded Agile Behaviors**:
+    - 🕊️ `white_crane`: Dynamic one-leg posture balance and sustained crane stand
+    - 🦿 `single_leg_hop`: Continuous dynamic hopping on a single leg with landing compliance
+    - 🔄 `jump_turn`: Agile in-air yaw rotational jump and steady re-landing
+    - 🦘 `long_jump`: High-thrust forward leap with touchdown stability
+  - **☁️ Cloud & Optimization Pipelines**:
+    - `colab_runner.py`: Streamlined pipeline for remote execution on Google Colab and cloud compute
+    - `goal_training.py` & `search_hop.py`: Automated curriculum parameter search and reward tuning
   - Two actuator models: fast linearized XML servos, or the honest
     BAM XL330 voltage model (numba-fused) for maneuvers that saturate servos
   - `export-walk`: ONNX export with the obs normalizer baked in
@@ -38,6 +53,7 @@ side-by-side checkouts (see setup).
   - `bench-walk` / `bench-envs`: find the right worker count for *your* machine
   - `duck-lab`: the streaming backend that drives the browser viewer
 - **`duck-viewer/`**: Next.js + react-three-fiber viewer
+  - **🌐 Bilingual UI (EN / 中文)**: Instant language switching for telemetry, panels, and trick recipes
   - Many ducks side by side, live over WebSocket at 25 Hz; drag policy chips
     onto ducks to hot-swap brains mid-stride
   - **🎓 Teach panel**: ask for one of nine built-in tricks ("stand on one
@@ -226,7 +242,12 @@ behavior works here, port the env design to an mjlab cfg in `microduck_rl` and
 retrain on GPU (that repo's `AGENTS.md` is the sim2real recipe). Everything
 here keeps the deployment contract so that port is mechanical.
 
+## Acknowledgements & Upstream
+
+- **[microduck-lab](https://github.com/jonathanhawkins/microduck-lab)** by Jonathan Hawkins: The original CPU-MuJoCo training harness and interactive Next.js viewer architecture.
+- **[microduck](https://github.com/pollen-robotics/microduck)** & **[microduck_rl](https://github.com/pollen-robotics/microduck_rl)** by Pollen Robotics: The foundational Microduck biped robot hardware design, MJCF models, and official RL stack.
+
 ## License
 
-Apache-2.0 (same as the upstream Microduck repos). Not affiliated with or
-endorsed by Pollen Robotics; "Microduck" is their project.
+This project is licensed under the [Apache License 2.0](LICENSE) (consistent with upstream Microduck repositories).  
+Not affiliated with or endorsed by Pollen Robotics. "Microduck" is a trademark of Pollen Robotics.

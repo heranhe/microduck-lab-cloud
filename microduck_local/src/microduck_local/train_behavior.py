@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -55,6 +56,10 @@ from .ppo_hparams import (
 )
 from .train import RUNS_DIR
 from .vec_env import as_sb3_vec_env, make_vec_env
+from .goal_training import (
+    EVAL_INTERVAL, MAX_GOAL_STEPS, TERMINAL_GOAL_STATES, GOAL_HOLD_SECONDS,
+    evaluate_policy, new_goal, record_evaluation,
+)
 
 
 # Linear learning-rate decay. EVERY run so far has peaked and then come
@@ -131,7 +136,9 @@ def _progress_callback_cls(BaseCallback):
         """
 
         def __init__(self, out: Path, venv, total_steps: int,
-                     snap_steps: int = SNAP_STEPS, start_steps: int = 0):
+                     snap_steps: int = SNAP_STEPS, start_steps: int = 0,
+                     until_success: bool = False, weights: dict | None = None,
+                     behavior_id: str = "one_leg_5s"):
             super().__init__()
             self.out = out
             self.venv = venv
@@ -140,6 +147,7 @@ def _progress_callback_cls(BaseCallback):
             self.term_sums: dict[str, float] = {}
             self.term_steps = 0
             self.ep_lens: list[int] = []
+            self.hold_results: list[tuple[bool, float]] = []
             # Anchor to the warm-start step so a resumed run doesn't burn its first
             # rollouts re-snapshotting to catch a counter it inherited.
             self.next_snap = start_steps + snap_steps
@@ -147,11 +155,56 @@ def _progress_callback_cls(BaseCallback):
             self.t0 = time.time()
             self._prev_steps = start_steps
             self._prev_t = self.t0
+            self.goal = new_goal(behavior_id) if until_success else None
+            if until_success and (out / "goal.json").exists():
+                self.goal = json.loads((out / "goal.json").read_text())
+            self.goal_weights = weights
+            # First certify the donor model, then every 500k new steps.
+            self.next_eval = (self.goal["steps"] + EVAL_INTERVAL
+                              if self.goal and self.goal["round"] else start_steps)
+
+        def _publish_goal(self) -> None:
+            tmp = self.out / "goal.json.tmp"
+            tmp.write_text(json.dumps(self.goal))
+            tmp.replace(self.out / "goal.json")
+            with open(self.out / "progress.jsonl", "a") as f:
+                f.write(json.dumps({"steps": int(self.num_timesteps),
+                                    "total": self.total_steps,
+                                    "goal": self.goal}) + "\n")
+
+        def _evaluate_goal(self) -> None:
+            self._snapshot()
+            self.goal["status"] = "evaluating"
+            self._publish_goal()
+            try:
+                report = evaluate_policy(self.out / "live.onnx",
+                                         self.goal["round"], self.goal_weights,
+                                         self.goal.get("behavior", "one_leg_5s"))
+                self.goal = record_evaluation(self.goal, report, int(self.num_timesteps))
+                with open(self.out / "evaluations.jsonl", "a") as f:
+                    f.write(json.dumps(self.goal) + "\n")
+            except Exception as exc:
+                self.goal.update(status="error", error=str(exc))
+            self.next_eval = int(self.num_timesteps) + EVAL_INTERVAL
+            self.next_snap = int(self.num_timesteps) + self.snap_steps
+            self._publish_goal()
 
         def _on_step(self) -> bool:
+            if self.goal is not None:
+                if self.goal["status"] in TERMINAL_GOAL_STATES:
+                    return False
+                if self.num_timesteps >= self.next_eval:
+                    # Run BEFORE a PPO update. Returning False preserves the
+                    # exact certified parameters/normalizer for final export.
+                    self._evaluate_goal()
+                    if self.goal["status"] in TERMINAL_GOAL_STATES:
+                        return False
             for info in self.locals.get("infos", []):
                 sums = info.get("episode_rewards")
                 if sums:
+                    if "is_success" in info:
+                        self.hold_results.append((bool(info["is_success"]),
+                                                  float(info["best_hold_s"])))
                     for k, v in sums.items():
                         self.term_sums[k] = self.term_sums.get(k, 0.0) + v
                     ep = info.get("episode")
@@ -232,6 +285,11 @@ def _progress_callback_cls(BaseCallback):
                 "sps": round(sps),
             }
             with open(self.out / "progress.jsonl", "a") as f:
+                if self.hold_results:
+                    line["success_rate"] = float(np.mean([s for s, _ in self.hold_results]))
+                    line["best_hold_s"] = max(h for _, h in self.hold_results)
+                    line["mean_best_hold_s"] = float(np.mean([h for _, h in self.hold_results]))
+                    self.hold_results.clear()
                 f.write(json.dumps(line) + "\n")
             self.term_sums, self.term_steps, self.ep_lens = {}, 0, []
             if self.num_timesteps >= self.next_snap:
@@ -287,6 +345,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--weights-json", default=None,
                     help='JSON dict of reward-weight overrides, e.g. '
                          '\'{"spin_fast": 3.0}\' — keys are RewardTerm keys')
+    ap.add_argument("--until-success", action="store_true",
+                    help="stable-pose goals: certify ONNX on 10 trials; stop at 9 successes")
     ap.add_argument("--lr-start", type=float, default=None,
                     help="initial learning rate (decays linearly to --lr-end). "
                          "Lower it hard when fine-tuning a policy that already "
@@ -329,8 +389,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.until_success and (args.behavior not in GOAL_HOLD_SECONDS or args.overlap):
+        raise ValueError("--until-success requires a supported stable-pose goal without overlapping updates")
 
     b = BEHAVIORS[args.behavior]
+    if (b.id == 'white_crane' or (b.id == 'single_leg_hop'
+            and os.environ.get('MICRODUCK_HOP_RECOVERY') == '1')) and not args.init_from:
+        if args.lr_start is None:
+            args.lr_start = 3e-4
+        if args.lr_end is None:
+            args.lr_end = 3e-5
     # Resolved BEFORE anything is written or built: behavior.json, the warm-start
     # path and the fresh-model path must all agree on one number.
     symmetry_coef = symmetry_coef_for(b, args.symmetry_coef)
@@ -346,7 +414,12 @@ def main() -> None:
     # train under a different scorecard than the one on record.
     (out / "behavior.json").write_text(json.dumps(
         {"behavior": b.id, "steps": steps, "weights": weights,
-         "symmetry_coef": symmetry_coef, "desired_kl": args.desired_kl}))
+         "spawn_env": {k: os.environ[k] for k in
+                       ('MICRODUCK_HOP_RECOVERY', 'MICRODUCK_HOP_GOAL_HOPS',
+                        'MICRODUCK_SPAWN_FAMILY_PROBS', 'MICRODUCK_ACTUATOR') if k in os.environ},
+         "recipe_weights": {term.key: weights.get(term.key, term.weight) for term in b.terms},
+         "symmetry_coef": symmetry_coef, "desired_kl": args.desired_kl,
+         "until_success": args.until_success}))
 
     # Fork workers BEFORE importing torch. A torch-initialized parent has
     # OpenMP/Accelerate thread pools; forking them deadlocks on macOS.
@@ -438,6 +511,19 @@ def main() -> None:
             LR_START if resume else 2e-4)
         lr1 = args.lr_end if args.lr_end is not None else (
             LR_END if resume else 3e-5)
+        # Crane shaping is refinement of an acquired single-leg entry. The
+        # 2e-4 continuation lost it (40aaac); use small updates, not new rewards.
+        if b.id == 'white_crane' and not resume:
+            if args.lr_start is None:
+                lr0 = 3e-5
+            if args.lr_end is None:
+                lr1 = 1e-5
+        if args.until_success and resume:
+            if args.lr_start is None:
+                lr0 = float(model.policy.optimizer.param_groups[0]["lr"])
+            if args.lr_end is None:
+                lr1 = min(lr0, LR_END)
+            model._ent0 = float(model.ent_coef)
         model.lr_schedule = linear_decay(lr0, lr1)
         model.desired_kl = (args.desired_kl
                             if args.desired_kl and args.desired_kl > 0 else None)
@@ -502,15 +588,55 @@ def main() -> None:
             overlap_update=args.overlap,
             update_device=update_device,
         )
+    if (b.id == 'white_crane' or (b.id == 'single_leg_hop'
+            and os.environ.get('MICRODUCK_HOP_RECOVERY') == '1')) and not args.init_from:
+        from .behaviors import WHITE_CRANE_POSE, HOP_READY_POSE
+        from . import contract as C
+        initial_pose = HOP_READY_POSE if b.id == 'single_leg_hop' else WHITE_CRANE_POSE
+        # Fresh policy, not the old shuffling checkpoint. A calibrated target
+        # initializes its mean; PPO still controls all 14 joints independently.
+        with torch.no_grad():
+            model.policy.action_net.weight.zero_()
+            model.policy.action_net.bias.copy_(torch.as_tensor(
+                initial_pose-C.DEFAULT_POSE, dtype=torch.float32))
+            model.policy.log_std.fill_(-1.8)
+        model.ent_coef = .003
+        model._ent0 = .003
     start = int(model.num_timesteps) if resume else 0
     cb = ProgressCallback(out, venv, steps, snap_steps=args.snap_steps,
-                          start_steps=start)
+                          start_steps=start, until_success=args.until_success,
+                          weights=weights, behavior_id=b.id)
     # SB3 treats total_timesteps as ADDITIONAL steps when reset_num_timesteps
     # is False (_setup_learn adds num_timesteps back in), so subtract to keep
     # --steps an absolute target across warm restarts. Pinned by
     # tests/test_train_resume.py.
     remaining = max(steps - start, 0)
-    if remaining > 0:
+    if args.until_success:
+        # A practice budget is a block, not success. Keep the same model and
+        # normalizer across extensions; never restart the exploration schedule.
+        target = min(max(steps, start + 1), MAX_GOAL_STEPS)
+        cb.init_callback(model)
+        cb.num_timesteps = start
+        cb.total_steps = target
+        cb._publish_goal()
+        first = True
+        while cb.goal["status"] not in TERMINAL_GOAL_STATES:
+            model.learn(total_timesteps=max(target - (start if first else model.num_timesteps), 1),
+                        callback=cb, progress_bar=False,
+                        reset_num_timesteps=not resume if first else False)
+            first = False
+            if cb.goal["status"] in TERMINAL_GOAL_STATES:
+                break
+            if model.num_timesteps >= MAX_GOAL_STEPS:
+                cb._evaluate_goal()  # last chance to certify at the resource ceiling
+                break
+            target = min(int(model.num_timesteps) + steps, MAX_GOAL_STEPS)
+            cb.total_steps = target
+            # Hold the attained cool LR/entropy instead of re-heating on each block.
+            model.lr_schedule = linear_decay(model.lr_schedule(0.0), model.lr_schedule(0.0))
+            model._ent0 = float(model.ent_coef)
+            cb._publish_goal()
+    elif remaining > 0:
         model.learn(total_timesteps=remaining, callback=cb, progress_bar=False,
                     reset_num_timesteps=not resume)
 
@@ -519,12 +645,20 @@ def main() -> None:
     # which scale() produces when a helper is added near the end of a stage)
     # cb has no .model and _snapshot raises AttributeError, failing the job and
     # stalling a staged chain.
-    if remaining > 0:
+    if args.until_success:
+        # Keep the exact bytes whose hash is in goal.json, not a fresh export.
+        shutil.copyfile(out / "live.onnx", out / "policy.onnx")
+    elif remaining > 0:
         cb._snapshot()  # final live.onnx + model.zip + vecnormalize.pkl
-    from .export_onnx import export
-    export(out, out / "policy.onnx")
+    if not args.until_success:
+        from .export_onnx import export
+        export(out, out / "policy.onnx")
     with open(out / "progress.jsonl", "a") as f:
-        f.write(json.dumps({"steps": steps, "total": steps, "done": True}) + "\n")
+        final = ({"steps": int(model.num_timesteps), "total": cb.total_steps,
+                  "done": cb.goal["status"] == "passed", "goal": cb.goal}
+                 if args.until_success else {"steps": steps, "total": steps, "done": True})
+        f.write(json.dumps(final) + "\n")
+    venv.close()
     print(f"done: {out}")
 
 

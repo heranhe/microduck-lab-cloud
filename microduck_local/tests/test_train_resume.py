@@ -103,3 +103,18 @@ def test_export_ships_the_final_policy(tmp_path):
     assert done.get("done") is True
     final = PPO.load(str(run_dir / "model"), device="cpu")
     assert final.num_timesteps >= 12000
+
+
+def test_white_crane_finetune_is_cool_and_cli_still_wins(tmp_path):
+    from stable_baselines3.common.save_util import load_from_zip_file
+    base=["white_crane", "--envs", "1", "--steps", "1"]
+    _run([*base, "--run-name", "donor"], tmp_path)
+    _run([*base, "--run-name", "cool", "--init-from", str(tmp_path/"donor")], tmp_path)
+    data,_,_=load_from_zip_file(tmp_path/"cool"/"model.zip", device="cpu")
+    assert abs(data['lr_schedule'](1)-3e-5) < 1e-12
+    assert abs(data['lr_schedule'](0)-1e-5) < 1e-12
+    _run([*base, "--run-name", "explicit", "--init-from", str(tmp_path/"donor"),
+          "--lr-start", "0.00007", "--lr-end", "0.00002"], tmp_path)
+    data,_,_=load_from_zip_file(tmp_path/"explicit"/"model.zip", device="cpu")
+    assert abs(data['lr_schedule'](1)-7e-5) < 1e-12
+    assert abs(data['lr_schedule'](0)-2e-5) < 1e-12

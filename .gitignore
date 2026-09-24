@@ -31,3 +31,9 @@ microduck_local/farm-state.json
 microduck_local/farm-server.log
 # backend log (restart.sh writes it)
 microduck_local/lab-server.log
+
+# Local training runtime artifacts and scratch
+*.log
+*.pid
+microduck_local/*.ses
+microduck_local/scratch/

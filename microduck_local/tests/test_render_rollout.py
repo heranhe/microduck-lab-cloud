@@ -50,6 +50,24 @@ def test_env_overrides_parse():
             parse_env_overrides([bad])
 
 
+@pytest.mark.parametrize("extra,expected", [([], 100006),
+                                           (["--env-seed", "100000"], 100000)])
+def test_replay_can_preserve_cohort_battery_seed(monkeypatch, tmp_path, extra, expected):
+    from microduck_local import render_rollout as render
+
+    monkeypatch.setattr("sys.argv", ["render_rollout", "--policy", "limp",
+                                    "--behavior", "single_leg_hop", "--out", str(tmp_path),
+                                    "--seed", "100006", *extra])
+
+    def build(behavior, overrides, *, seed):
+        assert seed == expected
+        raise RuntimeError("seed checked before creating renderer")
+
+    monkeypatch.setattr(render, "build_env", build)
+    with pytest.raises(RuntimeError, match="seed checked"):
+        render.main()
+
+
 def test_sheet_indices_span_the_whole_episode():
     """The last frame is where a trick either landed or did not — it must never
     be sampled away, and the samples must not repeat."""

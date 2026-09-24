@@ -38,6 +38,7 @@ import { pushToast, Toasts } from "./Toasts";
 import { AnimPanel } from "./AnimPanel";
 import { RecordPanel } from "./RecordPanel";
 import { PoseDuck } from "./PoseDuck";
+import { LanguageToggle } from "./LanguageToggle";
 
 function gridOffsets(n: number, spacing = 0.65): [number, number][] {
   const cols = Math.ceil(Math.sqrt(n));
@@ -142,12 +143,13 @@ const HOME_CAM = { p: [1.2, 0.7, 1.4] as const, t: [0, 0.12, 0] as const };
 /** Inside-the-Canvas helper: integrates held camera motions × dt every frame
  *  — smooth game-editor flow (truck/dolly/orbit rates scale with distance so
  *  the feel is constant whether you're nose-close or across the room). */
-function CameraKeys() {
+function CameraKeys({ clientRef }: { clientRef: React.RefObject<LabClient | null> }) {
   const controls = useThree((s) => s.controls) as unknown as ControlsLike | null;
   const camera = useThree((s) => s.camera);
   const sph = useMemo(() => new THREE.Spherical(), []);
   const offset = useMemo(() => new THREE.Vector3(), []);
   const right = useMemo(() => new THREE.Vector3(), []);
+  const framedRun = useRef<string | null>(null);
   useFrame((_, dtRaw) => {
     // Drain the swipe impulse EVERY frame (even when unused/discarded) so a
     // burst can never pool up and teleport the view later — idle stays idle.
@@ -159,6 +161,18 @@ function CameraKeys() {
     if (capPhase === "framing" || capPhase === "recording") {
       takeReset();
       return;
+    }
+    const frame = clientRef.current?.frame;
+    const trainee = frame?.ducks.find((d) => d.id === "trainee");
+    const run = frame?.training?.runName ?? trainee?.id;
+    const trunk = trainee?.bodies[1];
+    if (run && trunk && framedRun.current !== run) {
+      // Reframe once per run, then leave orbit/zoom under the user's control.
+      framedRun.current = run;
+      controls.target.set(trunk[0], trunk[2] + 0.04, -trunk[1]);
+      camera.position.copy(controls.target).add(new THREE.Vector3(0.65, 0.35, 0.75));
+      camera.lookAt(controls.target);
+      controls.update?.();
     }
     if (takeReset()) {
       camera.position.set(...HOME_CAM.p);
@@ -677,10 +691,11 @@ export default function Viewer() {
           zoomSpeed={0.4}
         />
         <CameraPersistence />
-        <CameraKeys />
+        <CameraKeys clientRef={clientRef} />
         <Snapshotter />
       </Canvas>
       <Hud clientRef={clientRef} connected={connected} error={error} />
+      <LanguageToggle />
       <RecordPanel clientRef={clientRef} />
       <PolicyPanel clientRef={clientRef} />
       <TeachPanel clientRef={clientRef} />

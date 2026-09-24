@@ -37,6 +37,13 @@ body {
   margin: 0;
 }
 
+/* Next.js owns this development-only portal, so it cannot use Duck Lab's
+   translations. Keep it available in English mode and out of the way in
+   Chinese mode. */
+html[lang="zh-CN"] nextjs-portal {
+  display: none !important;
+}
+
 a {
   color: inherit;
   text-decoration: none;

@@ -42,6 +42,7 @@ export interface DuckFrame {
   policy?: string | null;
   falls: number;
   step: number;
+  hold?: { seconds: number; target: number; success: boolean } | null;
   rew: number;
   /** Forward speed in m/s, in the duck's HEADING frame, averaged over the
    *  last ~0.5 s of control steps (server: Duck.forward_speed). null for the
@@ -109,6 +110,21 @@ export interface BehaviorCard {
   availableTerms?: TermCard[];
 }
 export interface TrainingProgress {
+  goal?: {
+    status: "training" | "evaluating" | "passed" | "stalled" | "limit" | "error";
+    round: number;
+    steps: number;
+    trials: number;
+    required: number;
+    hold_seconds: number;
+    eval_interval: number;
+    max_steps: number;
+    stall_evaluations: number;
+    stale: number;
+    successes?: number;
+    best_hold_s?: number;
+    error?: string;
+  };
   steps?: number;
   total?: number;
   ep_rew?: number;
@@ -168,6 +184,16 @@ export interface TrainingPayload {
   helpers: number;
   maxHelpers?: number; // hard cap (server DUCK_MAX_HELPERS; warns past the CPU sweet spot)
   restarting: boolean; // true while a helper spawn/remove warm-restarts the trainer
+  /** 算力来源: "local" | "colab" | "hf" */
+  backend?: "local" | "colab" | "hf";
+  backendTitle?: string;
+  hourlyRate?: string;
+  estimatedCost?: string;
+  elapsedSeconds?: number;
+  taskId?: string;
+  gpuType?: string;
+  actualGpu?: string;
+  driveBackup?: string;
 }
 
 export interface Frame {
@@ -214,6 +240,14 @@ export interface HfSettings {
   masked?: string;
 }
 
+/** ☁ Google Colab 算力设置 — 通过已安装的 colab CLI 和 OAuth 授权。
+ *  不需要手动输入 Token，colab whoami 返回绑定的 Google 账号邮箱。 */
+export interface ColabSettings {
+  configured: boolean;
+  email?: string;
+  error?: string;
+}
+
 async function hfError(res: Response, fallback: string): Promise<never> {
   const detail = await res
     .json()
@@ -247,6 +281,75 @@ export async function deleteHfToken(): Promise<HfSettings> {
     throw new Error(`can't reach the lab at ${LAB_HOST}`);
   });
   if (!res.ok) return hfError(res, `disconnect failed: ${res.status}`);
+  return res.json();
+}
+
+/** ☁ 获取 Google Colab CLI 的授权状态（GET /settings/colab）。
+ *  Colab 通过 OAuth 绑定，无需手动输入 Token——此函数只查询已有授权状态。 */
+export async function fetchColabSettings(): Promise<ColabSettings> {
+  const res = await fetch(`${LAB_HTTP}/settings/colab`).catch(() => {
+    throw new Error(`can't reach the lab at ${LAB_HOST}`);
+  });
+  if (!res.ok) return { configured: false, error: `settings failed: ${res.status}` };
+  return res.json();
+}
+
+/** ☁ 获取 Google 官方授权登录页 URL */
+export async function startColabAuth(): Promise<{ authUrl: string }> {
+  const res = await fetch(`${LAB_HTTP}/settings/colab/auth/start`, { method: "POST" }).catch(() => {
+    throw new Error(`can't reach the lab at ${LAB_HOST}`);
+  });
+  if (!res.ok) throw new Error(`auth start failed: ${res.status}`);
+  return res.json();
+}
+
+/** ☁ 提交授权码换取 Google 凭证并持久化 */
+export async function finishColabAuth(code: string): Promise<ColabSettings> {
+  const res = await fetch(`${LAB_HTTP}/settings/colab/auth/finish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  }).catch(() => {
+    throw new Error(`can't reach the lab at ${LAB_HOST}`);
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail || `auth finish failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+/** ☁ 断开 Google Colab 连接 */
+export async function deleteColabToken(): Promise<ColabSettings> {
+  const res = await fetch(`${LAB_HTTP}/settings/colab`, { method: "DELETE" }).catch(() => {
+    throw new Error(`can't reach the lab at ${LAB_HOST}`);
+  });
+  if (!res.ok) throw new Error(`disconnect failed: ${res.status}`);
+  return res.json();
+}
+
+/** 🚨 紧急关停释放所有云端 Colab GPU 虚拟机，防止继续扣费 */
+export async function killAllColabSessions(): Promise<{ ok: boolean; killed: string[]; message: string }> {
+  const res = await fetch(`${LAB_HTTP}/train/colab/kill-all`, { method: "POST" }).catch(() => {
+    throw new Error(`can't reach the lab at ${LAB_HOST}`);
+  });
+  if (!res.ok) throw new Error(`kill-all failed: ${res.status}`);
+  return res.json();
+}
+
+/** ☁ Colab 算力规格信息 */
+export interface ColabAccelerator {
+  id: string;
+  name: string;
+  rate: number;
+  desc: string;
+  recommended: boolean;
+}
+
+/** ☁ 获取 Colab 支持的算力卡类型和费率列表 */
+export async function fetchColabAccelerators(): Promise<ColabAccelerator[]> {
+  const res = await fetch(`${LAB_HTTP}/settings/colab/accelerators`).catch(() => null);
+  if (!res || !res.ok) return [];
   return res.json();
 }
 
@@ -345,6 +448,14 @@ export function duckRowKeys(ducks: { id: string }[]): string[] {
   });
 }
 
+/** Show only the active training group, while hiding unrelated policies. */
+export function trainingViewDucks<T extends { id: string }>(ducks: T[]): T[] {
+  const trainee = ducks.find((d) => d.id === "trainee");
+  return trainee
+    ? ducks.filter((d) => d.id === "trainee" || d.id.startsWith("helper"))
+    : ducks;
+}
+
 /** WebSocket with auto-reconnect; latest frame lands in a mutable ref. */
 export class LabClient {
   frame: Frame | null = null;
@@ -388,6 +499,7 @@ export class LabClient {
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
       const frame: Frame = JSON.parse(ev.data);
+      frame.ducks = trainingViewDucks(frame.ducks);
       this.frame = frame;
       this.lastFrameAt = Date.now();
       if (frame.events?.length) {

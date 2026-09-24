@@ -173,7 +173,25 @@ from . import behaviors as behaviors_mod
 from . import contract as C
 from . import motion as motion_mod
 from .train import RUNS_DIR
+from .goal_training import goal_job_status, new_goal, GOAL_HOLD_SECONDS
 from .walk_env import MicroduckWalkEnv, shared_model_scope
+# Colab 云端 GPU 训练驱动（软导入：colab CLI 未安装时不阻断本地训练）
+try:
+    from .colab_runner import (
+        ColabTrainingJob, colab_available, colab_whoami,
+        get_colab_oauth_url, exchange_colab_code, delete_colab_token,
+        kill_all_colab_sessions, get_colab_accelerators,
+    )
+    _COLAB_IMPORT_OK = True
+except ImportError:
+    _COLAB_IMPORT_OK = False
+    def colab_available() -> bool: return False  # type: ignore[misc]
+    def colab_whoami() -> dict: return {"ok": False, "email": ""}  # type: ignore[misc]
+    def get_colab_oauth_url() -> str: return ""  # type: ignore[misc]
+    def exchange_colab_code(code: str) -> dict: return {"configured": False}  # type: ignore[misc]
+    def delete_colab_token() -> bool: return False  # type: ignore[misc]
+    def kill_all_colab_sessions() -> list[str]: return []  # type: ignore[misc]
+    def get_colab_accelerators() -> list[dict]: return []  # type: ignore[misc]
 
 TICK_HZ = 50            # env control rate (real time)
 SEND_EVERY = 2          # broadcast at 25 Hz
@@ -239,7 +257,7 @@ def load_hf_token() -> dict | None:
 # Helpers stay as extra VIEWERS of live.onnx; they do not resize the trainer.
 # ENVS_PER_HELPER is kept at 0 so TrainingJob.scale() / payload arithmetic
 # cannot quietly grow --envs if a helper spawn ever calls it again.
-BASE_ENVS = 32          # train_behavior's own --envs default
+BASE_ENVS = int(os.environ.get("TEACH_BASE_ENVS", "32"))
 ENVS_PER_HELPER = 0
 RECOMMENDED_ENVS = BASE_ENVS
 MAX_HELPERS = int(os.environ.get("DUCK_MAX_HELPERS", "6"))
@@ -395,6 +413,10 @@ class Duck:
             kw.get("actuator_force")
             or os.environ.get("MICRODUCK_ACTUATOR", kw.get("actuator", "xml"))
         ).strip().lower()
+        # Goal behaviors force BAM inside BehaviorEnv. Mirror that decision
+        # here so they never enter the shared-model scope first.
+        if behavior_id in GOAL_HOLD_SECONDS:
+            actuator = "bam"
         scope = (nullcontext() if actuator == "bam"
                  else shared_model_scope(exclusive=False))
         with scope:
@@ -465,6 +487,7 @@ class Duck:
         # instead of the trick it was rebuilt to perform.
         self.speed_hist.clear()
         self.handed = False
+        self._reset_cooldown = 0
 
     def swap_policy(self, label: str, infer, policy_id: str | None = None,
                     onnx_path: str | None = None) -> None:
@@ -483,6 +506,7 @@ class Duck:
         self.handoff_infer = None
         self.handoff_label = None
         self._settle = 0
+        self._reset_cooldown = 0
 
     def _handoff_due(self) -> bool:
         """The trick is finished and the duck is on both feet."""
@@ -543,6 +567,12 @@ class Duck:
         return float(np.clip(-2.0 * err, -0.8, 0.8))
 
     def tick(self) -> None:
+        if getattr(self, "_reset_cooldown", 0) > 0:
+            self._reset_cooldown -= 1
+            if self._reset_cooldown == 0:
+                self.reset()
+            return
+
         if self.handoff_infer is not None and not self.handed and self._handoff_due():
             self.handed = True
 
@@ -579,11 +609,14 @@ class Duck:
         self.sample_speed()
         if terminated:
             self.falls += 1
-            self.reset()
+            # 跌倒或提前终止：保留当前物理姿态展示 20 步 (0.40秒)，让用户看清跳跃动作与物理过程，彻底根除高频抽搐
+            self._reset_cooldown = 20
         elif truncated:
-            self.reset()
+            # 满时间正常截断：平稳保留 15 步 (0.30秒) 展示最终平稳站立姿态
+            self._reset_cooldown = 15
 
     def reset(self) -> None:
+        self._reset_cooldown = 0
         cmd = self.env.twist_cmd.copy()
         self._hold_yaw = None   # new episode, new heading anchor
         self.handed = False   # each episode starts on the trick's own brain
@@ -852,7 +885,8 @@ def build_ducks(args) -> list[Duck]:
     ducks: list[Duck] = []
 
     def add(label, infer, policy_id=None, onnx_path=None):
-        ducks.append(Duck(f"d{len(ducks)}", label, infer, seed=len(ducks),
+        kw = env_kwargs_for_policy_path(onnx_path)
+        ducks.append(Duck(f"d{len(ducks)}", label, infer, env_kwargs=kw, seed=len(ducks),
                           policy_id=policy_id, onnx_path=onnx_path))
 
     if args.checkpoints:
@@ -1004,6 +1038,8 @@ class TrainingJob:
         # poll() while it is alive — the only way to reach them once it is not.
         self._workers: list[psutil.Process] = []
         self.progress: dict = {"steps": 0, "total": self.total_steps}
+        if behavior_id in GOAL_HOLD_SECONDS:
+            self.progress["goal"] = new_goal(behavior_id)
         self._offset = 0
         self._live_mtime = 0.0
         self._fps_points: list[tuple[float, float]] = []  # (steps, elapsed_s)
@@ -1083,6 +1119,10 @@ class TrainingJob:
         self.restarting = False
         self._workers = []
         self.progress = {"steps": 0, "total": steps}
+        if meta.get("until_success"):
+            goal_file = run / "goal.json"
+            self.progress["goal"] = (json.loads(goal_file.read_text())
+                                     if goal_file.exists() else new_goal(behavior_id))
         self._offset = 0  # poll() replays progress.jsonl → real final numbers
         # live.onnx here is old news, not a fresh snapshot — don't let the
         # first poll() flag it.
@@ -1090,7 +1130,8 @@ class TrainingJob:
         self._fps_points = []
         self._t0 = None  # adopted after the fact — its wall clock is unknown
         self._elapsed_final = None
-        self.status = "done"
+        self.status = (goal_job_status(self.progress["goal"])
+                       if "goal" in self.progress else "done")
         self.proc = None
         return self
 
@@ -1209,6 +1250,8 @@ class TrainingJob:
         cmd = [sys.executable, "-m", "microduck_local.train_behavior",
                self.behavior.id, "--run-name", self.run_name,
                "--envs", str(self.envs), "--steps", str(self.total_steps)]
+        if self.behavior.id in GOAL_HOLD_SECONDS:
+            cmd += ["--until-success"]
         if self.snap_steps:
             cmd += ["--snap-steps", str(self.snap_steps)]
         # Merged per launch, not cached: a handoff (_advance_stage) and a
@@ -1376,6 +1419,9 @@ class TrainingJob:
                         except json.JSONDecodeError:
                             continue
                         self.progress = {**self.progress, **rec}
+                        if "goal" in self.progress and "total" in rec:
+                            self.total_steps = int(rec["total"])
+                            self.stage_steps[self.stage_idx] = self.total_steps
                         changed = True
                         if "elapsed_s" in rec:
                             self._fps_points.append(
@@ -1388,6 +1434,8 @@ class TrainingJob:
                 self._live_mtime = m
                 snap = True
         if self.proc is None:  # adopted run: nothing running, nothing to reap
+            if "goal" in self.progress:
+                self.status = goal_job_status(self.progress["goal"])
             return changed, snap
         # During scale() the old proc is dead on purpose — not a failure.
         if (self.proc.poll() is not None and self.status == "training"
@@ -1401,6 +1449,8 @@ class TrainingJob:
             # before _advance_stage() rebinds self.proc to the next one.
             self._sweep_workers()
             if (self.proc.returncode == 0
+                    and (self.behavior.id not in GOAL_HOLD_SECONDS
+                         or self.progress.get("goal", {}).get("status") == "passed")
                     and self.stage_idx < len(self.stages) - 1):
                 # Stage complete → chain the next one. Advancing on process
                 # EXIT (not the progress "done" line) guarantees the finished
@@ -1409,6 +1459,10 @@ class TrainingJob:
                 self._advance_stage()
             else:
                 self.status = "done" if self.proc.returncode == 0 else "failed"
+                if self.behavior.id in GOAL_HOLD_SECONDS and "goal" not in self.progress:
+                    self.status = "failed"
+                if self.proc.returncode == 0 and "goal" in self.progress:
+                    self.status = goal_job_status(self.progress["goal"])
                 self.finished_clean = self.status == "done"
                 self._freeze_elapsed()
             changed = True
@@ -1522,6 +1576,12 @@ class TrainingJob:
             "helpers": self.helpers,
             "maxHelpers": MAX_HELPERS,
             "restarting": self.restarting,
+            # ---- 资源与成本监控字段
+            "backend": "local",
+            "backendTitle": "本地 CPU (Mac)",
+            "hourlyRate": "免费 (本地算力)",
+            "estimatedCost": "0 点",
+            "elapsedSeconds": (0 if el is None else round(el, 1)),
         }
 
 
@@ -1738,6 +1798,11 @@ class HfTokenReq(BaseModel):
     token: str
 
 
+class ColabAuthReq(BaseModel):
+    """POST /settings/colab/auth/finish body: 用户在 Google 授权页面获取的 authorization code。"""
+    code: str
+
+
 class TeachReq(BaseModel):
     text: str
     # Reference motion for an imitation run — a clip saved by the viewer's
@@ -1765,6 +1830,19 @@ class TeachReq(BaseModel):
     # by 1-based stage index as a string. Staged behaviors only, like
     # stageWeights.
     stageSteps: dict[str, int] | None = None
+    # 算力来源选择: "local"（本地 CPU PPO，默认）| "colab"（Google Colab GPU）
+    # | "hf"（HuggingFace Jobs，预留入口）。None 等同于 "local"，完全向下兼容。
+    backend: str | None = None
+    # 显卡规格选择 (T4, L4, A100, H100, CPU 或 HF 规格)
+    gpuType: str | None = None
+    colabGpuType: str | None = None  # 兼容参数
+    # Colab 专属：microduck_rl 的任务 ID（如 "Mjlab-Velocity-Flat-MicroDuck"）。
+    # 仅在 backend="colab" 时生效；None 时由 behaviors 映射自动推导。
+    colabTaskId: str | None = None
+    # Colab 专属：并行环境数量（云端 GPU 推荐 64）。
+    colabNumEnvs: int | None = None
+    # Colab 专属：最大迭代数（None 时用 microduck_rl 任务默认值 5000）。
+    colabMaxIter: int | None = None
 
 
 class StageWeightsReq(BaseModel):
@@ -1905,7 +1983,13 @@ def env_kwargs_for_behavior(b) -> dict:
     dropped mid-roll (that is what the ✨ showcase assign is for) and not lying
     on the floor (`stand`'s 50% ground-spawn family).
     """
-    kw: dict = {"behavior_id": b.id, "standing_spawns": True}
+    standing = False if b.id == "single_leg_hop" else True
+    kw: dict = {"behavior_id": b.id, "standing_spawns": standing}
+    if b.id == "single_leg_hop":
+        kw["spawn_overrides"] = {"MICRODUCK_SPAWN_FAMILY_PROBS": "1.0",
+                                 "MICRODUCK_HOP_RECOVERY": "0",
+                                 "MICRODUCK_ACTUATOR": "bam"}
+        kw["actuator_force"] = "bam"
     if getattr(b, "scene", "walk") == "all":
         kw["scene_xml"] = str(C.SCENE_ALL_XML)
     if not getattr(b, "terminate_on_fall", True):
@@ -1950,7 +2034,9 @@ def trainee_env_kwargs(b, stage_env: dict[str, str] | None = None) -> dict:
     kw = {**env_kwargs_for_behavior(b), "behavior_id": b.id,
           # The trainee/showcase preview mirrors the TRAINER's spawns, so it
           # drops the standing pin a plain assign carries.
-          "standing_spawns": False,
+          # For the slow crane, the viewer must show the full takeoff rather
+          # than a curriculum reset already holding the leg in the air.
+          "standing_spawns": b.id == "white_crane",
           "spawn_overrides": overrides}
     # Trainee preview should see the same plant the trainer subprocess uses.
     # BAM cannot share a model with the rest of the roster, and _make_env
@@ -2773,6 +2859,69 @@ def make_app(ducks: list[Duck]):
                 stray.unlink(missing_ok=True)
         return {"configured": False}
 
+    # ------------------------------------ ☁ Google Colab 算力设置
+
+    @app.get("/settings/colab")
+    def colab_settings() -> dict:
+        """返回 Google Colab 的授权状态与账号信息。"""
+        if not _COLAB_IMPORT_OK:
+            return {"configured": False, "error": "colab_runner 模块未加载"}
+        info = colab_whoami()
+        if info["ok"]:
+            return {"configured": True, "email": info["email"]}
+        return {"configured": False}
+
+    @app.get("/settings/colab/accelerators")
+    def colab_accelerators() -> list[dict]:
+        """返回 Google Colab 支持的算力规格与预估费率列表。"""
+        if not _COLAB_IMPORT_OK:
+            return []
+        return get_colab_accelerators()
+
+    @app.post("/settings/colab/auth/start")
+    def colab_auth_start() -> dict:
+        """开始网页端 Google OAuth 授权：返回 Google 官方授权登录 URL。"""
+        if not _COLAB_IMPORT_OK:
+            raise HTTPException(500, "colab_runner 模块未加载")
+        url = get_colab_oauth_url()
+        return {"authUrl": url}
+
+    @app.post("/settings/colab/auth/finish")
+    def colab_auth_finish(req: ColabAuthReq) -> dict:
+        """用用户回填的 authorization code 换取凭证并持久化。"""
+        if not _COLAB_IMPORT_OK:
+            raise HTTPException(500, "colab_runner 模块未加载")
+        try:
+            res = exchange_colab_code(req.code)
+            if res.get("configured") and res.get("email"):
+                st.events.append(f"☁ Google Colab 已成功连接: {res['email']}")
+            return res
+        except Exception as e:
+            raise HTTPException(400, str(e))
+
+    @app.delete("/settings/colab")
+    def colab_settings_delete() -> dict:
+        """断开 Google 账号连接，删除本地凭证文件。"""
+        if not _COLAB_IMPORT_OK:
+            raise HTTPException(500, "colab_runner 模块未加载")
+        delete_colab_token()
+        st.events.append("☁ Google Colab 连接已断开")
+        return {"configured": False}
+
+    @app.post("/train/colab/kill-all")
+    def colab_kill_all() -> dict:
+        """🚨 紧急释放所有云端 GPU 虚拟机，防止扣费熔断保护。"""
+        # 如果当前本地有正在记录的 Colab 训练任务，先停止
+        if st.job and hasattr(st.job, "stop"):
+            try:
+                st.job.stop()
+            except Exception:
+                pass
+        killed = kill_all_colab_sessions()
+        msg = f"🚨 已紧急释放 {len(killed)} 个云端 GPU 虚拟机" if killed else "🚨 云端虚拟机已全部关停释放，无计费会话"
+        st.events.append(msg)
+        return {"ok": True, "killed": killed, "message": msg}
+
     @app.get("/behaviors")
     def get_behaviors() -> dict:
         return {"behaviors": [behaviors_mod.behavior_card(b)
@@ -3008,39 +3157,82 @@ def make_app(ducks: list[Duck]):
         # can run tiny jobs without touching the behavior library's budgets.
         steps = os.environ.get("TEACH_STEPS_OVERRIDE")
         snap = os.environ.get("TEACH_SNAP_OVERRIDE")
-        st.job = TrainingJob(
-            b.id,
-            # Helpers already on the lab pitch in from step one.
-            helpers=len(helper_ducks(st.ducks)),
-            steps=int(steps) if steps else None,
-            snap_steps=int(snap) if snap else None,
-            weights=weights,
-            init_from=init_from,
-            stage_weights=stage_weights,
-            start_stage=start_stage,
-            stage_init_from=stage_init,
-            extra_env=({"MICRODUCK_CLIP": req.clip} if req.clip else None),
-            budget=budget,
-            stage_budgets=stage_budgets,
-        )
-        entry = {"weights": st.job.weights,
-                 "stageWeights": prev_sticky["stageWeights"],
-                 # job.budget is None while TEACH_STEPS_OVERRIDE shrinks the
-                 # job — a probe's 1k must never become the user's saved
-                 # budget, so the previous choice stands.
-                 "steps": st.job.budget or prev_sticky["steps"],
-                 "stageSteps": prev_sticky["stageSteps"]}
-        if st.job.stages:
-            # Only staged jobs own the stage layer — a fine-tune (single run)
-            # must not wipe the user's per-stage settings just because the
-            # job ignored them.
-            entry["stageWeights"] = {str(i): dict(w) for i, w in
-                                     sorted(st.job.stage_weights.items())}
-            entry["stageSteps"] = {str(i): v for i, v in
-                                   sorted(st.job.stage_budgets.items())}
-        if entry != prev_sticky:
-            sticky[b.id] = entry
-            save_teach_weights(sticky)
+
+        # ---- 算力来源分流：local（默认）/ colab / hf（预留）
+        backend = (req.backend or "local").lower()
+
+        if backend == "colab":
+            # ---- Google Colab T4 GPU 训练 ----
+            if not _COLAB_IMPORT_OK:
+                return {"matched": False,
+                        "message": "⚠ Colab 模块未加载，请检查 colab_runner.py 是否存在。"}
+            if not colab_available():
+                return {"matched": False,
+                        "message": "⚠ Colab CLI 未授权。请先运行 `colab login` 完成 Google 账号绑定。"}
+            # behavior → microduck_rl 任务 ID 映射表（可按需扩展）
+            BEHAVIOR_TO_TASK: dict[str, str] = {
+                "velocity": "Mjlab-Velocity-Flat-MicroDuck",
+                "vel_stand": "Mjlab-VelStand-Flat-MicroDuck",
+                "roulade": "Mjlab-Roulade-Flat-MicroDuck",
+                "ball_kick": "Mjlab-BallKick-Flat-MicroDuck",
+                "sit_stand": "Mjlab-SitStand-Flat-MicroDuck",
+            }
+            task_id = (req.colabTaskId
+                       or BEHAVIOR_TO_TASK.get(b.id)
+                       or "Mjlab-Velocity-Flat-MicroDuck")
+            num_envs = req.colabNumEnvs or 64
+            max_iter = req.colabMaxIter or 5000
+            selected_gpu = req.gpuType or req.colabGpuType or "T4"
+            st.job = ColabTrainingJob(
+                behavior_id=b.id,
+                behavior_title=b.title,
+                behavior_emoji=b.emoji,
+                task_id=task_id,
+                runs_dir=RUNS_DIR,
+                num_envs=num_envs,
+                max_iterations=max_iter,
+                gpu_type=selected_gpu,
+            )
+            # Colab 任务：跳过本地权重持久化（无本地训练进程管理）
+            gpu_display = f"{selected_gpu} GPU" if selected_gpu.upper() != "CPU" else "CPU 模式"
+            st.events.append(f"☁ Colab 训练已启动: {b.emoji} {b.title} ({gpu_display}, {num_envs} envs)")
+        else:
+            # ---- 本地 CPU PPO 训练（原有逻辑，完全不变）----
+            st.job = TrainingJob(
+                b.id,
+                # Helpers already on the lab pitch in from step one.
+                helpers=len(helper_ducks(st.ducks)),
+                steps=int(steps) if steps else None,
+                snap_steps=int(snap) if snap else None,
+                weights=weights,
+                init_from=init_from,
+                stage_weights=stage_weights,
+                start_stage=start_stage,
+                stage_init_from=stage_init,
+                extra_env=({"MICRODUCK_CLIP": req.clip} if req.clip else None),
+                budget=budget,
+                stage_budgets=stage_budgets,
+            )
+        # 本地训练任务：持久化权重/预算设置（Colab 任务没有这些属性，跳过）
+        if backend != "colab":
+            entry = {"weights": st.job.weights,
+                     "stageWeights": prev_sticky["stageWeights"],
+                     # job.budget is None while TEACH_STEPS_OVERRIDE shrinks the
+                     # job — a probe's 1k must never become the user's saved
+                     # budget, so the previous choice stands.
+                     "steps": st.job.budget or prev_sticky["steps"],
+                     "stageSteps": prev_sticky["stageSteps"]}
+            if st.job.stages:
+                # Only staged jobs own the stage layer — a fine-tune (single run)
+                # must not wipe the user's per-stage settings just because the
+                # job ignored them.
+                entry["stageWeights"] = {str(i): dict(w) for i, w in
+                                         sorted(st.job.stage_weights.items())}
+                entry["stageSteps"] = {str(i): v for i, v in
+                                       sorted(st.job.stage_budgets.items())}
+            if entry != prev_sticky:
+                sticky[b.id] = entry
+                save_teach_weights(sticky)
         live = str(st.job.dir / "live.onnx")
         label = f"🎓 {st.job.display_title()} (untrained)"
         # The trainee previews what training practices: the behavior env with
@@ -3510,6 +3702,16 @@ def make_app(ducks: list[Duck]):
                         "falls": d.falls,
                         "steerable": not is_trick_duck(d),
                         "step": d.env.step_count,
+                        "hold": ({
+                            "seconds": round(d.env._one_leg_hold_steps * C.CTRL_DT, 2),
+                            "target": GOAL_HOLD_SECONDS[d.env.behavior.id],
+                            "success": d.env._one_leg_best_steps * C.CTRL_DT >= GOAL_HOLD_SECONDS[d.env.behavior.id],
+                        } if getattr(getattr(d.env, "behavior", None), "id", None)
+                                 in GOAL_HOLD_SECONDS else ({
+                            "seconds": float(getattr(d.env, "_lj", {}).get("hop_count", 0)),
+                            "target": 5.0,
+                            "success": getattr(d.env, "_lj", {}).get("hop_count", 0) >= 5,
+                        } if getattr(getattr(d.env, "behavior", None), "id", None) == "long_jump" else None)),
                         "rew": round(d.reward_ema, 2),
                         "speed": d.forward_speed(),
                         # What the duck is being ASKED for, to read the

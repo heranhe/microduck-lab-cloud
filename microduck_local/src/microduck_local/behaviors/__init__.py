@@ -23,9 +23,14 @@ from . import headstand as _headstand
 from . import imitate as _imitate
 from . import locomotion as _locomotion
 from . import poses as _poses
+from . import white_crane as _white_crane
+from . import single_leg_hop as _single_leg_hop
+from . import jump_turn as _jump_turn
+from . import long_jump as _long_jump
 
 _SUBMODULES = [_core, _poses, _headstand, _backflip, _airflip, _imitate,
-               _locomotion, _envm]
+               _locomotion, _white_crane, _single_leg_hop, _jump_turn, _long_jump, _envm]
+
 
 # The BARE submodule names. `from . import core as _core` binds `_core` here
 # AND pins `core` on the package (the import system does that for every

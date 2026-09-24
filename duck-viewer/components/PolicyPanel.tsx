@@ -26,6 +26,7 @@ import {
 } from "@/lib/lab";
 import { assignDrag, clearAssignDrag, isCanvasAt, nearestDuck } from "@/lib/assign";
 import { loadJSON, saveJSON } from "@/lib/persist";
+import { useI18n } from "@/lib/i18n";
 import { modalIsOpen, setPolicyOpen, useTeachHeight } from "@/lib/ui";
 import { Tip } from "./TeachPanel";
 import { pushToast } from "./Toasts";
@@ -450,6 +451,7 @@ export function PolicyPanel({
 }: {
   clientRef: React.MutableRefObject<LabClient | null>;
 }) {
+  const { isZh, tr } = useI18n();
   // Starts collapsed to its pill: the scene, not the roster, is the first
   // thing to see. The choice is persisted, so a user who opens it keeps it.
   const [open, setOpen] = useState(() => loadJSON("policyOpen", false));
@@ -854,7 +856,7 @@ export function PolicyPanel({
           marginTop: 1,
         }}
       >
-        drop to spawn
+        {tr("drop to spawn", "放下以生成")}
       </div>
     </div>
   );
@@ -880,7 +882,7 @@ export function PolicyPanel({
           backdropFilter: "blur(6px)",
         }}
       >
-        🧠 policies
+        🧠 {tr("policies", "策略")}
       </button>
     );
 
@@ -932,10 +934,10 @@ export function PolicyPanel({
             alignItems: "center",
           }}
         >
-          <span style={{ flex: 1 }}>🧠 policies</span>
+          <span style={{ flex: 1 }}>🧠 {tr("policies", "策略")}</span>
           <button
             onClick={refresh}
-            title="refresh policy list"
+            title={tr("refresh policy list", "刷新策略列表")}
             style={{
               background: "none",
               border: "none",
@@ -950,7 +952,7 @@ export function PolicyPanel({
           </button>
           <button
             onClick={() => setOpen(false)}
-            title="collapse"
+            title={tr("collapse", "收起")}
             style={{
               // keep clear of the Next.js dev-tools badge that floats in
               // this corner during development
@@ -994,10 +996,10 @@ export function PolicyPanel({
                 setQuery("");
               }
             }}
-            placeholder="filter"
+            placeholder={tr("filter", "筛选")}
             spellCheck={false}
             autoComplete="off"
-            aria-label="filter policies"
+            aria-label={tr("filter policies", "筛选策略")}
             style={{
               flex: 1,
               minWidth: 0,
@@ -1018,8 +1020,8 @@ export function PolicyPanel({
               <button
                 type="button"
                 onClick={() => setQuery("")}
-                aria-label="clear filter"
-                title="clear filter"
+                aria-label={tr("clear filter", "清除筛选")}
+                title={tr("clear filter", "清除筛选")}
                 style={{
                   flexShrink: 0,
                   background: "none",
@@ -1041,10 +1043,13 @@ export function PolicyPanel({
         <div style={{ overflowY: "auto", padding: "4px 10px 10px" }}>
           {err && (
             <div style={{ color: "#e07a5f", margin: "6px 0" }}>
-              ⚠ can&apos;t load policies from :8788
+              ⚠ {tr("can't load policies from :8788", "无法从 :8788 加载策略")}
             </div>
           )}
           {GROUPS.map(({ key, title }) => {
+            const shownTitle = isZh
+              ? { runs: "我的训练", checkpoints: "检查点", pollen: "Pollen（官方内置）" }[key]
+              : title;
             const list = shown.filter((p) => p.group === key);
             if (!list.length) return null;
             const isFolded = !!folded[key] && !terms.length;
@@ -1054,7 +1059,7 @@ export function PolicyPanel({
                   type="button"
                   onClick={() => toggleFold(key)}
                   aria-expanded={!isFolded}
-                  title={isFolded ? `expand ${title}` : `collapse ${title}`}
+                  title={isFolded ? tr(`expand ${title}`, `展开${shownTitle}`) : tr(`collapse ${title}`, `收起${shownTitle}`)}
                   style={{
                     display: "flex",
                     alignItems: "baseline",
@@ -1072,7 +1077,7 @@ export function PolicyPanel({
                   }}
                 >
                   <span style={{ fontSize: 8 }}>{isFolded ? "▸" : "▾"}</span>
-                  <span>{title}</span>
+                  <span>{shownTitle}</span>
                   {/* Folded count matches what the section shows unfolded:
                       chains collapse to one row each in "Our runs". */}
                   {isFolded && (

@@ -79,6 +79,39 @@ def _endpoint(app, path: str, method: str):
 
 # ------------------------------------------------------- TrainingJob argv
 
+@pytest.mark.parametrize("state,status", [
+    ("passed", "done"), ("stalled", "stopped"), ("limit", "stopped"), ("error", "failed")])
+def test_goal_job_launch_poll_and_adopt(fake_popen, state, status):
+    job = V.TrainingJob("one_leg_5s", steps=600_000)
+    assert "--until-success" in fake_popen[0].cmd
+    goal = {**V.new_goal(), "status": state}
+    (job.dir / "progress.jsonl").write_text(json.dumps(
+        {"steps": 650_000, "total": 1_200_000, "goal": goal}) + "\n")
+    job.proc.returncode = 0
+    job.poll()
+    assert job.status == status
+    assert job.payload()["stepBudget"] == 1_200_000
+    assert job.payload()["progress"]["overallTotal"] == 1_200_000
+    (job.dir / "behavior.json").write_text(json.dumps(
+        {"behavior": "one_leg_5s", "steps": 600_000, "until_success": True}))
+    (job.dir / "goal.json").write_text(json.dumps(goal))
+    adopted = V.TrainingJob.adopt(job.run_name)
+    assert adopted.status == status
+    adopted.poll()
+    assert adopted.status == status and adopted.total_steps == 1_200_000
+
+
+@pytest.mark.parametrize('state', ['stalled', 'limit', 'error', 'passed', None])
+def test_hop_chain_requires_certified_stage(fake_popen, state):
+    job = V.TrainingJob('single_leg_hop', steps=800_000)
+    if state:
+        (job.dir / 'progress.jsonl').write_text(json.dumps({'goal': {'status': state}})+'\n')
+    job.proc.returncode = 0
+    job.poll()
+    assert len(fake_popen) == (2 if state == 'passed' else 1)
+    assert job.stage_idx == (1 if state == 'passed' else 0)
+
+
 def test_training_job_launch_argv(fake_popen):
     job = V.TrainingJob("spin", helpers=1, steps=200_000, snap_steps=5000,
                         weights={"spin_fast": 3.0, "stay_put": -1.0})
@@ -838,6 +871,13 @@ def test_bam_lab_keeps_private_models(monkeypatch):
     assert duck.env._model_shared is False
     for _ in range(10):
         duck.tick()
+
+
+def test_goal_behavior_forced_bam_keeps_private_model():
+    duck = V.Duck("m6", "crane", V._zero_infer, seed=7, env_kwargs={
+        "behavior_id": "white_crane", "standing_spawns": True})
+    assert duck.env.bam is not None
+    assert duck.env._model_shared is False
 
 
 # ------------------------------------------------------- trainee preview (A)

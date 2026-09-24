@@ -29,6 +29,12 @@ def test_behavior_env_steps_clean(behavior_id):
         # vx/vy stay zero like any trick.
         np.testing.assert_allclose(obs[48:50], np.zeros(2, np.float32), atol=1e-6)
         assert abs(float(obs[50])) == pytest.approx(1.0)
+    elif behavior_id == "jump_turn_180":
+        # Mid-air rehearsal starts with the same explicit yaw commander
+        # that standing starts receive later, not a hidden heading reward.
+        np.testing.assert_allclose(obs[48:50], np.zeros(2, np.float32), atol=1e-6)
+        assert 0. <= float(obs[50]) <= 14.
+        assert obs[59] == env._jt['stage']/4
     elif cmd:
         # GPU run mix: standing (vx=vy=wz=0), 55% forward (vy=wz=0, vx>=0.3),
         # remainder omni (vy in ±0.3, wz in ±1). Ceiling starts at 0.4.
@@ -1008,7 +1014,8 @@ def test_only_the_one_sided_recipes_opt_out_of_the_mirror_prior():
     imitates a clip) has to be listed here — the default is True and silence
     would train it under a wrong prior."""
     asymmetric = {b.id for b in BEHAVIORS.values() if not b.symmetric}
-    assert asymmetric == {"one_leg", "imitate"}
+    assert asymmetric == {"one_leg", "one_leg_5s", "imitate", "white_crane",
+                          "single_leg_hop", "jump_turn_180"}
     # spin stays mirror-safe: the direction COMMAND rides the wz slot, and
     # the mirror map negates that slot and the gyro together, so a mirrored
     # episode is just the opposite commanded direction. The rest are sagittal

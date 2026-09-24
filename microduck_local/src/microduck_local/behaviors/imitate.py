@@ -173,6 +173,54 @@ _register(Behavior(
 
 
 
+ONE_LEG_SUCCESS_STEPS = round(5.0 / C.CTRL_DT)
+
+
+def _one_leg_5s_update(env):
+    """Count consecutive valid control steps, not cumulative episode uptime.
+
+    This timer is evaluation metadata, NOT a hidden-state reward. Learning
+    still uses the existing dense one-leg/pose terms at every control step.
+    """
+    contacts = env.foot_contact_state
+    fwd, lat, _ = _base_vel(env)
+    stable = (
+        contacts["left"] and not contacts["right"]
+        and _foot_z(env, "right") - _foot_z(env, "left") >= 0.03
+        and env._projected_gravity()[2] <= -np.cos(np.deg2rad(20.0))
+        and env._trunk_xpos[2] >= 0.8 * env.stand_z
+        and np.hypot(fwd, lat) <= 0.1
+        and np.linalg.norm(env._gyro) <= 1.0
+    )
+    env._one_leg_hold_steps = env._one_leg_hold_steps + 1 if stable else 0
+    env._one_leg_best_steps = max(env._one_leg_best_steps, env._one_leg_hold_steps)
+
+
+_register(replace(
+    BEHAVIORS["one_leg"],
+    id="one_leg_5s",
+    title="单脚站立 · 连续 5 秒",
+    description="左脚支撑、右脚离地至少 3 厘米，连续稳定站立 5 秒才算成功。",
+    how_it_learns=(
+        "每一步奖励单脚支撑、直立、目标姿势与平稳动作；抬起的脚触地、"
+        "支撑脚离地或姿态不稳定时，连续计时清零。每回合 20 秒，"
+        "不能把多段短暂站立累计成 5 秒。训练与预览都使用 BAM 舵机。"
+    ),
+    keywords=("单脚站立5秒", "one leg 5 seconds", "single leg 5 seconds"),
+    # Position/yaw are not in the shared observation contract. Keep the
+    # velocity-based stay_put term, not world-anchored home penalties.
+    terms=tuple(t for t in BEHAVIORS["one_leg"].terms
+                if t.key not in {"stay_home", "face_home"}) + (
+        RewardTerm("pose_match", "接近照片中的抬腿目标姿势", 4.0, _mi_pose_match),
+    ),
+    clip_name="photo_one_leg",
+    state_fn=_one_leg_5s_update,
+    episode_s=20.0,
+    default_steps=6_000_000,
+    success_metric="连续单脚稳定站立 ≥ 5.00 秒（250 个控制步），中断清零",
+))
+
+
 # Star-export EVERYTHING (helpers included) so downstream modules and the
 # package __init__ can reassemble the old flat-module surface exactly.
 __all__ = [n for n in dir() if not n.startswith("__")]
