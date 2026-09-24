@@ -1,0 +1,66 @@
+# Re-record the golden-bit rollout fingerprints for Linux x86_64
+# (microduck_local/tests/goldens/*-linux-x86_64.json; the policy is in
+# tests/golden_store.py). Run by hand from the Actions tab or `gh workflow run
+# record-goldens.yml`; the recording comes back as an artifact to commit.
+#
+# Why a workflow: the goldens pin rollouts to the last bit of float64, which
+# is a property of one platform's MuJoCo / libm / numba code paths, so a Mac
+# cannot record the Linux file. The physics audit of 2026-09-06 moved every obs
+# byte on purpose and the Linux recordings predated it, so ubuntu CI failed on
+# them until re-recorded. A hosted runner is a valid recorder — but hosted
+# ubuntu runners report ONE CPU model string from hosts that disagree in the
+# last bits (2026-09-10: a docs-only commit failed 11 golden assertions by
+# 1-2 ulp), so on Linux the goldens are compared by tolerance everywhere
+# (`golden_store.tol`: 1e-9 on the recorder's CPU model, 1e-7 elsewhere) and
+# bit for bit only where `BIT_EXACT_PLATFORMS` pins the hardware. The re-run
+# step below forces the bit comparison with `MICRODUCK_GOLDEN_BITS=1`: this is
+# the one place on Linux where the bits are verifiable (same host, same run).
+#
+# The environment below mirrors tests.yml step for step - the SAME pinned
+# upstream models, torch wheel and Python - because the file records that
+# provenance and the parity tests report a mismatch on it first.
+name: record-goldens
+on:
+  workflow_dispatch:
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: microduck_local
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upstream checkouts (the pinned models the goldens measure)
+        working-directory: .
+        run: |
+          # PINNED to the same shas as tests.yml: a golden records the model
+          # sha it was made against, and a recording on any other model is a
+          # different fingerprint, not a re-record.
+          git clone --filter=blob:none https://github.com/pollen-robotics/microduck_rl
+          git -C microduck_rl checkout --quiet badc4e7ffe5507fd7acb1a21487bd2925c1afe5a
+          git clone --filter=blob:none https://github.com/pollen-robotics/microduck
+          git -C microduck checkout --quiet 2c61dcc1f03440541cdc0729f7a375b2a9ea3005
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (CPU torch; the lock resolves CUDA wheels on Linux)
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --python .venv -e . pytest
+      - name: Record the two parity files
+        run: MICRODUCK_RECORD_GOLDENS=1 .venv/bin/python -m pytest tests/test_step_perf_parity.py tests/test_bam_perf_parity.py -q -p no:cacheprovider
+      - name: Re-run against the fresh recording (same host, so bit for bit)
+        run: MICRODUCK_GOLDEN_BITS=1 .venv/bin/python -m pytest tests/test_step_perf_parity.py tests/test_bam_perf_parity.py -q -p no:cacheprovider
+      - name: Show what was recorded
+        run: |
+          ls -la tests/goldens/
+          .venv/bin/python -c "import json,glob; [print(f, json.load(open(f))['provenance']) for f in sorted(glob.glob('tests/goldens/*-linux-x86_64.json'))]"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goldens-linux-x86_64
+          path: microduck_local/tests/goldens/*-linux-x86_64.json
+          if-no-files-found: error

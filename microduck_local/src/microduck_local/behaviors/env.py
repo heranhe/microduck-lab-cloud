@@ -1,4 +1,4 @@
-from .locomotion import *  # noqa: F401,F403 — cascades the full upstream namespace,
+from .ball import *  # noqa: F401,F403 — cascades the full upstream namespace,
 from .white_crane import *  # noqa: F401,F403
 from .single_leg_hop import *  # noqa: F401,F403
 from .jump_turn import *  # noqa: F401,F403
@@ -37,17 +37,29 @@ class BehaviorEnv(MicroduckWalkEnv):
                 pass
         if self.behavior.scene == "all":
             kwargs.setdefault("scene_xml", str(C.SCENE_ALL_XML))
+        elif self.behavior.scene == "ball":
+            kwargs.setdefault("scene_xml", str(C.scene_walk_ball_xml()))   # the walk scene + the kick ball
         if behavior_id in GOAL_HOLD_SECONDS:
             kwargs["actuator_force"] = "bam"
             kwargs["bam_current_scale"] = 1.0
             kwargs["action_delay"] = True
             kwargs["max_episode_s"] = max(20.0, kwargs["max_episode_s"])
         kwargs.setdefault("terminate_on_fall", self.behavior.terminate_on_fall)
-        # GPU locomotion has no height termination; a bouncing stride can dip
-        # the trunk through 0.07 m without having fallen.
-        if self.behavior.forward_cmd:
-            kwargs.setdefault("height_termination", False)
+        # Per recipe, like terminate_on_fall: locomotion turns it off (the GPU
+        # stack has no z-kill; a bouncing stride dips through 0.07 m without
+        # falling), and so does any pose whose target sits under the fall line.
+        kwargs.setdefault("height_termination", self.behavior.height_termination)
+        # Velocity pushes (walk_env's push_robot, upstream's push_by_setting_
+        # velocity) are OFF for every behavior unless a caller asks: they
+        # would be a new experiment in a trick's curriculum, not a fix, and
+        # the locomotion recipes were tuned without them. The rest of the
+        # velocity DR subset follows `domain_rand` as before.
+        kwargs.setdefault("push_robot", False)
         self.foot_contact_state = {"left": True, "right": True}
+        # Counts resets. Task-state hooks (Behavior.reset_fn / obs_fn) key
+        # their per-episode state on it, so an obs built DURING a reset —
+        # before the hook has seeded this episode — can tell it is stale.
+        self.episode_id = 0
         # Reference motion, if this behavior imitates one. The clip is
         # selectable per run (a user authors several in the timeline editor):
         # explicit kwarg wins, then MICRODUCK_CLIP for the trainer subprocess,
@@ -188,6 +200,7 @@ class BehaviorEnv(MicroduckWalkEnv):
         return default
 
     def reset(self, **kwargs):
+        self.episode_id += 1
         if self.behavior.id == 'jump_turn_180':
             _jt_reset(self)
         if self.behavior.id == 'single_leg_hop':
@@ -271,6 +284,12 @@ class BehaviorEnv(MicroduckWalkEnv):
         self.home_xy = (float(self.data.xpos[self.trunk_body_id][0]),
                         float(self.data.xpos[self.trunk_body_id][1]))
         self.home_yaw = _trunk_yaw(self)
+        # Task state (a ball to find) is placed relative to the duck's FINAL
+        # spawn pose, so it runs last — and the obs is rebuilt so the first
+        # observation of the episode already carries the task's slots.
+        if self.behavior.reset_fn is not None:
+            self.behavior.reset_fn(self)
+            out = (self._get_obs(), out[1])
         return out
 
     def _spawn_inverted(self):
@@ -461,6 +480,8 @@ class BehaviorEnv(MicroduckWalkEnv):
             self.twist_cmd[2] = getattr(self, "_spin_dir", 1.0)
         if self.behavior.id == "long_jump":
             _lj_commands(self)
+        if self.behavior.obs_fn is not None:
+            self.behavior.obs_fn(self)
         return super()._get_obs()
 
     def _compute_reward(self):

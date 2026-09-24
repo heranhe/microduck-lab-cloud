@@ -10,36 +10,44 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
-import { duckRowKeys, LabClient, fetchScene, type DuckFrame, type Scene } from "@/lib/lab";
+import {
+  duckRowKeys,
+  LabClient,
+  fetchScene,
+  robotsInFrame,
+  type DuckFrame,
+  type RobotId,
+  type Scene,
+} from "@/lib/lab";
 import { assignDrag, nearestDuck, type AssignTarget } from "@/lib/assign";
 import {
   cameraKeyDown,
   cameraKeyUp,
   cameraKeysClear,
-  heldMotions,
-  takeReset,
-  takeTruckImpulse,
-  truckImpulse,
 } from "@/lib/camera";
 import { loadJSON, saveJSON } from "@/lib/persist";
-import {
-  getCapture,
-  pumpCaptureFrame,
-  setCaptureCanvas,
-  setSnapshotFn,
-} from "@/lib/record";
+import { getCapture } from "@/lib/record";
 import { getSelectedDuck, setSelectedDuck } from "@/lib/select";
 import { modalIsOpen } from "@/lib/ui";
 import { buildBodyGeometries, Duck } from "./Duck";
+import { robotLook } from "@/lib/robots";
+import CameraKeys, { type ControlsLike } from "./CameraKeys";
+import { useTruckSwipe } from "./useTruckSwipe";
 import { Hud } from "./Hud";
 import { PolicyPanel } from "./PolicyPanel";
 import { TeachPanel } from "./TeachPanel";
 import { pushToast, Toasts } from "./Toasts";
 import { AnimPanel } from "./AnimPanel";
 import { RecordPanel } from "./RecordPanel";
+import { CaptureCanvas, Snapshotter } from "./Capture";
 import { PoseDuck } from "./PoseDuck";
 import { LanguageToggle } from "./LanguageToggle";
 
+/** FALLBACK layout only — one duck-sized pitch for the whole roster. The
+ *  server sends each slot its own offset now (DuckFrame.offset), because the
+ *  pitch belongs to the robot: this 0.65 m is the duck's, and six 1.3 m G1
+ *  helpers laid out on it stood inside each other. Kept for a server that
+ *  predates the field. */
 function gridOffsets(n: number, spacing = 0.65): [number, number][] {
   const cols = Math.ceil(Math.sqrt(n));
   return Array.from({ length: n }, (_, i) => [
@@ -48,13 +56,64 @@ function gridOffsets(n: number, spacing = 0.65): [number, number][] {
   ]);
 }
 
-function Ducks({ scene, client }: { scene: Scene; client: LabClient }) {
+/** Slot positions for one frame: the server's per-robot layout where it sends
+ *  one, the duck-pitched grid where it does not. */
+function frameOffsets(ducks: Pick<DuckFrame, "offset">[]): [number, number][] {
+  const grid = gridOffsets(ducks.length);
+  return ducks.map((d, i) => d.offset ?? grid[i]);
+}
+
+function Ducks({
+  scene,
+  scenes,
+  client,
+}: {
+  scene: Scene;
+  /** Mesh sets by robot id. The duck's is always present; another body's
+   *  arrives once a roster row says it is that robot (GET /scene?robot=). */
+  scenes: Partial<Record<RobotId, Scene>>;
+  client: LabClient;
+}) {
   const bodies = useMemo(() => buildBodyGeometries(scene), [scene]);
+  // One geometry set per robot on the stage, built once — not per duck. The
+  // duck's is built here as well as above: `bodies` still backs any row whose
+  // mesh set has not arrived yet (and every server that predates robot
+  // selection, where no row carries one).
+  const bodiesByRobot = useMemo(() => {
+    const out: Partial<Record<RobotId, ReturnType<typeof buildBodyGeometries>>> = {};
+    for (const [id, s] of Object.entries(scenes)) {
+      if (!s) continue;
+      try {
+        // The body's own look: "duck" merges and vertex-colours as it always
+        // has, "g1" and "mars" take their material tables, and every OTHER
+        // body is "generic" — welded, smoothed, painted from the scene dump's
+        // own rgba. That is the line that puts a Menagerie model on the stage
+        // without a component of its own (lib/robots.robotLook).
+        const look = robotLook(id);
+        out[id as RobotId] =
+          look === "duck" ? buildBodyGeometries(s) : buildBodyGeometries(s, null, { look });
+      } catch (e) {
+        // A mesh set that fails to build must not take the stage with it:
+        // this runs during render, so an uncaught throw here would unmount
+        // the whole Canvas — every duck AND the floor — over one robot.
+        console.error(`[viewer] ${id} meshes failed to build`, e);
+      }
+    }
+    return out;
+  }, [scenes]);
   // Roster keyed by the STABLE stream id — a policy assign renames a duck,
   // which must update its label without remounting (and re-lerping) it.
   // (`key` is the id dedup-qualified by duckRowKeys: a roster with duplicate
   // ids — seen with legacy lab-state restores — must not collide React keys.)
-  const [roster, setRoster] = useState<{ id: string; name: string; key: string }[]>([]);
+  const [roster, setRoster] = useState<
+    {
+      id: string;
+      name: string;
+      key: string;
+      robot: RobotId;
+      offset: [number, number];
+    }[]
+  >([]);
   const rosterSig = useRef("");
   const duckRefs = useRef(new Map<string, React.MutableRefObject<DuckFrame | null>>());
 
@@ -62,11 +121,25 @@ function Ducks({ scene, client }: { scene: Scene; client: LabClient }) {
   useFrame(() => {
     const f = client.frame;
     if (!f) return;
-    const sig = f.ducks.map((d) => `${d.id}\t${d.name}`).join("\n");
+    // The robot is part of the signature: a slot that changes body must
+    // re-render with the other mesh set, and the name alone need not change.
+    const sig = f.ducks.map((d) => `${d.id}\t${d.name}\t${d.robot ?? ""}`).join("\n");
     if (sig !== rosterSig.current) {
       rosterSig.current = sig;
       const keys = duckRowKeys(f.ducks);
-      setRoster(f.ducks.map((d, i) => ({ id: d.id, name: d.name, key: keys[i] })));
+      // Offsets ride in the roster state, not a per-frame recompute: the
+      // layout can only change when the roster does, and every input to it
+      // (the row count and every row's robot) is in the signature above.
+      const offs = frameOffsets(f.ducks);
+      setRoster(
+        f.ducks.map((d, i) => ({
+          id: d.id,
+          name: d.name,
+          key: keys[i],
+          robot: (d.robot as RobotId) || "microduck",
+          offset: offs[i],
+        })),
+      );
       // A removed duck must not stay "selected" — the Delete key would then
       // fire remove_duck at a ghost id forever.
       const sel = getSelectedDuck();
@@ -78,22 +151,29 @@ function Ducks({ scene, client }: { scene: Scene; client: LabClient }) {
     });
   });
 
-  const offsets = gridOffsets(roster.length);
   return (
     <>
-      {roster.map((d, i) => {
+      {roster.map((d) => {
         let ref = duckRefs.current.get(d.id);
         if (!ref) {
           ref = { current: null };
           duckRefs.current.set(d.id, ref);
         }
+        // A row whose mesh set has NOT arrived yet draws nothing at all.
+        // Falling back to the duck's meshes drew a G1 as a scatter of duck
+        // parts at humanoid joint positions — the poses are streamed in that
+        // robot's own body order, so the wrong set is not a rough
+        // approximation, it is debris. The duck itself always has its scene
+        // (it is fetched at mount), so only another body can wait.
+        const geo = d.robot === "microduck" ? bodies : bodiesByRobot[d.robot];
+        if (!geo) return null;
         return (
           <Duck
-            key={d.key}
+            key={`${d.key}:${d.robot}`}
             duckId={d.id}
-            bodies={bodies}
+            bodies={geo}
             frameRef={ref}
-            offset={offsets[i]}
+            offset={d.offset}
             label={d.name}
           />
         );
@@ -128,113 +208,8 @@ function loadSavedCamera(): SavedCamera | null {
   return raw && isVec3(raw.p) && isVec3(raw.t) ? { p: raw.p, t: raw.t } : null;
 }
 
-// Structural slice of drei/three-stdlib OrbitControls — enough to subscribe to
-// the "end" gesture event without importing its concrete class type.
-interface ControlsLike {
-  enabled: boolean;
-  target: THREE.Vector3;
-  addEventListener: (type: "end", cb: () => void) => void;
-  removeEventListener: (type: "end", cb: () => void) => void;
-  update?: () => void;
-}
-
 const HOME_CAM = { p: [1.2, 0.7, 1.4] as const, t: [0, 0.12, 0] as const };
 
-/** Inside-the-Canvas helper: integrates held camera motions × dt every frame
- *  — smooth game-editor flow (truck/dolly/orbit rates scale with distance so
- *  the feel is constant whether you're nose-close or across the room). */
-function CameraKeys({ clientRef }: { clientRef: React.RefObject<LabClient | null> }) {
-  const controls = useThree((s) => s.controls) as unknown as ControlsLike | null;
-  const camera = useThree((s) => s.camera);
-  const sph = useMemo(() => new THREE.Spherical(), []);
-  const offset = useMemo(() => new THREE.Vector3(), []);
-  const right = useMemo(() => new THREE.Vector3(), []);
-  const framedRun = useRef<string | null>(null);
-  useFrame((_, dtRaw) => {
-    // Drain the swipe impulse EVERY frame (even when unused/discarded) so a
-    // burst can never pool up and teleport the view later — idle stays idle.
-    const swipePx = takeTruckImpulse();
-    if (!controls) return;
-    // A live capture owns the camera — drop queued resets and held motions so
-    // nothing yanks the shot (RecordCamera flies it for the duration).
-    const capPhase = getCapture().phase;
-    if (capPhase === "framing" || capPhase === "recording") {
-      takeReset();
-      return;
-    }
-    const frame = clientRef.current?.frame;
-    const trainee = frame?.ducks.find((d) => d.id === "trainee");
-    const run = frame?.training?.runName ?? trainee?.id;
-    const trunk = trainee?.bodies[1];
-    if (run && trunk && framedRun.current !== run) {
-      // Reframe once per run, then leave orbit/zoom under the user's control.
-      framedRun.current = run;
-      controls.target.set(trunk[0], trunk[2] + 0.04, -trunk[1]);
-      camera.position.copy(controls.target).add(new THREE.Vector3(0.65, 0.35, 0.75));
-      camera.lookAt(controls.target);
-      controls.update?.();
-    }
-    if (takeReset()) {
-      camera.position.set(...HOME_CAM.p);
-      controls.target.set(...HOME_CAM.t);
-      camera.lookAt(controls.target);
-      controls.update?.();
-      return;
-    }
-    const held = heldMotions();
-    if (!held.size && swipePx === 0) return;
-    const dt = Math.min(dtRaw, 0.05); // tab-stall guard: no teleport frames
-
-    offset.copy(camera.position).sub(controls.target);
-    sph.setFromVector3(offset);
-
-    // Lateral/vertical truck moves camera AND target (the view slides).
-    const truckSpeed = 0.9 * sph.radius * dt;
-    if (held.has("truckLeft") || held.has("truckRight")) {
-      right.set(1, 0, 0).applyQuaternion(camera.quaternion);
-      right.y = 0; // keep trucking parallel to the floor
-      right.normalize().multiplyScalar(
-        held.has("truckRight") ? truckSpeed : -truckSpeed);
-      camera.position.add(right);
-      controls.target.add(right);
-    }
-    // Two-finger trackpad swipe → the same lateral truck, impulse-scaled.
-    // Natural scrolling reports fingers-moving-LEFT as +deltaX, and that
-    // gesture should slide the VIEW left (scene drifts right on screen) —
-    // hence the negation. Distance scaling keeps the feel constant near and
-    // far; the cap stops a momentum fling from delivering a teleport frame.
-    if (swipePx !== 0) {
-      const cap = 0.5 * sph.radius;
-      const step = Math.max(-cap, Math.min(cap, -swipePx * 0.0015 * sph.radius));
-      right.set(1, 0, 0).applyQuaternion(camera.quaternion);
-      right.y = 0; // floor-parallel, like A/D
-      right.normalize().multiplyScalar(step);
-      camera.position.add(right);
-      controls.target.add(right);
-    }
-    if (held.has("up") || held.has("down")) {
-      const dy = (held.has("up") ? 1 : -1) * 0.6 * sph.radius * dt;
-      camera.position.y += dy;
-      controls.target.y = Math.max(0.02, controls.target.y + dy);
-    }
-
-    // Orbit/dolly work on the target-relative spherical frame.
-    offset.copy(camera.position).sub(controls.target);
-    sph.setFromVector3(offset);
-    if (held.has("orbitLeft")) sph.theta += 1.7 * dt;
-    if (held.has("orbitRight")) sph.theta -= 1.7 * dt;
-    if (held.has("dollyIn")) sph.radius *= Math.exp(-1.5 * dt);
-    if (held.has("dollyOut")) sph.radius *= Math.exp(1.5 * dt);
-    sph.radius = Math.min(8, Math.max(0.25, sph.radius));
-    sph.phi = Math.min(1.53, Math.max(0.1, sph.phi));
-    offset.setFromSpherical(sph);
-    camera.position.copy(controls.target).add(offset);
-
-    camera.lookAt(controls.target);
-    controls.update?.();
-  });
-  return null;
-}
 
 /** Inside-the-Canvas helper: persist the camera pose after every orbit/pan/zoom
  *  gesture (OrbitControls "end"). Restore happens via the Canvas/OrbitControls
@@ -262,10 +237,12 @@ const SHOT = { az: 0.61, dist: 0.78, height: 0.34, drift: 0.05 };
 
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
-/** Inside-the-Canvas helper for the 🎥 record flow: registers the WebGL
- *  canvas for MediaRecorder, and while a capture is framing/recording flies
- *  the camera to a ¾ front view of the target duck and keeps it centered.
- *  OrbitControls is paused for the duration (CameraKeys pauses itself), and
+/** Inside-the-Canvas helper for the 🎥 record flow (the canvas itself is
+ *  registered and pumped by CaptureCanvas, Capture.tsx): while a capture is
+ *  framing/recording flies the camera to a ¾ front view of the target duck
+ *  and keeps it centered.
+ *  OrbitControls is paused for the duration (CameraKeys takes a `paused`
+ *  callback and drops held motions while it is true), and
  *  the camera simply stays where the take ended. The azimuth is chosen ONCE
  *  per take — the duck's heading rotated ±SHOT.az toward whichever side the
  *  camera already sits — not tracked per frame: a backflipping duck's heading
@@ -273,11 +250,6 @@ const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 function RecordCamera({ client }: { client: LabClient }) {
   const controls = useThree((s) => s.controls) as unknown as ControlsLike | null;
   const camera = useThree((s) => s.camera);
-  const gl = useThree((s) => s.gl);
-  useEffect(() => {
-    setCaptureCanvas(gl.domElement);
-    return () => setCaptureCanvas(null);
-  }, [gl]);
   // Never leave the user without controls (unmount mid-take).
   useEffect(() => {
     return () => {
@@ -294,8 +266,6 @@ function RecordCamera({ client }: { client: LabClient }) {
 
   useFrame((st, dtRaw) => {
     const cap = getCapture();
-    // One captured video frame per rendered frame (no-op unless recording).
-    pumpCaptureFrame();
     const active = cap.phase === "framing" || cap.phase === "recording";
     if (!active) {
       if (paused.current && controls) controls.enabled = true;
@@ -311,7 +281,7 @@ function RecordCamera({ client }: { client: LabClient }) {
     const idx = f ? f.ducks.findIndex((d) => d.id === cap.duckId) : -1;
     const trunk = idx >= 0 ? f!.ducks[idx].bodies[1] : undefined;
     if (!f || !trunk) return; // duck vanished mid-take — hold the last shot
-    const off = gridOffsets(f.ducks.length)[idx];
+    const off = frameOffsets(f.ducks)[idx];
     // MuJoCo (x, y, z) → three world (x, z, -y), plus the duck's grid offset.
     aim.set(trunk[0] + off[0], trunk[2] + 0.02, -(trunk[1] + off[1]));
 
@@ -357,40 +327,6 @@ function RecordCamera({ client }: { client: LabClient }) {
   return null;
 }
 
-/** 📷 snapshot: registers the synchronous take-a-PNG implementation (see
- *  lib/record.ts for why it must be synchronous — the download has to stay
- *  inside the button's user gesture or Chrome drops it as "automatic").
- *  The WebGL buffer (preserveDrawingBuffer:false) is only readable in the
- *  same task as a render, so this re-renders, reads with toDataURL (sync),
- *  and restores. Objects tagged `userData.hideInCapture` (selection rings)
- *  are hidden for the capture render only. */
-function Snapshotter() {
-  const camera = useThree((s) => s.camera);
-  const gl = useThree((s) => s.gl);
-  const scene3 = useThree((s) => s.scene);
-  useEffect(() => {
-    setSnapshotFn((name) => {
-      const hidden: THREE.Object3D[] = [];
-      scene3.traverse((o) => {
-        if (o.visible && o.userData.hideInCapture) {
-          o.visible = false;
-          hidden.push(o);
-        }
-      });
-      gl.render(scene3, camera);
-      const dataUrl = gl.domElement.toDataURL("image/png");
-      hidden.forEach((o) => (o.visible = true));
-      const a = document.createElement("a");
-      a.href = dataUrl;
-      a.download = `${name}.png`;
-      a.click();
-      pushToast(`📷 ${name}.png → downloads`);
-    });
-    return () => setSnapshotFn(null);
-  }, [camera, gl, scene3]);
-  return null;
-}
-
 function AssignTargets({ client }: { client: LabClient }) {
   const { camera, gl } = useThree();
   const v = useMemo(() => new THREE.Vector3(), []);
@@ -402,7 +338,7 @@ function AssignTargets({ client }: { client: LabClient }) {
       assignDrag.hoverDuck = null;
       return;
     }
-    const offsets = gridOffsets(f.ducks.length);
+    const offsets = frameOffsets(f.ducks);
     const rect = gl.domElement.getBoundingClientRect();
     const targets: AssignTarget[] = f.ducks.map((d, i) => {
       const t = d.bodies[1] ?? [0, 0, 0];
@@ -427,12 +363,64 @@ function AssignTargets({ client }: { client: LabClient }) {
 
 export default function Viewer() {
   const [scene, setScene] = useState<Scene | null>(null);
+  // Mesh sets for every robot the roster is currently showing.
+  const [scenes, setScenes] = useState<Partial<Record<RobotId, Scene>>>({});
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Read once on mount (this component is ssr:false, so storage is available).
   const [savedCam] = useState(loadSavedCamera);
   const clientRef = useRef<LabClient | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Two-finger horizontal swipe → the same lateral truck as A/D.
+  useTruckSwipe(rootRef);
+
+  // Load a robot's mesh set the first time a roster row says it is that
+  // robot. Polled off the client's own frame (1 Hz) rather than subscribed:
+  // the frame is a mutable ref read per-frame inside the Canvas, and a
+  // React subscription to it would re-render the whole stage at 50 Hz.
+  //
+  // Mounted ONCE, with its bookkeeping in refs. Keyed on `scenes` instead,
+  // every arriving scene tore the effect down and re-ran it — and a G1 fetch
+  // in flight at that moment (21 MB, ~2.5 s) resolved into a dead closure and
+  // was thrown away. The stage then drew a G1 with the duck's meshes.
+  const loadedScenes = useRef(new Set<string>());
+  const pendingScenes = useRef(new Set<string>());
+  const sceneFailures = useRef(new Map<string, number>());
+  useEffect(() => {
+    let stopped = false;
+    const tick = () => {
+      const f = clientRef.current?.frame;
+      if (!f) return;
+      for (const robot of robotsInFrame(f.ducks)) {
+        // A server without that robot's assets answers 404 every time; retry
+        // a few times (a lab restart mid-session is the case worth covering)
+        // and then stop, rather than polling a 404 once a second forever.
+        if (
+          loadedScenes.current.has(robot) ||
+          pendingScenes.current.has(robot) ||
+          (sceneFailures.current.get(robot) ?? 0) >= 5
+        ) {
+          continue;
+        }
+        pendingScenes.current.add(robot);
+        fetchScene(robot)
+          .then((s) => {
+            loadedScenes.current.add(robot);
+            if (!stopped) setScenes((prev) => ({ ...prev, [robot]: s }));
+          })
+          .catch(() => {
+            sceneFailures.current.set(robot, (sceneFailures.current.get(robot) ?? 0) + 1);
+            pendingScenes.current.delete(robot);   // retry on the next tick
+          });
+      }
+    };
+    const id = setInterval(tick, 1000);
+    tick();
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     const client = new LabClient(setConnected);
@@ -441,6 +429,7 @@ export default function Viewer() {
       fetchScene()
         .then((s) => {
           setScene(s);
+          setScenes((prev) => ({ ...prev, microduck: s }));
           setError(null);
         })
         .catch(() => {
@@ -541,60 +530,6 @@ export default function Viewer() {
     window.addEventListener("keyup", onKeyUp, true);
     window.addEventListener("blur", onBlur);
 
-    // Two-finger trackpad swipes arrive as wheel events: horizontal-dominant
-    // ones truck the camera (same motion as A/D). Vertical-dominant and
-    // ctrlKey (pinch) events pass through untouched so OrbitControls keeps
-    // zooming. Capture-phase + passive:false, because preventDefault must
-    // beat the browser's two-finger back/forward navigation and
-    // stopPropagation must keep OrbitControls from also treating the event
-    // as zoom. Only STAGE events count: the side panels (policies, teach,
-    // HUD) scroll with two fingers and must keep doing so, so anything whose
-    // target isn't the wrapper itself or the <canvas> is ignored.
-    // GESTURE-AXIS LOCK: a two-finger swipe is one gesture that should do ONE
-    // thing — per-event dominance flipped slide/zoom mid-swipe on any slightly
-    // diagonal motion (both at once, felt awful). The axis is decided once per
-    // gesture, from the first ~6px of accumulated motion, and held until a
-    // pause in the wheel stream (a momentum fling keeps events flowing well
-    // under the gap, so the lock survives the coast).
-    const GESTURE_GAP_MS = 180;
-    const LOCK_AFTER_PX = 6;
-    let gestureAxis: "x" | "y" | null = null;
-    let undecidedX = 0, undecidedY = 0;
-    let lastWheelAt = 0;
-    const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) return; // pinch-zoom stays OrbitControls'
-      const root = rootRef.current;
-      const t = e.target;
-      if (!root || !(t instanceof HTMLElement) || !root.contains(t)) return;
-      if (t !== root && t.tagName !== "CANVAS") return; // panel UI scrolls natively
-
-      const now = performance.now();
-      if (now - lastWheelAt > GESTURE_GAP_MS) {
-        gestureAxis = null; // stream paused → next events are a new gesture
-        undecidedX = undecidedY = 0;
-      }
-      lastWheelAt = now;
-
-      // Rare line-mode mice report lines, not pixels — normalize roughly.
-      const dx = e.deltaMode ? e.deltaX * 16 : e.deltaX;
-      const dy = e.deltaMode ? e.deltaY * 16 : e.deltaY;
-      if (gestureAxis === null) {
-        undecidedX += Math.abs(dx);
-        undecidedY += Math.abs(dy);
-        if (undecidedX + undecidedY < LOCK_AFTER_PX) {
-          e.preventDefault(); // hold the ambiguous first pixels back from BOTH
-          e.stopPropagation();
-          return;
-        }
-        gestureAxis = undecidedX > undecidedY ? "x" : "y";
-      }
-      if (gestureAxis === "y") return; // whole gesture = zoom (OrbitControls)
-      truckImpulse(dx); // whole gesture = slide; zoom never sees it
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener("wheel", onWheel, { capture: true, passive: false });
-
     // Pull keyboard focus into the page up front: embedded panes and some
     // browsers won't route key events to the document until something in it
     // has been focused.
@@ -604,7 +539,6 @@ export default function Viewer() {
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", onBlur);
-      window.removeEventListener("wheel", onWheel, true);
       client.close();
     };
   }, []);
@@ -672,7 +606,7 @@ export default function Viewer() {
         {/* MuJoCo Z-up world */}
         <group rotation={[-Math.PI / 2, 0, 0]}>
           {scene && clientRef.current && (
-            <Ducks scene={scene} client={clientRef.current} />
+            <Ducks scene={scene} scenes={scenes} client={clientRef.current} />
           )}
           {/* 🎬 editor's ghost duck — server-side FK only, no env, no stream */}
           {scene && <PoseDuck scene={scene} />}
@@ -691,7 +625,16 @@ export default function Viewer() {
           zoomSpeed={0.4}
         />
         <CameraPersistence />
-        <CameraKeys clientRef={clientRef} />
+        <CameraKeys
+          home={HOME_CAM}
+          minDist={0.25}
+          maxDist={8}
+          paused={() => {
+            const ph = getCapture().phase;
+            return ph === "framing" || ph === "recording";
+          }}
+        />
+        <CaptureCanvas />
         <Snapshotter />
       </Canvas>
       <Hud clientRef={clientRef} connected={connected} error={error} />

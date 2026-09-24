@@ -2,57 +2,77 @@
 
 // 🎬 animate (bottom-center): a keyframe animation editor for the robot.
 //
-// Pose the duck (sliders, or by dragging body parts in the 3D scene), key the
-// poses on a timeline, scrub/play them back, save the clip. The saved JSON is
-// the handoff to the imitation-RL side, which resamples it at 50 Hz and
-// rewards a policy for tracking it — so the editor never invents a pose the
-// contract can't express: joints are clamped to the MJCF servo limits, key
-// times ascend from t = 0, and interpolation is linear in joint space (what
-// the resampler does).
+// Pose the robot (sliders, rig controls, IK handles, or by dragging body
+// parts in the 3D scene), key the poses on a timeline, scrub/play them back,
+// save the clip. The saved JSON is the handoff to the imitation-RL side,
+// which resamples it at 50 Hz and rewards a policy for tracking it — so the
+// editor never invents a pose the contract can't express: joints are clamped
+// to the MJCF servo limits, key times ascend from t = 0, and interpolation is
+// linear in joint space (what the resampler does).
 //
 // Every pose shown here is forward kinematics from POST /pose on the server's
-// scratch model — the lab ducks and their WS stream are untouched.
+// scratch model — the lab ducks and their WS stream are untouched. IK handles
+// go through POST /ik, whose answer IS a /pose answer for the solved joints.
+//
+// Two bodies: the Microduck (14 joints) and the Unitree G1 (29). The robot
+// switch re-fetches /joints for that body, and a clip carries its robot so a
+// saved G1 clip opens as the G1. The panel's own layout never assumes a joint
+// count or a section name — both come from the metadata.
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
+  type Balance,
   animStore,
   animVersion,
+  balanceColor,
+  balanceLabel,
   clampJoint,
   clipProblem,
+  clipRobot,
   defaultPose,
   fetchJoints,
+  fetchRobots,
+  isIkResult,
+  isUntouched,
   keyAt,
   listClips,
   loadClip,
   newClip,
-  NUM_JOINTS,
   PoseStreamer,
   putClip,
   removeClip,
   ROOT_SEL,
   round3,
+  sameBalance,
   sampleClip,
   setAnimMeta,
   setAnimMode,
   setAnimVisible,
   setSelected,
+  setSelectedEffector,
   setSelectedRig,
+  setShowBalance,
   subscribeAnim,
   type AnimMode,
   withKey,
+  zeroPose,
   type Clip,
   type JointsMeta,
   type Pose,
+  type RobotId,
+  type RobotInfo,
   type StoredClip,
 } from "@/lib/anim";
+import { robotChipLabel, setActiveRobot, useActiveRobot } from "@/lib/activeRobot";
+import { robotEmoji } from "@/lib/robots";
 import { LAB_HTTP } from "@/lib/lab";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
 import {
-  RIG_CONTROLS,
   rigApply,
   rigBodies,
   rigBodyMap,
+  rigControlsFor,
   rigMeasure,
   rigRange,
   rigVector,
@@ -61,7 +81,6 @@ import {
 import { pushToast } from "./Toasts";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
-const GROUPS = ["left leg", "head + neck", "right leg"] as const;
 const GROUPS_ZH: Record<string, string> = {
   "left leg": "左腿",
   "head + neck": "头部与颈部",
@@ -80,6 +99,25 @@ const RIG_ZH: Record<string, string> = {
   look: "视线",
 };
 const TRACK_PAD = 10; // px inset of the timeline track inside its box
+
+/** "left_hip_pitch" and "left_hip_pitch_joint" both read as "hip pitch" in
+ *  a section that already says which leg. */
+const jointLabel = (name: string) => name.replace(/^(left|right)_/, "").replace(/_joint$/, "");
+
+/** A residual the eye should know about: past the millimetre the solver
+ *  calls converged, as centimetres. Null below that. */
+export function residualLabel(metres: number | undefined): string | null {
+  if (metres == null || metres <= 0.001) return null;
+  return `${(metres * 100).toFixed(1)} cm short`;
+}
+
+/** True when the 🎯 rows would read the same, so an /ik answer that changes
+ *  no readout costs no render of its own. */
+function sameResidual(a: Record<string, number>, b: Record<string, number>): boolean {
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => residualLabel(a[k]) === residualLabel(b[k]));
+}
 
 const btn: React.CSSProperties = {
   background: "#1c2230",
@@ -106,17 +144,29 @@ const field: React.CSSProperties = {
 export function AnimPanel() {
   const { isZh, tr } = useI18n();
   const [open, setOpen] = useState(() => loadJSON("animOpen", false));
+  // Which body is being posed. Persisted; a loaded clip can switch it.
+  const [robot, setRobot] = useState<RobotId>(() => loadJSON<RobotId>("animRobot", "microduck"));
+  const [robots, setRobots] = useState<RobotInfo[]>([]);
   const [meta, setMeta] = useState<JointsMeta | null>(null);
   const [metaErr, setMetaErr] = useState<string | null>(null);
   // Unsaved work survives a refresh — an authored pose is expensive to redo.
   const [clip, setClip] = useState<Clip>(() => loadJSON<Clip | null>("animClip", null) ?? newClip(null));
-  const [pose, setPose] = useState<Pose>(() => ({ joints: new Array(NUM_JOINTS).fill(0), rootPitch: 0 }));
+  const [pose, setPose] = useState<Pose>(() => zeroPose());
+  // The solver's last word per effector, for the 🎯 rows. Only moves when
+  // an /ik answer lands, so a slider drag never re-renders for it.
+  const [ikResidual, setIkResidual] = useState<Record<string, number>>({});
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [clips, setClips] = useState<StoredClip[]>([]);
   const [browsing, setBrowsing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [poseErr, setPoseErr] = useState<string | null>(null);
+  // CoM vs the soles for the pose on screen, for the readout row. The 3D
+  // marker reads the store per-frame instead; this state only moves while
+  // the readout is showing, and only when what it says would change. It
+  // starts from the store's last read so a panel that opens with the marker
+  // already on has a row to show before the first pose comes back.
+  const [balance, setBalance] = useState<Balance | null>(() => animStore.balance);
 
   // 3D selection lives in the shared store (PoseDuck writes it on click).
   useSyncExternalStore(subscribeAnim, animVersion, () => 0);
@@ -134,31 +184,82 @@ export function AnimPanel() {
     playheadRef.current = playhead;
   });
 
-  // --- joint metadata (limits, defaults, body map) -------------------------
+  // --- which bodies this lab can pose --------------------------------------
   useEffect(() => {
-    if (!open || meta) return;
+    if (!open) return;
     let stale = false;
-    fetchJoints()
+    fetchRobots()
+      .then((rs) => !stale && setRobots(rs))
+      .catch(() => !stale && setRobots([])); // an older lab: the duck alone, no switch
+    return () => {
+      stale = true;
+    };
+  }, [open]);
+  useEffect(() => saveJSON("animRobot", robot), [robot]);
+
+  /** Pose a different body. The metadata is dropped first so nothing is
+   *  sent for a pose the wrong length; the effect below fetches the new one
+   *  and settles the clip against it. */
+  const switchRobot = useCallback((id: RobotId) => {
+    setRobot(id);
+    setMeta(null);
+    setPlaying(false);
+    // A body chosen HERE — the switch, or a clip loaded for another body — is
+    // the robot the person is working with: the 🧠 palette and 🎓 teach follow.
+    setActiveRobot(id);
+  }, []);
+
+  // …and this editor follows a robot chosen THERE (palette, teach, a click on
+  // the stage), but only with nothing to lose: switching bodies starts a
+  // fresh clip, so an authored pose pins the editor to its own body.
+  const activeRobot = useActiveRobot();
+  useEffect(() => {
+    if (!open || activeRobot === robot || meta?.robot !== robot) return;
+    // …and only onto a body this editor can actually pose: a MARS selected
+    // in the 🧠 palette must not drag the 🎬 editor onto a body with no
+    // effectors and no soles, which is a panel of empty sliders.
+    if (!robots.some((r) => r.id === activeRobot && r.ready && r.animate !== false)) return;
+    if (!isUntouched(clipRef.current, poseRef.current, meta)) return;
+    switchRobot(activeRobot as RobotId);
+  }, [open, activeRobot, robot, robots, meta, switchRobot]);
+
+  // --- joint metadata (limits, defaults, body map) -------------------------
+  // Fetched for the current robot whenever it is not the one the metadata
+  // in hand describes. Once it lands the clip is settled against it: a clip
+  // for another body (or one restored from before we knew the limits, still
+  // all zeros) becomes a fresh clip on this one; a clip already for this
+  // body is kept. Either way the ghost lands on the clip's first pose.
+  useEffect(() => {
+    if (!open || meta?.robot === robot) return;
+    let stale = false;
+    fetchJoints(robot)
       .then((m) => {
         if (stale) return;
         setMeta(m);
         setAnimMeta(m);
+        streamerRef.current?.setRobot(m.robot);
         setMetaErr(null);
-        // A clip restored from before we knew the limits (or a fresh one) gets
-        // the real DEFAULT_POSE now.
-        setClip((c) => (c.keys.length === 1 && c.keys[0].joints.every((v) => v === 0)
-          ? newClip(m, c.name)
-          : c));
+        const cur = clipRef.current;
+        const fits =
+          clipRobot(cur) === m.robot && cur.keys.every((k) => k.joints.length === m.numJoints);
+        const blank = cur.keys.length === 1 && cur.keys[0].joints.every((v) => v === 0);
+        const next = !fits || blank ? newClip(m, cur.name) : cur;
+        if (next !== cur) {
+          setClip(next);
+          clipRef.current = next;
+        }
+        setPlayhead(0);
+        setPose(sampleClip(next, 0, m.numJoints));
       })
       .catch((e) => !stale && setMetaErr(String(e?.message ?? e)));
     return () => {
       stale = true;
     };
-  }, [open, meta]);
+  }, [open, robot, meta]);
 
   useEffect(() => saveJSON("animOpen", open), [open]);
   useEffect(() => saveJSON("animClip", clip), [clip]);
-  // The ghost duck only exists once we know the joint layout — with an
+  // The ghost only exists once we know the joint layout — with an
   // unreachable /joints (a lab older than these endpoints) the panel shows
   // its error and the scene stays exactly as it was.
   useEffect(() => {
@@ -166,15 +267,18 @@ export function AnimPanel() {
     return () => setAnimVisible(false);
   }, [open, meta]);
 
-  // Land on the clip's first pose once the metadata (and therefore the clip)
-  // is settled, so the ghost duck shows something real straight away.
-  const seeded = useRef(false);
-  useEffect(() => {
-    if (!meta || seeded.current) return;
-    seeded.current = true;
-    setPose(sampleClip(clipRef.current, 0));
-    setPlayhead(0);
-  }, [meta]);
+  // --- editing -------------------------------------------------------------
+
+  /** Set the working pose — and, when the playhead is parked on a key, update
+   *  that key with it (auto-key, the behaviour an animator expects). The ref
+   *  is written here too, not only after the render: a 3D drag fires several
+   *  times between renders and each step must build on the last. */
+  const applyPose = useCallback((next: Pose) => {
+    poseRef.current = next;
+    setPose(next);
+    const t = playheadRef.current;
+    setClip((c) => (keyAt(c, t) >= 0 ? withKey(c, t, next) : c));
+  }, []);
 
   // --- preview: every pose change goes to POST /pose -----------------------
   const streamerRef = useRef<PoseStreamer | null>(null);
@@ -182,7 +286,22 @@ export function AnimPanel() {
     const s = new PoseStreamer(
       (r) => {
         animStore.bodies = r.bodies; // read per-frame by PoseDuck, no re-render
+        animStore.effectors = r.effectors ?? null;
+        const bal = r.balance ?? null;
+        animStore.balance = bal;
+        // A slider drag must not re-render the panel per step (setPoseErr
+        // below bails on identity; a fresh object here would not).
+        if (animStore.showBalance) setBalance((prev) => (sameBalance(prev, bal) ? prev : bal));
         setPoseErr(null);
+        // An /ik answer carries the SOLVED joints: adopt them as an edit
+        // (auto-keyed like any other). The pose effect below then re-sends
+        // that pose to /pose once — a round trip, not a loop, because a
+        // /pose answer never comes back through here as an edit.
+        if (isIkResult(r)) {
+          animStore.ikResidual = r.ik.residual;
+          setIkResidual((prev) => (sameResidual(prev, r.ik.residual) ? prev : r.ik.residual));
+          applyPose({ joints: r.joints, rootPitch: poseRef.current.rootPitch });
+        }
       },
       (e) => setPoseErr(e)
     );
@@ -191,20 +310,23 @@ export function AnimPanel() {
       s.close();
       streamerRef.current = null;
     };
-  }, []);
+  }, [applyPose]);
   useEffect(() => {
-    if (!open || !meta) return;
+    // The length guard covers the moment between a robot switch and its
+    // metadata: a 14-joint pose must never be sent for a 29-joint body.
+    if (!open || !meta || pose.joints.length !== meta.numJoints) return;
     streamerRef.current?.request(pose);
   }, [pose, open, meta]);
 
-  // --- editing -------------------------------------------------------------
-
-  /** Set the working pose — and, when the playhead is parked on a key, update
-   *  that key with it (auto-key, the behaviour an animator expects). */
-  const applyPose = useCallback((next: Pose) => {
-    setPose(next);
-    const t = playheadRef.current;
-    setClip((c) => (keyAt(c, t) >= 0 ? withKey(c, t, next) : c));
+  // A 🎯 handle drag (PoseDuck) asks the solver for one effector's position,
+  // pointer-speed, from the pose as it is now; the answer lands above.
+  useEffect(() => {
+    animStore.applyIkDrag = (id, pos) => {
+      streamerRef.current?.requestIk(poseRef.current, { [id]: { pos } });
+    };
+    return () => {
+      animStore.applyIkDrag = null;
+    };
   }, []);
 
   const setJoint = useCallback(
@@ -243,7 +365,8 @@ export function AnimPanel() {
   // Directions only depend on the joint metadata, so resolve them once per
   // meta; measure/range are re-read from the live pose every render.
   const rigVectors = useMemo<RigVector[]>(
-    () => (meta ? RIG_CONTROLS.map((c) => rigVector(meta, c)).filter((v): v is RigVector => !!v) : []),
+    () =>
+      meta ? rigControlsFor(meta).map((c) => rigVector(meta, c)).filter((v): v is RigVector => !!v) : [],
     [meta]
   );
 
@@ -254,13 +377,26 @@ export function AnimPanel() {
     saveJSON("animMode", mode);
     setAnimMode(mode);
   }, [mode]);
+
+  // The ⊕ CoM marker in the scene. Persisted like `mode`, and off by default:
+  // the balance read is a question you ask of a pose, not scene furniture.
+  const [showBalance, setShowMarker] = useState(() => loadJSON("animBalance", false));
+  useEffect(() => {
+    saveJSON("animBalance", showBalance);
+    setShowBalance(showBalance);
+    // The readout ignores pose responses while hidden, so ask for the pose
+    // again whenever it becomes visible: the store's last read seeds the row
+    // (at mount above, at the toggle below) and this replaces it with a
+    // current one.
+    if (showBalance && open && meta) streamerRef.current?.request(poseRef.current);
+  }, [showBalance, open, meta]);
   // body → rig-control map for rig-mode picking in the scene.
   useEffect(() => {
     animStore.rigForBody = meta ? rigBodyMap(meta, rigVectors) : [];
   }, [meta, rigVectors]);
 
   /** Select a rig control (row click or 3D pick lands here via the store):
-   *  highlights its bodies on the duck and flips the scene to rig mode, so
+   *  highlights its bodies on the robot and flips the scene to rig mode, so
    *  the next 3D drag drives THIS control. */
   const selectRig = useCallback(
     (v: RigVector) => {
@@ -394,8 +530,7 @@ export function AnimPanel() {
         pushToast(`⚠ ${data.message ?? "the lab wouldn't start that run"}`);
         return;
       }
-      setBrowsing(false);
-      pushToast(tr(`⚡ training a policy to perform “${name}” — watch the 🎓 duck`, `⚡ 正在训练“${name}”动作—请观看 🎓 鸭子`));
+      pushToast(tr(`⚡ training a policy to perform “${name}” — watch the 🎓 trainee`, `⚡ 正在训练“${name}”动作—请观看 🎓 机器人`));
     } catch (e) {
       pushToast(`⚠ ${String((e as Error)?.message ?? e)}`);
     }
@@ -412,9 +547,15 @@ export function AnimPanel() {
       setClip(c);
       clipRef.current = c;
       setPlayhead(0);
-      setPose(sampleClip(c, 0));
+      setPlaying(false);
+      // A clip for another body switches the editor to it first; the
+      // metadata effect then lands on this clip's first pose (it keeps a
+      // clip that already fits). For the current body, land on it now.
+      if (clipRobot(c) !== robot) switchRobot(clipRobot(c));
+      else setPose(sampleClip(c, 0, meta?.numJoints));
       setBrowsing(false);
-      pushToast(tr(`📂 loaded “${name}”`, `📂 已加载“${name}”`));
+      const robotSuffix = clipRobot(c) !== robot ? ` (${robotEmoji(clipRobot(c))} ${clipRobot(c)})` : "";
+      pushToast(tr(`📂 loaded “${name}”${robotSuffix}`, `📂 已加载“${name}”${robotSuffix}`));
     } catch (e) {
       pushToast(`⚠ ${String((e as Error)?.message ?? e)}`);
     }
@@ -502,7 +643,7 @@ export function AnimPanel() {
     return (
       <button
         onClick={() => setOpen(true)}
-        title={tr("keyframe animation editor — pose the duck, key it, save a clip", "关键帧动画编辑器—调整姿态、添加关键帧并保存动作")}
+        title={tr("keyframe animation editor — pose the robot, key it, save a clip", "关键帧动画编辑器—调整姿态、添加关键帧并保存动作")}
         style={{
           position: "absolute",
           bottom: 14,
@@ -526,11 +667,21 @@ export function AnimPanel() {
 
   const jointRows = (group: string) =>
     (meta?.joints ?? []).filter((j) => j.group === group);
+  // The switch shows every body this editor can POSE — `animate`, which the
+  // lab answers by asking the body (a `PoseScratch` needs effectors, soles
+  // and a base link, and `pose_scratch("mars")` died on the last of those
+  // the moment a wheeled body was registered). A lab too old to send the
+  // flag listed only posable bodies anyway, so an absent one means yes.
+  // A lab without /robots lists none and the editor is the duck's, as it
+  // always was.
+  const robotChips = robots.filter((r) => r.animate !== false);
+  const effectors = meta?.effectors ?? [];
+  const selectedEffector = animStore.selectedEffector;
 
   return (
     <div
       ref={(el) => {
-        // ◎ focus frames the duck above this panel — it needs the real rect.
+        // ◎ focus frames the robot above this panel — it needs the real rect.
         animStore.panelEl = el;
       }}
       // Armed-chip guard: nearestDuck projects screen positions with an 80px
@@ -580,9 +731,38 @@ export function AnimPanel() {
         }}
       >
         <span style={{ flex: 1 }}>🎬 {tr("animate", "动画")}</span>
+        {/* the robot switch: one chip per body the lab can pose */}
+        {robotChips.map((r) => {
+          const active = r.id === robot;
+          return (
+            <button
+              key={r.id}
+              style={{
+                ...btn,
+                padding: "2px 7px",
+                opacity: r.ready ? 1 : 0.45,
+                cursor: r.ready ? "pointer" : "not-allowed",
+                ...(active
+                  ? { color: "#8ee6d6", border: "1px solid rgba(95,208,189,0.55)", background: "#0e2a26" }
+                  : {}),
+              }}
+              disabled={!r.ready}
+              title={
+                r.ready
+                  ? `pose the ${r.title} (${r.numJoints} joints)`
+                  : `uv run fetch-robot ${r.id}`
+              }
+              onClick={() => {
+                if (r.id !== robot) switchRobot(r.id);
+              }}
+            >
+              {robotChipLabel(r)}
+            </button>
+          );
+        })}
         <button
           style={btn}
-          title={tr("frame the preview duck", "将预览鸭子置于画面中心")}
+          title={tr("frame the preview robot", "将预览机器人置于画面中心")}
           onClick={() => {
             animStore.focusRequest = 1;
           }}
@@ -608,7 +788,7 @@ export function AnimPanel() {
 
       {metaErr && (
         <div style={{ color: "#e07a5f", padding: "6px 12px" }}>
-          ⚠ {tr("can't reach the lab's /joints on :8788", "无法访问 :8788 实验室的 /joints")} — {metaErr}
+          ⚠ {tr(`can't reach the lab's /joints${robot !== "microduck" ? `?robot=${robot}` : ""} on :8788`, `无法访问 :8788 实验室的 /joints${robot !== "microduck" ? `?robot=${robot}` : ""}`)} — {metaErr}
         </div>
       )}
 
@@ -870,7 +1050,7 @@ export function AnimPanel() {
         </div>
       </div>
 
-      {/* ---- scene-drag mode: what clicking the duck edits ---- */}
+      {/* ---- scene-drag mode: what clicking the robot edits ---- */}
       {meta && (
         <div
           style={{
@@ -881,7 +1061,7 @@ export function AnimPanel() {
             flexShrink: 0,
           }}
         >
-          <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("clicking the duck edits", "点击鸭子时编辑")}</span>
+          <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("clicking the robot edits", "点击机器人时编辑")}</span>
           <button
             style={{
               ...btn,
@@ -908,6 +1088,66 @@ export function AnimPanel() {
           >
             🎮 {tr("rig", "联动")}
           </button>
+          <button
+            style={{
+              ...btn,
+              ...(mode === "ik"
+                ? { color: "#ffd166", border: "1px solid rgba(255,209,102,0.55)", background: "#2a2612" }
+                : {}),
+              opacity: effectors.length ? 1 : 0.45,
+            }}
+            disabled={!effectors.length}
+            title={
+              effectors.length
+                ? "a click selects the IK handle for that limb (a foot, a hand, the head); dragging a handle asks the solver for the joints that put it there, the other feet held where they are"
+                : "this lab's /joints lists no IK handles"
+            }
+            onClick={() => setMode("ik")}
+          >
+            🎯 ik
+          </button>
+          <div style={{ flex: 1 }} />
+          <button
+            style={{
+              ...btn,
+              ...(showBalance
+                ? { color: "#7dd87d", border: "1px solid rgba(125,216,125,0.5)", background: "#11241a" }
+                : {}),
+            }}
+            title="show where the centre of mass falls: a ball at the CoM, a plumb line, and a crosshair on the floor with the soles outlined under it — green inside a sole, blue inside the two-foot stance, amber outside"
+            onClick={() => {
+              const next = !showBalance;
+              setShowMarker(next);
+              // Seed the row from the store's last read, so turning the
+              // marker on says something before the pose round-trip lands.
+              if (next) setBalance(animStore.balance);
+            }}
+          >
+            ⊕ balance
+          </button>
+        </div>
+      )}
+
+      {/* ---- balance: where the CoM lands relative to the soles ---- */}
+      {meta && showBalance && (
+        <div
+          style={{ padding: "0 12px 7px", fontSize: 10, flexShrink: 0 }}
+          title={
+            balance
+              ? `signed distance from the CoM's ground projection to each sole's footprint (positive = inside): left ${balance.feet.left.marginMm} mm${balance.feet.left.grounded ? "" : " (in the air)"}, right ${balance.feet.right.marginMm} mm${balance.feet.right.grounded ? "" : " (in the air)"}; to the stance (the hull of the grounded soles): ${balance.support.marginMm} mm.\nA STATIC check: no velocity, no momentum, no ankle torque. It says how hard this pose is to hold, not whether the robot stands.`
+              : undefined
+          }
+        >
+          {balance ? (
+            <span style={{ color: balanceColor(balance) }}>
+              ⊕ CoM {balanceLabel(balance)}
+              <span style={{ color: "#566072" }}> · static, no momentum</span>
+            </span>
+          ) : (
+            <span style={{ color: "#8b93a3" }}>
+              {animStore.bodies ? "⊕ this lab's /pose doesn't report balance" : "⊕ …"}
+            </span>
+          )}
         </div>
       )}
 
@@ -938,6 +1178,48 @@ export function AnimPanel() {
                 ))}
               </>
             )}
+            {mode === "ik" && effectors.length > 0 && (
+              <>
+                <div
+                  style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}
+                  title="each handle is a point the solver can be asked to put somewhere: drag it in the scene, and the joints on that limb follow. The readout is how far short the last solve fell."
+                >
+                  🎯 {tr("ik handles", "IK 手柄")}
+                </div>
+                {effectors.map((e) => {
+                  const sel = selectedEffector === e.id;
+                  const short = residualLabel(ikResidual[e.id]);
+                  return (
+                    <div
+                      key={e.id}
+                      onPointerDown={() => {
+                        setMode("ik");
+                        setSelectedEffector(e.id);
+                      }}
+                      title={`${e.label} — ${e.kind} on ${e.bodyName}; the solver may move ${e.chain.length} joint${e.chain.length === 1 ? "" : "s"}`}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        height: 21,
+                        padding: "0 4px",
+                        margin: "0 -4px",
+                        borderRadius: 5,
+                        background: sel ? "rgba(255,209,102,0.12)" : "transparent",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <span style={{ width: 74, flexShrink: 0, fontSize: 10, color: sel ? "#ffd166" : "#a5adbb" }}>
+                        {e.kind === "foot" ? "🦶" : e.kind === "hand" ? "✋" : "👤"} {e.label}
+                      </span>
+                      <span style={{ flex: 1, fontSize: 9, color: short ? "#e8b24a" : "#566072" }}>
+                        {short ?? (sel ? tr("drag the handle in the scene", "在场景中拖动手柄") : "")}
+                      </span>
+                    </div>
+                  );
+                })}
+              </>
+            )}
             <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>{tr("trunk", "躯干")}</div>
             <JointRow
               label={tr("root pitch", "躯干俯仰")}
@@ -953,13 +1235,13 @@ export function AnimPanel() {
               }}
               onChange={(v) => setJoint(ROOT_SEL, v)}
             />
-            {GROUPS.map((g) => (
+            {meta.groups.map((g) => (
               <div key={g}>
                 <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>{isZh ? GROUPS_ZH[g] : g}</div>
                 {jointRows(g).map((j) => (
                   <JointRow
                     key={j.name}
-                    label={j.name.replace(/^(left|right)_/, "")}
+                    label={jointLabel(j.name)}
                     min={j.min}
                     max={j.max}
                     value={pose.joints[j.index] ?? 0}
@@ -991,7 +1273,7 @@ export function AnimPanel() {
                   clipRef.current = c;
                   setPlaying(false);
                   setPlayhead(0);
-                  setPose(sampleClip(c, 0));
+                  setPose(sampleClip(c, 0, meta.numJoints));
                 }}
               >
                 ✧ {tr("new clip", "新建动作")}
@@ -1001,8 +1283,8 @@ export function AnimPanel() {
         )}
         <div style={{ color: "#566072", fontSize: 9, marginTop: 8, lineHeight: 1.45 }}>
           {tr(
-            "click a body part to edit it — 🦴 drags one servo, 🎮 drags that part's rig control (feet→toes, thigh→swing, shin→squat, trunk→lean, head→look, shift = fine) · the ⇕ handle drags the selected rig control (squat when none) and parks on the part it moves · rig sliders end where a servo hits its limit — hover one to see which · keys interpolate linearly and the RL side resamples the saved clip at 50 Hz",
-            "点击身体部位进行编辑—🦴 拖动单个舵机，🎮 拖动联动控制（Shift = 精细调整）· ⇕ 手柄拖动已选联动控制 · 滑块在舵机到达限位时停止 · 关键帧线性插值，RL 以 50 Hz 重采样已保存动作"
+            "click a body part to edit it — 🦴 drags one servo, 🎮 drags that part's rig control (feet→toes, thigh→swing, shin→squat, trunk→lean, head→look, shift = fine), 🎯 drags that limb's IK handle in the view plane and the solver finds the joints · the ⇕ handle drags the selected rig control (squat when none) and parks on the part it moves · rig sliders end where a servo hits its limit — hover one to see which · keys interpolate linearly and the RL side resamples the saved clip at 50 Hz",
+            "点击身体部位进行编辑—🦴 拖动单个舵机，🎮 拖动联动控制（Shift = 精细调整），🎯 在视图平面拖动肢体 IK 手柄由求解器计算关节 · ⇕ 手柄拖动已选联动控制 · 滑块在舵机到达限位时停止 · 关键帧线性插值，RL 以 50 Hz 重采样已保存动作"
           )}
           {poseErr && <span style={{ color: "#e07a5f" }}> · preview: {poseErr}</span>}
         </div>
@@ -1108,7 +1390,9 @@ function RigRow({
   const min = Math.min(r.min, value);
   const max = Math.max(r.max, value);
   const atLimit = value <= r.min + 1e-4 || value >= r.max - 1e-4;
-  const joints = v.parts.map((p) => p.name.replace(/^(left|right)_/, (m) => m[0] === "l" ? "L " : "R ")).join(", ");
+  const joints = v.parts
+    .map((p) => p.name.replace(/_joint$/, "").replace(/^(left|right)_/, (m) => (m[0] === "l" ? "L " : "R ")))
+    .join(", ");
   return (
     <div
       onPointerDown={onSelect}

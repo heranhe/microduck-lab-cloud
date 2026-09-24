@@ -153,6 +153,9 @@ class FrameDiag:
     ground_bodies: tuple[str, ...]   # non-foot bodies resting on the floor
     driver: str
     handed_off: bool
+    # One extra line from the behavior's own caption_fn (the ball's bearing
+    # and whether the camera has it) — "" for behaviors without task state.
+    extra: str = ""
 
 
 def short_label(label: str, width: int = 13) -> str:
@@ -197,13 +200,18 @@ def format_caption(d: FrameDiag, stand_z: float, head_ref_z: float) -> tuple[str
     head_ref = "n/a" if not math.isfinite(head_ref_z) else f"{head_ref_z:.3f}"
     rot = "" if d.rot_deg is None else f" rot={d.rot_deg:+.0f}"
     ground = pack_names(d.ground_bodies, CAPTION_COLUMNS - len("feet L=1 R=1  floor:"))
-    return (
+    lines = [
         f"#{d.index:02d} t={d.t:5.2f}s drv={short_label(d.driver)}",
         f"trunk_z={d.trunk_z:.3f} (stand {stand_z:.3f})",
         f"head_z ={head} (stand {head_ref})",
         f"deg: pitch={d.pitch_deg:+.0f} tilt={d.tilt_deg:.0f}{rot}",
         f"feet L={int(d.contact_l)} R={int(d.contact_r)}  floor:{ground}",
-    )
+    ]
+    if d.extra:
+        # Budgeted like the ground list: a task line that overran the tile
+        # would be silently misread (test_render_rollout locks the width).
+        lines.append(d.extra[:CAPTION_COLUMNS])
+    return tuple(lines)
 
 
 # ------------------------------------------------------------------- drivers
@@ -253,7 +261,17 @@ def load_driver(spec: str) -> Driver:
 
 
 def handoff_due(env) -> bool:
-    """Mirrors viz_server.Duck._handoff_due."""
+    """Mirrors viz_server.Duck._handoff_due.
+
+    A behavior may bring its own condition (Behavior.handoff_fn) — then
+    there is one implementation and this "mirrors" note is a fact rather
+    than a promise. The flip family's rule below is the original, kept
+    inline because it predates the field and is what every existing
+    showcase chain hands off on.
+    """
+    fn = getattr(getattr(env, "behavior", None), "handoff_fn", None)
+    if fn is not None:
+        return bool(fn(env))
     rot = getattr(env, "_bf_rot", None)
     if rot is None or rot < HANDOFF_ROT_RAD:
         return False
@@ -321,6 +339,8 @@ class Probe:
         rot = getattr(env, "_bf_rot", None)
         head_z = (float(env.data.xpos[self.head_bid][2])
                   if self.head_bid >= 0 else float("nan"))
+        cap = getattr(getattr(env, "behavior", None), "caption_fn", None)
+        extra = cap(env) if cap is not None else ""
         return FrameDiag(
             index=index,
             t=step * C.CTRL_DT,
@@ -334,10 +354,36 @@ class Probe:
             ground_bodies=self._ground_bodies(),
             driver=driver,
             handed_off=handed,
+            extra=extra,
         )
 
 
-def make_camera(name: str, distance: float):
+# The duck's standing trunk height, the scale CAM_DISTANCE was chosen for. A
+# 1.3 m G1 framed at the duck's 0.70 m fills the shot with its shins.
+DUCK_STAND_Z = 0.133
+
+
+def offscreen_renderer(model, width: int, height: int):
+    """A `mujoco.Renderer` at the size asked for, on any body.
+
+    The offscreen buffer is a property of the MODEL: the duck's MJCF declares a
+    large one, the G1's and a composed world's default to 640x480, and a wider
+    `--width` aborted inside the Renderer. Grow it, never shrink it.
+    """
+    import mujoco
+
+    vis = model.vis.global_
+    vis.offwidth, vis.offheight = max(vis.offwidth, width), max(vis.offheight, height)
+    return mujoco.Renderer(model, height=height, width=width)
+
+
+def make_camera(name: str, distance: float, stand_z: float | None = None):
+    """A free camera framed for the body being rendered.
+
+    `stand_z` (the env's measured standing height) scales the orbit distance
+    and lifts the look-at point to the robot's mid-height — without it the
+    first G1 sheet was twelve tiles of shin.
+    """
     import mujoco
 
     if name not in CAMERAS:
@@ -345,7 +391,12 @@ def make_camera(name: str, distance: float):
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
     cam.azimuth, cam.elevation = CAMERAS[name]
-    cam.distance = distance
+    # 2.6x the standing height frames a whole body in these views; the duck's
+    # own CAM_DISTANCE (0.70 against a 0.133 m stand) is already wider than
+    # that, so `max` leaves every duck sheet exactly as it was.
+    cam.distance = max(distance, 2.6 * float(stand_z or 0.0))
+    if stand_z:
+        cam.lookat[2] = float(stand_z) * 0.5
     return cam
 
 
@@ -358,10 +409,19 @@ def run_episode(env, renderer, cam, probe: Probe, seed: int, driver: Driver,
     handed = False
     handoff_t: float | None = None
 
+    markers_fn = getattr(getattr(env, "behavior", None), "markers_fn", None)
+
+    # The height the camera tracks. LOOKAT_Z is the duck's; a taller body
+    # keeps whatever make_camera measured for it (else the shot follows a
+    # 1.3 m robot at a 25 cm robot's waist — twelve tiles of shin).
+    lookat_z = float(cam.lookat[2]) if float(cam.lookat[2]) > LOOKAT_Z else LOOKAT_Z
+
     def capture(step: int) -> None:
         cam.lookat[:] = (float(env.data.xpos[env.trunk_body_id][0]),
-                         float(env.data.xpos[env.trunk_body_id][1]), LOOKAT_Z)
+                         float(env.data.xpos[env.trunk_body_id][1]), lookat_z)
         renderer.update_scene(env.data, camera=cam)
+        if markers_fn is not None:
+            draw_markers(renderer.scene, markers_fn(env))
         frames.append(renderer.render().copy())
         label = (handoff.label if handed and handoff else driver.label)
         diags.append(probe.sample(len(diags), step, label, handed))
@@ -387,7 +447,28 @@ def run_episode(env, renderer, cam, probe: Probe, seed: int, driver: Driver,
         "handoff_t": handoff_t,
         "spawn": getattr(env, "last_spawn", None),
     }
+    report_fn = getattr(getattr(env, "behavior", None), "report_fn", None)
+    meta["report"] = list(report_fn(env)) if report_fn is not None else []
     return frames, diags, meta
+
+
+def draw_markers(scene, markers) -> None:
+    """Add the behavior's task objects (a ball, a gaze dot) to a rendered
+    scene as visual-only spheres — they exist in the env, not the physics,
+    so the renderer has to be told about them."""
+    import mujoco
+
+    for pos, radius, rgba in markers:
+        if scene.ngeom >= scene.maxgeom:
+            break
+        g = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            g, mujoco.mjtGeom.mjGEOM_SPHERE,
+            np.array([radius, radius, radius], dtype=np.float64),
+            np.asarray(pos, dtype=np.float64),
+            np.eye(3, dtype=np.float64).flatten(),
+            np.asarray(rgba, dtype=np.float32))
+        scene.ngeom += 1
 
 
 def summarize(diags: Sequence[FrameDiag], meta: dict, probe: Probe) -> list[str]:
@@ -433,6 +514,7 @@ def summarize(diags: Sequence[FrameDiag], meta: dict, probe: Probe) -> list[str]
         lines.append(f"handoff fired at t={meta['handoff_t']:.2f} s")
     elif meta.get("had_handoff"):
         lines.append("handoff NEVER fired (trick did not complete on both feet)")
+    lines.extend(meta.get("report") or ())
     return lines
 
 
@@ -556,11 +638,35 @@ def sheet_footer(probe: Probe) -> list[str]:
 
 # ------------------------------------------------------------------------ cli
 
-def build_env(behavior_id: str, env_overrides: dict[str, str], seed: int):
+def build_env(behavior_id: str, env_overrides: dict[str, str], seed: int,
+              robot: str = "microduck", task: str = "walk"):
     """Exactly how eval and the lab build a behavior env: randomizers off, so
-    what the sheet shows is the policy and not the noise."""
+    what the sheet shows is the policy and not the noise.
+
+    Another body has no behavior recipes (those name duck joints): it renders
+    its own walking env, which is the thing there is to look at."""
     from .behaviors import BEHAVIORS, BehaviorEnv
 
+    if robot != "microduck":
+        from .train import env_class
+        os.environ.update(env_overrides)
+        kw = {}
+        # --seconds is spelled MICRODUCK_EPISODE_S for the behaviors (their
+        # env reads it in __init__); a walking env takes it as a kwarg, and
+        # without this the flag silently did nothing off the duck.
+        secs = env_overrides.get("MICRODUCK_EPISODE_S")
+        if secs:
+            kw["max_episode_s"] = float(secs)
+        # Turn off the things that make a render IRREPRODUCIBLE (sensor noise,
+        # domain randomisation, a random spawn yaw) but keep the ones that are
+        # part of the DYNAMICS the policy trained under. `action_delay` is the
+        # one-step actuation lag of the real control loop, not a randomiser:
+        # disabling it is a distribution shift, and it cost a G1 kick policy
+        # that holds 5/5 in its training conditions one seed in five here —
+        # so the render disagreed with the evaluation and the render was wrong.
+        return env_class(robot, task)(obs_noise=False, domain_rand=False,
+                                      random_yaw=False,
+                                      seed=seed, **kw)
     if behavior_id not in BEHAVIORS:
         raise SystemExit(f"unknown behavior {behavior_id!r}; "
                          f"choose from {sorted(BEHAVIORS)}")
@@ -605,6 +711,13 @@ def main() -> None:
     ap.add_argument("--handoff", default=None,
                     help="second .onnx that takes over once the trick completes "
                          "and both feet are down (the lab's rule)")
+    ap.add_argument("--task", default=None,
+                    help="which env to render another body in (g1: walk, "
+                         "stand); default: the run's own run.json")
+    from .robots import registry as _registry
+    ap.add_argument("--robot", default=None, choices=_registry.ids(),
+                    help="which body the policy drives; default: read from the "
+                         "policy's own contract (robots/policy_contract.resolve)")
     ap.add_argument("--camera", default="side", choices=sorted(CAMERAS))
     ap.add_argument("--distance", type=float, default=CAM_DISTANCE)
     ap.add_argument("--fps", type=int, default=30,
@@ -624,7 +737,32 @@ def main() -> None:
     if args.seconds is not None:
         overrides.setdefault("MICRODUCK_EPISODE_S", str(args.seconds))
 
+    # The policy's own contract, not its directory: `resolve` asks the ONNX's
+    # `metadata_props` FIRST, which is the only rung that survives the file
+    # being copied out of its run (robots/policy_contract.py). An explicit
+    # --robot still wins — that is what the flag is for, an old .onnx moved
+    # away from the run that knows it.
+    from .robots import registry as _registry
+    from .robots.policy_contract import resolve as _resolve_contract
+    robot = args.robot or _resolve_contract(Path(args.policy)).robot
+    # A body with no legs has nothing this renderer measures: every frame's
+    # caption is trunk height, foot contacts and a fall rule, and the camera
+    # frames a standing robot. MARS got its own eyes for exactly this reason
+    # (docs/mars-roadmap.md 4a), so say which one rather than drawing a
+    # meaningless sheet or dying in `Probe` on a missing foot geom.
+    kind = str(getattr(_registry.registry().get(robot), "kind", "legged"))
+    if kind != "legged":
+        probe = {"wheeled": "scripts/probe_mars_reach.py (or "
+                            "scripts/probe_mars_pick.py for a `pick` run)"}.get(
+            kind, "a probe of its own — this renderer measures legs")
+        raise SystemExit(
+            f"render-rollout renders LEGGED bodies: every caption here is "
+            f"trunk height, foot contacts and a fall rule, and a {robot} has "
+            f"none of them. Use {probe}.")
     behavior = args.behavior or behavior_from_policy(args.policy)
+    if robot != "microduck":
+        # Another body walks its own env; there are no trick recipes for it.
+        behavior = behavior or f"{robot}-walk"
     if not behavior:
         raise SystemExit("--behavior is required (no behavior.json next to the policy)")
 
@@ -639,25 +777,37 @@ def main() -> None:
 
     driver = load_driver(args.policy)
     handoff = load_driver(args.handoff) if args.handoff else None
-    env_seed = args.seed if args.env_seed is None else args.env_seed
-    env = build_env(behavior, overrides, seed=env_seed)
+    import json as _json
+    task = args.task
+    if task is None and robot != "microduck":
+        try:
+            task = _json.loads((Path(args.policy).parent / "run.json").read_text()).get("task")
+        except (OSError, ValueError):
+            task = None
+    env_seed = args.seed if getattr(args, "env_seed", None) is None else args.env_seed
+    env = build_env(behavior, overrides, seed=env_seed, robot=robot,
+                    task=task or "walk")
     probe = Probe(env)
-    cam = make_camera(args.camera, args.distance)
-    renderer = mujoco.Renderer(env.model, height=height, width=width)
+    cam = make_camera(args.camera, args.distance,
+                      stand_z=getattr(env, "stand_z", None))
+    renderer = offscreen_renderer(env.model, width, height)
 
     ctrl_hz = 1.0 / C.CTRL_DT
     stride = max(1, round(ctrl_hz / max(args.fps, 1)))
     real_fps = ctrl_hz / stride
 
     knobs = " ".join(f"{k}={v}" for k, v in sorted(overrides.items())) or "(none)"
-    print(f"policy: {args.policy}  behavior: {behavior}  camera: {args.camera}")
+    print(f"policy: {args.policy}  robot: {robot}  behavior: {behavior}  "
+          f"camera: {args.camera}")
     print(f"env seed: {env_seed}; env knobs: {knobs}")
     print(f"render {width}x{height} @ {real_fps:.1f} fps "
           f"(stride {stride} of the 50 Hz control loop), backend "
           f"{mujoco.GLContext.__module__}")
     if handoff:
-        print(f"handoff: {args.handoff} (label {handoff.label}) at rot>="
-              f"{HANDOFF_ROT_RAD} rad with both feet down")
+        own = getattr(getattr(env, "behavior", None), "handoff_fn", None)
+        when = (f"{env.behavior.id}'s own condition ({own.__name__})" if own
+                else f"rot>={HANDOFF_ROT_RAD} rad with both feet down")
+        print(f"handoff: {args.handoff} (label {handoff.label}) at {when}")
 
     for ep in range(args.episodes):
         frames, diags, meta = run_episode(

@@ -18,21 +18,29 @@ import {
   clampStepBudget,
   fetchColabSettings,
   fetchColabAccelerators,
+  fetchLab,
   isRunPolicy,
   loadTeachRun,
+  policyTitle,
   resolveStageSteps,
   runNameOfPolicy,
   type BehaviorCard,
   type ColabSettings,
   type ColabAccelerator,
   type LabClient,
+  type Policy,
   type TermCard,
   type TrainingPayload,
 } from "@/lib/lab";
+import { resolveRobot, robotChipLabel, setActiveRobot, useActiveRobot } from "@/lib/activeRobot";
+import { fetchRobots, type RobotInfo } from "@/lib/anim";
+import { trickNoun } from "@/lib/robots";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
+import { bestRunFor } from "@/lib/tricks";
 import { useSelectedDuck } from "@/lib/select";
 import { modalIsOpen, setCloudSettingsOpen, setTeachHeight, usePolicyOpen } from "@/lib/ui";
+import { pushToast } from "./Toasts";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
@@ -52,7 +60,7 @@ type Msg =
   // log would keep advertising a plan the run never trained under.
   | { kind: "card"; card: BehaviorCard; stageSteps?: number[]; stepBudget?: number };
 
-const GREETING_TEXT = "Ask me to teach the duck a trick — try one of the suggestions below.";
+const GREETING_TEXT = "__GREETING__";
 const GREETING: Msg = {
   kind: "note",
   text: GREETING_TEXT,
@@ -78,6 +86,33 @@ function fmtSeconds(sec?: number | null): string {
   const secs = s % 60;
   return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
+
+/** "the duck" / "the G1" / "MARS" — how a sentence names this body. */
+function robotPhrase(r: { noun?: string; title?: string; kind?: string }): string {
+  const noun = r.noun ?? r.title ?? "robot";
+  return trickNoun(r.kind) === "trick" ? `the ${noun}` : noun;
+}
+
+/** The greeting, for whichever robot the switch is on. */
+function greetingFor(r: { noun?: string; title?: string; kind?: string }): string {
+  return `Ask me to teach ${robotPhrase(r)} a ${trickNoun(r.kind)} — try one of the suggestions below.`;
+}
+
+// What a lab too old to send per-robot suggestions (GET /robots `teach`)
+// still gets: the duck, with the chips this panel always offered.
+const DUCK_ONLY: RobotInfo[] = [
+  {
+    id: "microduck",
+    title: "Microduck",
+    noun: "duck",
+    kind: "legged",
+    numJoints: 14,
+    ready: true,
+    teach: ["stand still", "stand on one leg", "crouch down", "spin in place", "do a headstand"].map(
+      (text) => ({ text, behavior: "", emoji: "", title: text })
+    ),
+  },
+];
 
 // --- instant hover tooltip ---------------------------------------------------
 // Native `title` attrs take ~1 s to appear and are easy to miss; this shows a
@@ -311,7 +346,12 @@ function MStepsInput({
 // --- the "edit the recipe" section -----------------------------------------
 // While training runs the sliders are the read-only truth of the live
 // scorecard; once the run ends they unlock, and the two buttons resubmit the
-// behavior with only the weights the user actually moved.
+// behavior with the run's FULL effective recipe — every term at the weight
+// the run actually trained under, the moved sliders and added terms folded
+// in. The server treats an explicit weights dict as the complete override
+// set, so sending only the touched keys silently reset every other term to
+// its recipe default (a seated imitate run's rotation_match 6.05 fell back to
+// 4.00 the moment one catalog term was added).
 
 function RecipeEditor({
   t,
@@ -320,7 +360,10 @@ function RecipeEditor({
 }: {
   t: TrainingPayload;
   wide: boolean;
-  onSubmit: (weights: Record<string, number>, fineTune: boolean) => void;
+  /** `weights` is the full effective set to train under; `changed` counts
+   *  the edits the user actually made — moved sliders plus added terms —
+   *  for the chat note. */
+  onSubmit: (weights: Record<string, number>, fineTune: boolean, changed: number) => void;
 }) {
   // Only touched sliders live here; everything else displays the effective
   // weight straight from the stream. Keyed by run so a new run resets dirt.
@@ -352,13 +395,18 @@ function RecipeEditor({
 
   const live = t.status === "training";
   const effective = (key: string, fallback: number) => t.weights[key] ?? fallback;
-  const moved: Record<string, number> = {};
+  // What the next run trains under: every recipe term at its effective
+  // weight (the stream's t.weights is what the seated run actually used),
+  // with touched sliders laid over. `movedN` is the count of real moves.
+  const submitted: Record<string, number> = {};
+  let movedN = 0;
   for (const term of t.behavior.terms) {
+    const base = effective(term.key, term.weight);
     const v = edited[term.key];
-    if (v != null && Math.abs(v - effective(term.key, term.weight)) > 1e-9)
-      moved[term.key] = v;
+    const moved = v != null && Math.abs(v - base) > 1e-9;
+    if (moved) movedN += 1;
+    submitted[term.key] = moved ? v : base;
   }
-  const movedN = Object.keys(moved).length;
 
   // Catalog terms: already-pulled ones render as regular slider rows and fold
   // into the submitted weights (adding at the default weight is itself the
@@ -369,7 +417,7 @@ function RecipeEditor({
   const addedTerms = catalog.filter((a) => !inRecipe.has(a.key) && added[a.key] != null);
   const pickable = catalog.filter((a) => !inRecipe.has(a.key) && added[a.key] == null);
   const addedN = addedTerms.length;
-  for (const a of addedTerms) moved[a.key] = added[a.key];
+  for (const a of addedTerms) submitted[a.key] = added[a.key];
 
   const btn: React.CSSProperties = {
     background: "#1c2230",
@@ -581,7 +629,10 @@ function RecipeEditor({
                 byPolarity(pickable).map((a) => (
                   <button
                     key={a.key}
-                    onClick={() => setAdded((w) => ({ ...w, [a.key]: a.weight }))}
+                    onClick={() => {
+                      setAdded((w) => ({ ...w, [a.key]: a.weight }));
+                      setPickerOpen(false);
+                    }}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -619,12 +670,12 @@ function RecipeEditor({
       {!live && (
         <div style={{ marginTop: 6 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button style={btn} onClick={() => onSubmit(moved, false)}>
+            <button style={btn} onClick={() => onSubmit(submitted, false, movedN + addedN)}>
               ↻ retrain with edited recipe
             </button>
             <button
               style={{ ...btn, color: "#d8c97d", borderColor: "#5a5233" }}
-              onClick={() => onSubmit(moved, true)}
+              onClick={() => onSubmit(submitted, true, movedN + addedN)}
             >
               ✨ fine-tune the result
             </button>
@@ -673,7 +724,8 @@ function LiveTraining({
   onRecipeSubmit: (
     weights: Record<string, number>,
     fineTune: boolean,
-    stageWeights: StageWeightsMap | null
+    stageWeights: StageWeightsMap | null,
+    changed: number
   ) => void;
   onStageWeights: (stageWeights: StageWeightsMap) => void;
   onStartStage: (idx: number, stageWeights: StageWeightsMap | null) => void;
@@ -1205,7 +1257,7 @@ function LiveTraining({
         wide={wide}
         // Pending stage edits ride the retrain (the fine-tune path is a
         // single run — the server drops them there).
-        onSubmit={(w, ft) => onRecipeSubmit(w, ft, stageWeightsOrNull())}
+        onSubmit={(w, ft, changed) => onRecipeSubmit(w, ft, stageWeightsOrNull(), changed)}
       />
     </div>
   );
@@ -1241,6 +1293,26 @@ export function TeachPanel({
   const [colabGpu, setColabGpu] = useState<string>(() => {
     return loadJSON<string>("teachColabGpu", "T4");
   });
+
+  // WHICH BODY the next trick is for. Everything robot-specific below — the
+  // greeting, the chips, the placeholder — is read off the lab's /robots, so
+  // a third robot shows up here by registering recipes, not by editing this.
+  const [robots, setRobots] = useState<RobotInfo[]>(DUCK_ONLY);
+  // The robot is the ONE every panel shares (lib/activeRobot.ts): picking the
+  // G1 in the 🧠 palette, or clicking one on the stage, is already the answer
+  // to "teach which robot?". A choice the lab doesn't list (or can't teach)
+  // falls back to the first robot without overwriting it.
+  const activeRobot = useActiveRobot();
+  const robot = resolveRobot(robots, activeRobot) ?? DUCK_ONLY[0];
+  const noun = robot.noun ?? robot.title;
+  const suggestions = robot.teach ?? [];
+  // Our runs, for the ▶ beside a trick that already has a MEASURED best run —
+  // so watching what a trick looks like never means digging through 🧠.
+  const [policies, setPolicies] = useState<Policy[]>([]);
+  // "How long should it practice?" is folded to one line until asked for: the
+  // recipe's own plan is right for nearly everyone, and three rows about
+  // M steps used to stand between a newcomer and the trick chips.
+  const [budgetOpen, setBudgetOpen] = useState(false);
   const [training, setTraining] = useState<TrainingPayload | null>(null);
   // Read off the streamed roster rather than the trainer: the trainee duck in
   // the scene runs the newest snapshot, so this is the speed the user is
@@ -1266,6 +1338,32 @@ export function TeachPanel({
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => saveJSON("teachOpen", open), [open]);
+  useEffect(() => {
+    if (!open) return;
+    let stale = false;
+    fetchRobots()
+      .then((r) => {
+        // Only bodies with something to teach; an old lab (no `teach`) keeps DUCK_ONLY.
+        const teachable = r.filter((x) => x.teach?.length);
+        if (!stale && teachable.length) setRobots(teachable);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [open]);
+  // Refetched when a run finishes too: that is when a new best can appear.
+  const trainingStatus = training?.status;
+  useEffect(() => {
+    if (!open) return;
+    let stale = false;
+    fetchLab()
+      .then((lab) => !stale && setPolicies(lab.policies))
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [open, trainingStatus]);
   useEffect(() => saveJSON("teachWide", wide), [wide]);
   useEffect(() => saveJSON("teachMsgs", msgs.slice(-MSG_CAP)), [msgs]);
   useEffect(() => saveJSON("teachComputeBackend", computeBackend), [computeBackend]);
@@ -1378,6 +1476,15 @@ export function TeachPanel({
       .catch(() => {});
   }, [selectedDuck, clientRef]);
 
+  // Selecting a robot on the stage also answers "which robot?" — for this
+  // panel's chips, the 🧠 palette's list and 🎬 animate alike. Lives here
+  // because this panel is always mounted and already follows the selection.
+  useEffect(() => {
+    if (!selectedDuck) return;
+    const d = clientRef.current?.frame?.ducks.find((x) => x.id === selectedDuck);
+    if (d) setActiveRobot(d.robot || "microduck");
+  }, [selectedDuck, clientRef]);
+
   /** POST /teach and fold the response into the chat. The practice budget
    *  rides along on every launch path (typed trick, suggestion, retrain,
    *  fine-tune, start-from-stage) — it's one control, so it applies to
@@ -1385,12 +1492,14 @@ export function TeachPanel({
    *  the server's per-behavior memory the fallback. */
   async function postTeach(body: {
     text: string;
+    clip?: string;
     weights?: Record<string, number>;
     stageWeights?: Record<string, Record<string, number>>;
     stageSteps?: Record<string, number>;
     startStage?: number;
     initFrom?: string;
     backend?: string;
+    robot?: string;
   }) {
     try {
       const activeBackend = body.backend || computeBackend;
@@ -1449,21 +1558,27 @@ export function TeachPanel({
     if (!trimmed) return;
     setInput("");
     setMsgs((m) => [...m, { kind: "user", text: trimmed }]);
-    await postTeach({ text: trimmed });
+    // Only a robot the lab listed is sent — an old lab rejects nothing it
+    // does not know, and the duck-only fallback leaves the old guess alone.
+    await postTeach({ text: trimmed, ...(robots !== DUCK_ONLY ? { robot: robot.id } : {}) });
   }
 
-  /** Recipe buttons: resubmit the current behavior with the moved sliders,
-   *  fresh (retrain) or warm-started from the finished run (fine-tune).
-   *  Pending per-stage edits ride the retrain path (fine-tunes are single
-   *  runs — the server ignores stage weights there, so don't send them). */
+  /** Recipe buttons: resubmit the current behavior under its full effective
+   *  recipe (the run's own weights with the moved sliders and added terms
+   *  folded in — see RecipeEditor), fresh (retrain) or warm-started from the
+   *  finished run (fine-tune). Pending per-stage edits ride the retrain path
+   *  (fine-tunes are single runs — the server ignores stage weights there,
+   *  so don't send them). `changed` is how many sliders actually moved. */
   async function submitRecipe(
     weights: Record<string, number>,
     fineTune: boolean,
-    stageWeights: Record<string, Record<string, number>> | null
+    stageWeights: Record<string, Record<string, number>> | null,
+    changed: number
   ) {
     if (!training) return;
+    const clip = training.behavior.clip;
     const n = Object.keys(weights).length;
-    const tweak = n ? ` with ${n} adjusted weight${n > 1 ? "s" : ""}` : "";
+    const tweak = changed ? ` with ${changed} adjusted weight${changed > 1 ? "s" : ""}` : "";
     setMsgs((m) => [
       ...m,
       {
@@ -1474,7 +1589,13 @@ export function TeachPanel({
       },
     ]);
     await postTeach({
-      text: training.behavior.title,
+      // The stable id, never the card's title: the server matches an id
+      // exactly, while a title is display text — an imitation card is
+      // titled `Perform “<clip>”`, and scored as prose that reached
+      // whichever recipe owned a keyword inside the clip's name. The clip
+      // rides along explicitly so a retrain/fine-tune trains the same motion.
+      text: training.behavior.id,
+      ...(clip ? { clip } : {}),
       ...(n ? { weights } : {}),
       ...(fineTune ? { initFrom: training.runName } : {}),
       ...(!fineTune && stageWeights ? { stageWeights } : {}),
@@ -1690,7 +1811,7 @@ export function TeachPanel({
             </div>
           ) : m.kind === "note" ? (
             <div key={i} style={{ color: "#aab3c0", margin: "6px 0" }}>
-              {m.text === GREETING_TEXT && isZh ? GREETING_ZH : m.text}
+              {m.text === GREETING_TEXT ? (isZh ? GREETING_ZH : greetingFor(robot)) : m.text}
             </div>
           ) : (
             <div
@@ -1767,92 +1888,46 @@ export function TeachPanel({
       </div>
 
       <div style={{ padding: "8px 12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-        {/* How long should it practice? Sits with the ask, because that's
-            when the question comes up — and it applies to whatever you start
-            next: a typed trick, a suggestion, retrain, fine-tune, or a
-            start-from-stage. */}
-        <div style={{ marginBottom: 6 }}>
+        {robots.length > 1 && (
           <div
-            style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}
+            role="radiogroup"
+            aria-label="robot to teach"
+            style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 6 }}
           >
-            <Tip
-              tip={
-                <>
-                  <div>{tr("How long the duck gets to practice, in millions of tries.", "鸭子练习多久，单位为百万步。")}</div>
-                  <div style={{ color: "#8b93a3", marginTop: 3 }}>
-                    {tr(
-                      `More practice usually means a better trick and a longer wait. Type any number between ${fmtSteps(MIN_STEP_BUDGET)} and ${fmtSteps(MAX_STEP_BUDGET)}, or tap a preset. A trick with stages splits this across them, keeping the recipe's proportions.`,
-                      `练习越多通常动作越好，但等待也越久。输入 ${fmtSteps(MIN_STEP_BUDGET)} 到 ${fmtSteps(MAX_STEP_BUDGET)} 之间的数字，或选择预设。多阶段动作会按配方比例分配步数。`
-                    )}
-                  </div>
-                </>
-              }
-            >
-              <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("practice for", "练习步数")}</span>
-            </Tip>
-            <MStepsInput
-              value={budgetShown}
-              placeholder={tr("recipe", "默认")}
-              onCommit={setBudgetSteps}
-            />
-            <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("M steps", "百万步")}</span>
-            {offRecipe && (
-              <Tip tip="back to the practice plan the recipe ships with">
-                <button
-                  onClick={resetToRecipe}
-                  style={{
-                    background: "none",
-                    color: "#8b93a3",
-                    border: "1px dashed rgba(255,255,255,0.22)",
-                    borderRadius: 12,
-                    padding: "1px 7px",
-                    fontFamily: mono,
-                    fontSize: 10,
-                    cursor: "pointer",
-                  }}
-                >
-                  ↺ {tr("recipe", "默认配方")}
-                </button>
-              </Tip>
-            )}
-          </div>
-          <div
-            style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginTop: 3 }}
-          >
-            {BUDGET_PRESETS_M.map((m) => {
-              const on = budgetShown === m * 1e6;
+            <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("teach", "对象")}</span>
+            {robots.map((r) => {
+              const on = r.id === robot.id;
               return (
                 <button
-                  key={m}
-                  onClick={() => setBudgetSteps(m * 1e6)}
+                  key={r.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setActiveRobot(r.id)}
+                  title={
+                    r.ready
+                      ? `teach ${robotPhrase(r)} a ${trickNoun(r.kind)}`
+                      : `${r.title} isn't downloaded yet — see 🧠 policies`
+                  }
                   style={{
                     background: on ? "#2a3548" : "#1c2230",
-                    color: on ? "#e8e6e1" : "#9fb4d8",
+                    color: on ? "#e8e6e1" : r.ready ? "#9fb4d8" : "#6b7280",
                     border: `1px solid ${on ? "#7db8d8" : "rgba(255,255,255,0.08)"}`,
                     borderRadius: 12,
-                    padding: "1px 7px",
+                    padding: "1px 8px",
                     fontFamily: mono,
                     fontSize: 10,
                     cursor: "pointer",
                   }}
                 >
-                  {m}M
+                  {robotChipLabel(r)}
                 </button>
               );
             })}
           </div>
-          <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 2 }}>
-            {planTotal > 0
-              ? tr(`${fmtSteps(planTotal)} practice steps in total`, `共 ${fmtSteps(planTotal)} 步练习`)
-              : tr("each trick practices for as long as its own recipe says — set a number to change that", "每个动作按自带配方训练—设置数字可修改")}
-          </div>
-          {plan.length > 1 && (
-            <div style={{ color: "#8b93a3", fontSize: 10 }}>
-              {plan.length} {tr("stages", "阶段")}：{plan.map((s) => fmtSteps(s)).join(" / ")}
-            </div>
-          )}
-        </div>
-        {/* 算力后端选择 */}
+        )}
+
+        {/* 算力后端选择与 Colab 显卡规格选择 */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
             <button
@@ -1973,21 +2048,165 @@ export function TeachPanel({
             )
           )}
         </div>
+
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
-          {SUGGESTIONS.map((s) => (
-            <button
-              key={s}
-              onClick={() => submit(s)}
-              style={{
-                background: "#1c2230", color: "#9fb4d8",
-                border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12,
-                padding: "2px 8px", fontFamily: mono, fontSize: 10, cursor: "pointer",
-              }}
-            >
-              {isZh ? SUGGESTIONS_ZH[s] : s}
-            </button>
-          ))}
+          {suggestions.map(({ text: s, title, emoji, behavior }) => {
+            const best = bestRunFor(policies, behavior, robot.id);
+            const chip: React.CSSProperties = {
+              background: "#1c2230", color: "#9fb4d8",
+              border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12,
+              padding: "2px 8px", fontFamily: mono, fontSize: 10, cursor: "pointer",
+            };
+            const zhLabel = isZh && SUGGESTIONS_ZH[s] ? SUGGESTIONS_ZH[s] : s;
+            return (
+              <span key={s} style={{ display: "inline-flex", alignItems: "stretch" }}>
+                <button
+                  title={`teach ${robotPhrase(robot)}: ${title}`}
+                  onClick={() => submit(s)}
+                  style={best ? { ...chip, borderRadius: "12px 0 0 12px", borderRight: "none" } : chip}
+                >
+                  {emoji ? `${emoji} ${zhLabel}` : zhLabel}
+                </button>
+                {best && (
+                  <Tip
+                    tip={
+                      <>
+                        <div>{tr("▶ watch the best run so far — spawns a duck running it.", "▶ 观察历史最佳训练成果—在场景中生成预览鸭。")}</div>
+                        <div style={{ color: "#8b93a3", marginTop: 3 }}>
+                          {policyTitle(best)}
+                          {best.note ? ` — ${best.note}` : ""}
+                        </div>
+                      </>
+                    }
+                  >
+                    <button
+                      aria-label={`watch the best ${title} run`}
+                      onClick={() => {
+                        clientRef.current?.sendSpawnDuck(best.id, !!best.chain);
+                        pushToast(`⚡ ${tr("spawning", "生成预览")} ${policyTitle(best)}…`);
+                      }}
+                      style={{
+                        ...chip,
+                        color: "#d8cfa0",
+                        border: "1px solid rgba(216, 198, 125, 0.45)",
+                        borderRadius: "0 12px 12px 0",
+                        padding: "2px 7px 2px 5px",
+                        height: "100%",
+                      }}
+                    >
+                      ▶
+                    </button>
+                  </Tip>
+                )}
+              </span>
+            );
+          })}
         </div>
+
+        {/* 练习预算与阶段配置 */}
+        <div style={{ marginBottom: 6 }}>
+          <button
+            type="button"
+            onClick={() => setBudgetOpen((v) => !v)}
+            aria-expanded={budgetOpen}
+            title={tr("how long the next run practices — click to change it", "修改下次训练的总练习步数")}
+            style={{
+              background: "none", border: "none", padding: 0, color: "#8b93a3",
+              fontFamily: mono, fontSize: 10, cursor: "pointer",
+            }}
+          >
+            <span style={{ fontSize: 8 }}>{budgetOpen ? "▾" : "▸"}</span> ⏱ {tr("practice:", "练习预算:")}{" "}
+            <span style={{ color: offRecipe || budgetSteps != null ? "#e8e6e1" : "#9fb4d8" }}>
+              {planTotal > 0
+                ? `${fmtSteps(planTotal)} ${tr("steps", "步")}${plan.length > 1 ? ` · ${plan.length} ${tr("stages", "阶段")}` : ""}`
+                : tr("as long as the recipe says", "按默认配方训练")}
+            </span>
+          </button>
+          {budgetOpen && (
+            <div style={{ marginTop: 4 }}>
+              <div
+                style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}
+              >
+                <Tip
+                  tip={
+                    <>
+                      <div>{tr(`How long ${robotPhrase(robot)} gets to practice, in millions of tries.`, `机器人练习多久，单位为百万步。`)}</div>
+                      <div style={{ color: "#8b93a3", marginTop: 3 }}>
+                        {tr(
+                          `More practice usually means a better trick and a longer wait. Type any number between ${fmtSteps(MIN_STEP_BUDGET)} and ${fmtSteps(MAX_STEP_BUDGET)}, or tap a preset. A trick with stages splits this across them, keeping the recipe's proportions.`,
+                          `练习越多通常动作越好，但等待也越久。输入 ${fmtSteps(MIN_STEP_BUDGET)} 到 ${fmtSteps(MAX_STEP_BUDGET)} 之间的数字，或选择预设。多阶段动作会按配方比例分配步数。`
+                        )}
+                      </div>
+                    </>
+                  }
+                >
+                  <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("practice for", "练习")}</span>
+                </Tip>
+                <MStepsInput
+                  value={budgetShown}
+                  placeholder={tr("recipe", "默认")}
+                  onCommit={setBudgetSteps}
+                />
+                <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("M steps", "百万步")}</span>
+                {offRecipe && (
+                  <Tip tip={tr("back to the practice plan the recipe ships with", "恢复配方默认步数")}>
+                    <button
+                      onClick={resetToRecipe}
+                      style={{
+                        background: "none",
+                        color: "#8b93a3",
+                        border: "1px dashed rgba(255,255,255,0.22)",
+                        borderRadius: 12,
+                        padding: "1px 7px",
+                        fontFamily: mono,
+                        fontSize: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ↺ {tr("recipe", "默认配方")}
+                    </button>
+                  </Tip>
+                )}
+              </div>
+              <div
+                style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginTop: 3 }}
+              >
+                {BUDGET_PRESETS_M.map((m) => {
+                  const on = budgetShown === m * 1e6;
+                  return (
+                    <button
+                      key={m}
+                      onClick={() => setBudgetSteps(m * 1e6)}
+                      style={{
+                        background: on ? "#2a3548" : "#1c2230",
+                        color: on ? "#e8e6e1" : "#9fb4d8",
+                        border: `1px solid ${on ? "#7db8d8" : "rgba(255,255,255,0.08)"}`,
+                        borderRadius: 12,
+                        padding: "1px 7px",
+                        fontFamily: mono,
+                        fontSize: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {m}M
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 2 }}>
+                {planTotal > 0
+                  ? tr(`${fmtSteps(planTotal)} practice steps in total`, `共 ${fmtSteps(planTotal)} 步练习`)
+                  : tr("each trick practices for as long as its own recipe says — set a number to change that", "每个动作按自带配方训练—设置数字可修改")}
+              </div>
+              {plan.length > 1 && (
+                <div style={{ color: "#8b93a3", fontSize: 10 }}>
+                  {plan.length} {tr("stages", "阶段")}: {plan.map((s) => fmtSteps(s)).join(" / ")}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -1997,7 +2216,7 @@ export function TeachPanel({
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={tr("teach the duck a new policy…", "输入想让鸭子学习的新动作…")}
+            placeholder={isZh ? `输入想让${robotPhrase(robot)}学习的新动作…` : `teach ${robotPhrase(robot)} a new policy…`}
             style={{
               width: "100%", boxSizing: "border-box", background: "#12151b",
               border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6,

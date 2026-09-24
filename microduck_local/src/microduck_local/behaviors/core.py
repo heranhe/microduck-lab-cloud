@@ -67,6 +67,34 @@ class Behavior:
     description: str       # what the duck will learn, one sentence
     how_it_learns: str     # 2-3 plain sentences for the explainer card
     keywords: tuple[str, ...]
+    # --- which body, and who trains it -------------------------------------
+    # Everything else in this package is a MICRODUCK reward recipe: duck
+    # joints, duck feet, the 61-obs command slots. Another body's tasks are
+    # env subclasses (robots/g1_env.py) run by a different trainer, and they
+    # register HERE anyway so the teach panel, the job card, the live
+    # snapshots and the 🎓 trainee all work exactly as they do for a trick.
+    # `robot` filters what a roster can be asked to learn; `trainer` is the
+    # argv TrainingJob launches instead of `train_behavior` (None = the duck's).
+    robot: str = "microduck"
+    trainer: tuple[str, ...] | None = None
+    # The phrase the 🎓 panel offers as a one-click suggestion chip for this
+    # robot ("stand on one leg"). Empty = not suggested (still teachable by
+    # typing). It must MATCH this recipe (tests/test_teach_robots.py), so a
+    # chip can never launch a different trick than the one it names.
+    suggest: str = ""
+
+    @property
+    def task(self) -> str:
+        """The `--task` this recipe's trainer runs, read off `trainer`.
+
+        The 🎓 trainee previews this env, so deriving it from the id spelling
+        instead ("…_stand" -> stand, anything else -> walk) silently showed a
+        WALK preview for the squat task while the trainer squatted.
+        """
+        argv = list(self.trainer or ())
+        if "--task" in argv:
+            return argv[argv.index("--task") + 1]
+        return "walk"
     terms: tuple[RewardTerm, ...] = field(default=())
     default_steps: int = 2_000_000
     success_metric: str = ""
@@ -88,6 +116,12 @@ class Behavior:
     scene: str = "walk"
     # Inverted tricks ARE what the walk env calls "fallen" — disable for them.
     terminate_on_fall: bool = True
+    # The walk env's second fall rule ends an episode when the trunk drops
+    # under FALL_HEIGHT (0.07 m). Right for standing tricks — a trunk that low
+    # has collapsed — but wrong when the GOAL is down there (a deep squat) and
+    # for locomotion (the GPU stack has no z-kill; a bouncing stride dips
+    # through it without falling). False keeps only the tilt rule.
+    height_termination: bool = True
     # Reverse curriculum: fraction of episodes spawned already IN the trick's
     # end state (playbook: the reliable fix for "learns the start, never the
     # last mile" — the goal state otherwise gets no on-policy data).
@@ -127,6 +161,40 @@ class Behavior:
     # generic — behaviors own their knobs, the server just exports them into
     # each stage's subprocess environment.
     curriculum: tuple = ()
+    # TASK-STATE hooks, for behaviors whose world holds something the robot
+    # is not (a ball to find). `reset_fn(env)` runs at the end of every
+    # reset, after the spawn families have posed the duck, and the obs is
+    # rebuilt after it; `obs_fn(env)` runs before every observation is
+    # assembled and may write the command slots (the imitation clip's phase
+    # rides the body slots the same way — the 61-dim contract is untouched,
+    # only what the daemon must put in those slots changes per task).
+    reset_fn: Callable | None = None
+    obs_fn: Callable | None = None
+    # Read-side hooks, so the tools that LOOK at a policy can see the task
+    # state too: `caption_fn(env) -> str` is one extra contact-sheet caption
+    # line, `markers_fn(env) -> [(xyz, radius, rgba), ...]` draws the task's
+    # objects into the render, `report_fn(env) -> [str, ...]` adds lines to
+    # the episode summary, and `marker_payload(env)` is what the lab streams
+    # to the viewer (the ball's position, or None).
+    caption_fn: Callable | None = None
+    markers_fn: Callable | None = None
+    report_fn: Callable | None = None
+    # HANDOFF: the brain a finished behavior gives control to, and when.
+    # `handoff_fn(env) -> bool` is the condition, asked once per control step
+    # while a handoff is armed. It lives HERE, on the behavior, because the
+    # two callers — render_rollout's `--handoff` and the lab's showcase duck —
+    # have to agree exactly, and the flip's version is two copies of the same
+    # rule kept in step by a comment. A behavior that brings its own predicate
+    # gets one implementation and both callers by construction.
+    # `handoff_policy` names the shipped brain to hand to (default: the lab's
+    # alpha_stand, which rises from the crouch a trick lands in).
+    # `handoff_recenter` is the lab's post-handoff yaw correction, which
+    # exists to undo the heading a LANDING imparts — a behavior that chose
+    # its heading on purpose (find_ball turned to face the ball) must set it
+    # False or the commander spins that choice away.
+    handoff_fn: Callable | None = None
+    handoff_policy: str | None = None
+    handoff_recenter: bool = True
 
 
 def resolve_clip_name(behavior: Behavior, clip_name: str | None = None) -> str | None:
@@ -197,6 +265,30 @@ def _v6_buf(env) -> np.ndarray:
 def _upright(env) -> float:
     g = env._projected_gravity()
     return float(np.exp(-(g[0] ** 2 + g[1] ** 2) / 0.05))
+
+
+def _upright_wide(env) -> float:
+    """Two-layer upright: a wide pull that still slopes at big lean angles,
+    plus the original tight polish. Same 0..1 range, same value at 0.
+
+    `_upright`'s single Gaussian has a std of ~12.9 deg of tilt, so it is worth
+    0.55 at 10 deg, 0.10 at 20 and 0.007 at 30 — past ~25 deg there is no pay
+    left and therefore NO GRADIENT PULLING THE DUCK BACK. It prices being
+    upright but not RECOVERING, so once a lean is committed the fall is free.
+    That is the failure `_ball_face`'s docstring records for its own wide
+    Gaussian ("paid 0.04 with the ball straight behind and sloped nowhere the
+    policy was"), and this is the same fix: keep a layer alive out where the
+    policy actually is. Worth 0.44 at 20 deg, 0.31 at 30 and 0.21 at 41 — the
+    tilt at which find_ball's back-start falls become unrecoverable.
+
+    OPT-IN (`_upright_term(w, wide=True)`), because `_upright` is shared: it is
+    a catalog term, it gates `one_leg`'s hold, and it SCALES backflip's brake
+    penalty and two of imitate's terms. Widening it globally would silently
+    re-price all of those. See docs/roadmap.md — it needs an A/B on a non-ball
+    recipe before any of them adopt it."""
+    g = env._projected_gravity()
+    s = float(g[0] ** 2 + g[1] ** 2)
+    return 0.5 * float(np.exp(-s / 0.5)) + 0.5 * float(np.exp(-s / 0.05))
 
 
 def _still_penalty(env) -> float:
@@ -433,9 +525,12 @@ _BASE_REGULARIZERS = (
 )
 
 
-def _upright_term(w=1.5):
+def _upright_term(w=1.5, wide=False):
+    """The shared upright pay. `wide` swaps the single Gaussian for the
+    two-layer shape (see `_upright_wide`) while keeping the term KEY, so a
+    recipe's weight sliders and its behavior.json stay compatible."""
     return RewardTerm("stay_upright", "Points for keeping the body level", w,
-                      _upright)
+                      _upright_wide if wide else _upright)
 
 
 _lift_up_L, _stance_L, _hold_L = _one_leg("right", "left")
@@ -598,12 +693,26 @@ def _register(b: Behavior) -> None:
 
 
 
-def match_behavior(text: str) -> Behavior | None:
-    """Cheap keyword matcher from a chat message to a behavior."""
+def for_robot(robot: str = "microduck") -> list[Behavior]:
+    """Everything `robot` can be asked to learn, in registry order."""
+    return [b for b in BEHAVIORS.values() if b.robot == (robot or "microduck")]
+
+
+def match_behavior(text: str, robot: str = "microduck") -> Behavior | None:
+    """Cheap keyword matcher from a chat message to a behavior.
+
+    A bare behavior id ("imitate", "one_leg") matches exactly, before any
+    keyword scoring: that is how the teach panel resubmits a run's recipe.
+    Its cards may carry a DISPLAY title the keywords never see — an
+    imitation run is titled after its clip, `Perform “backflip”`, and
+    scored as prose that text reaches the floor-roll recipe instead."""
+    key = text.strip().lower()
+    if key in BEHAVIORS and BEHAVIORS[key].robot == (robot or "microduck"):
+        return BEHAVIORS[key]
     # Keep the "1 leg" alias without corrupting angles such as 180 -> one80.
     t = " " + re.sub(r"(?<!\d)1(?!\d)", "one", text.lower()).strip() + " "
     best, best_score = None, 0.0
-    for b in BEHAVIORS.values():
+    for b in for_robot(robot):
         # Score by how much of the message a keyword actually explains, so a
         # SPECIFIC phrase outranks a generic substring of itself: "jump
         # backflip" must reach the jumping flip, not the floor roll that owns

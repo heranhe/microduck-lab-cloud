@@ -4,7 +4,7 @@ module exposed (private helpers included — the tests import them) is
 re-exported here, so `from microduck_local.behaviors import X` is untouched.
 
 Layout: core.py (dataclasses, registry, catalog, shared reward helpers) →
-poses / headstand / backflip / airflip / imitate / locomotion (each registers
+poses / headstand / backflip / airflip / imitate / locomotion / ball (each registers
 its behaviors on import, same order as the flat file) → env.py (BehaviorEnv).
 """
 import builtins as _builtins
@@ -17,20 +17,29 @@ import importlib as _importlib  # noqa: F401
 from ..motion import reload_modules as _reload_modules
 from . import airflip as _airflip
 from . import backflip as _backflip
+from . import ball as _ball
 from . import core as _core
 from . import env as _envm
+from . import g1_tasks as _g1_tasks
+from . import getup as _getup
 from . import headstand as _headstand
 from . import imitate as _imitate
+from . import kick as _kick
+from . import lastmetre as _lastmetre
 from . import locomotion as _locomotion
+from . import mars_tasks as _mars_tasks
 from . import poses as _poses
 from . import white_crane as _white_crane
 from . import single_leg_hop as _single_leg_hop
 from . import jump_turn as _jump_turn
 from . import long_jump as _long_jump
 
-_SUBMODULES = [_core, _poses, _headstand, _backflip, _airflip, _imitate,
-               _locomotion, _white_crane, _single_leg_hop, _jump_turn, _long_jump, _envm]
-
+_SUBMODULES = [
+    _core, _poses, _headstand, _backflip, _airflip, _imitate, _kick,
+    _getup, _locomotion, _ball, _lastmetre, _g1_tasks, _mars_tasks,
+    _white_crane, _single_leg_hop, _jump_turn, _long_jump,
+    _envm,
+]
 
 # The BARE submodule names. `from . import core as _core` binds `_core` here
 # AND pins `core` on the package (the import system does that for every

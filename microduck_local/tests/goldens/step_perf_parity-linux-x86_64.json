@@ -1,0 +1,1464 @@
+{
+ "data": {
+  "backflip-bam": [
+   "10a01b721df1189ed158dab46c7208172da8856d23a1c83552d9ce1dd2b34194",
+   {
+    "arch_over": "0x0.0p+0",
+    "calm_landed_penalty": "0x0.0p+0",
+    "feet_under": "0x0.0p+0",
+    "flip_progress": "0x1.338061b1501aap+0",
+    "gentle_head_penalty": "-0x1.74ca45f98f703p+1",
+    "gentle_joints_penalty": "-0x1.0d8b02ff7b9acp+2",
+    "head_rise": "0x0.0p+0",
+    "land_tall": "0x0.0p+0",
+    "landed_hold": "0x0.0p+0",
+    "lean_back": "0x1.da9b462600000p+2",
+    "legs_over": "0x1.27076601586bbp-2",
+    "neck_kip": "0x0.0p+0",
+    "neck_pushup": "0x0.0p+0",
+    "no_jaw_parking_penalty": "0x0.0p+0",
+    "no_limit_parking_penalty": "-0x1.6b21df04e1aa6p+0",
+    "push_off": "0x1.9b7fe8ebeb112p+3",
+    "save_energy_penalty": "-0x1.d74ad1199d879p+3",
+    "smooth_moves_penalty": "-0x1.e2b164bd70a3dp+3",
+    "soft_landings_penalty": "-0x1.1598bdde1789cp+0",
+    "stand_pose": "0x0.0p+0",
+    "stay_home_penalty": "-0x1.40c53ed4a8e54p-1",
+    "stick_it_penalty": "0x0.0p+0",
+    "still_head_penalty": "-0x1.f919525771665p+2",
+    "straight_flip_penalty": "-0x1.a9f222ebb76fcp+4",
+    "tuck_ball": "0x1.3e3862eb87b31p+2"
+   },
+   [
+    {
+     "obs_abs": 2889.308731666126,
+     "obs_sum": -237.49705334557802,
+     "reward": -47.842633499046634,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "arch_over": 0.0,
+      "calm_landed_penalty": 0.0,
+      "feet_under": 0.0,
+      "flip_progress": 1.2011776979344213,
+      "gentle_head_penalty": -2.912422892432802,
+      "gentle_joints_penalty": -4.211609601492835,
+      "head_rise": 0.0,
+      "land_tall": 0.0,
+      "landed_hold": 0.0,
+      "lean_back": 7.415727173909545,
+      "legs_over": 0.28811416037761334,
+      "neck_kip": 0.0,
+      "neck_pushup": 0.0,
+      "no_jaw_parking_penalty": 0.0,
+      "no_limit_parking_penalty": -1.4184855830114116,
+      "push_off": 12.85936399534015,
+      "save_energy_penalty": -14.727882909803371,
+      "smooth_moves_penalty": -15.084154481887817,
+      "soft_landings_penalty": -1.0843619029251732,
+      "stand_pose": 0.0,
+      "stay_home_penalty": -0.6265048632234973,
+      "stick_it_penalty": 0.0,
+      "still_head_penalty": -7.892170510667346,
+      "straight_flip_penalty": -26.62161533428933,
+      "tuck_ball": 4.972191553125229
+     }
+    },
+    {
+     "obs_abs": 2889.3922490290715,
+     "obs_sum": -167.62203032622347,
+     "reward": -46.31910869428105,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "arch_over": 0.0,
+      "calm_landed_penalty": 0.0,
+      "feet_under": 0.0,
+      "flip_progress": 1.2796752081730705,
+      "gentle_head_penalty": -1.0688777875637245,
+      "gentle_joints_penalty": -4.601338229516542,
+      "head_rise": 0.0,
+      "land_tall": 0.0,
+      "landed_hold": 0.0,
+      "lean_back": 6.657632507383823,
+      "legs_over": 0.4005737749529947,
+      "neck_kip": 0.0,
+      "neck_pushup": 0.0,
+      "no_jaw_parking_penalty": 0.0,
+      "no_limit_parking_penalty": -1.1560198307730307,
+      "push_off": 13.496137929126748,
+      "save_energy_penalty": -14.75942088993234,
+      "smooth_moves_penalty": -14.977398719787596,
+      "soft_landings_penalty": -0.8951110814851757,
+      "stand_pose": 0.0,
+      "stay_home_penalty": -1.2015295303116957,
+      "stick_it_penalty": 0.0,
+      "still_head_penalty": -11.606879860398177,
+      "straight_flip_penalty": -23.161338986228657,
+      "tuck_ball": 5.274786802079255
+     }
+    },
+    {
+     "obs_abs": 2790.0378048375715,
+     "obs_sum": -118.64453968161251,
+     "reward": -38.16213636745678,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "arch_over": 0.0,
+      "calm_landed_penalty": 0.0,
+      "feet_under": 0.0,
+      "flip_progress": 1.0357675928974286,
+      "gentle_head_penalty": -1.4159764108475503,
+      "gentle_joints_penalty": -4.374385046718097,
+      "head_rise": 0.0,
+      "land_tall": 0.0,
+      "landed_hold": 0.0,
+      "lean_back": 8.247767032589763,
+      "legs_over": 0.2457456796562903,
+      "neck_kip": 0.0,
+      "neck_pushup": 0.0,
+      "no_jaw_parking_penalty": 0.0,
+      "no_limit_parking_penalty": -3.6796850052529506,
+      "push_off": 16.868474842759582,
+      "save_energy_penalty": -14.317967137014081,
+      "smooth_moves_penalty": -14.519475121498107,
+      "soft_landings_penalty": -0.8603777718207006,
+      "stand_pose": 0.0,
+      "stay_home_penalty": -1.3376890146949234,
+      "stick_it_penalty": 0.0,
+      "still_head_penalty": -8.498139783259804,
+      "straight_flip_penalty": -19.870314227482893,
+      "tuck_ball": 4.314118003229258
+     }
+    }
+   ]
+  ],
+  "backflip-xml": [
+   "48b38b1c1f58b9e293f41adf1b9865f2251182738782e01deab326c66d6a6bd6",
+   {
+    "arch_over": "0x0.0p+0",
+    "calm_landed_penalty": "0x0.0p+0",
+    "feet_under": "0x0.0p+0",
+    "flip_progress": "0x1.2249bf8e0f204p-11",
+    "gentle_head_penalty": "-0x1.3673c79ba06d9p+1",
+    "gentle_joints_penalty": "-0x1.f0a9859788041p+2",
+    "head_rise": "0x0.0p+0",
+    "land_tall": "0x0.0p+0",
+    "landed_hold": "0x0.0p+0",
+    "lean_back": "0x0.0p+0",
+    "legs_over": "0x0.0p+0",
+    "neck_kip": "0x0.0p+0",
+    "neck_pushup": "0x0.0p+0",
+    "no_jaw_parking_penalty": "-0x1.331554808f3b3p+4",
+    "no_limit_parking_penalty": "-0x1.76c2b8fee317cp+1",
+    "push_off": "0x1.1ab98c193e9d6p+3",
+    "save_energy_penalty": "-0x1.218f302317a7ap+3",
+    "smooth_moves_penalty": "-0x1.e2b164bd70a3dp+3",
+    "soft_landings_penalty": "-0x1.958f609eed971p-1",
+    "stand_pose": "0x0.0p+0",
+    "stay_home_penalty": "-0x1.4510522274a67p-3",
+    "stick_it_penalty": "0x0.0p+0",
+    "still_head_penalty": "-0x1.2b75fae3229bbp+2",
+    "straight_flip_penalty": "-0x1.563d26aaad6bbp+4",
+    "tuck_ball": "0x0.0p+0"
+   },
+   [
+    {
+     "obs_abs": 3571.2068870888397,
+     "obs_sum": 56.70072562351561,
+     "reward": -74.62329753712132,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "arch_over": 0.0,
+      "calm_landed_penalty": 0.0,
+      "feet_under": 0.0,
+      "flip_progress": 0.0005536805708810659,
+      "gentle_head_penalty": -2.425408316602312,
+      "gentle_joints_penalty": -7.760346792201802,
+      "head_rise": 0.0,
+      "land_tall": 0.0,
+      "landed_hold": 0.0,
+      "lean_back": 0.0,
+      "legs_over": 0.0,
+      "neck_kip": 0.0,
+      "neck_pushup": 0.0,
+      "no_jaw_parking_penalty": -19.192707540689025,
+      "no_limit_parking_penalty": -2.9278174633565737,
+      "push_off": 8.83514981203636,
+      "save_energy_penalty": -9.048729008235785,
+      "smooth_moves_penalty": -15.084154481887817,
+      "soft_landings_penalty": -0.7921095079425823,
+      "stand_pose": 0.0,
+      "stay_home_penalty": -0.15872253577852577,
+      "stick_it_penalty": 0.0,
+      "still_head_penalty": -4.679075929462154,
+      "straight_flip_penalty": -21.389929453571977,
+      "tuck_ball": 0.0
+     }
+    },
+    {
+     "obs_abs": 3663.9804166330287,
+     "obs_sum": -156.8210218767199,
+     "reward": 149.939375915212,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "arch_over": 0.0,
+      "calm_landed_penalty": -10.147833547449935,
+      "feet_under": 21.027176588778396,
+      "flip_progress": 116.39982891662295,
+      "gentle_head_penalty": -1.8289091464914928,
+      "gentle_joints_penalty": -8.34429126383003,
+      "head_rise": 20.772241754436617,
+      "land_tall": 0.0,
+      "landed_hold": 45.929484039986065,
+      "lean_back": 0.0,
+      "legs_over": 0.0,
+      "neck_kip": 0.0,
+      "neck_pushup": 10.411301489733162,
+      "no_jaw_parking_penalty": 0.0,
+      "no_limit_parking_penalty": -2.866497390357605,
+      "push_off": 0.0,
+      "save_energy_penalty": -8.809420467120527,
+      "smooth_moves_penalty": -14.977398719787596,
+      "soft_landings_penalty": -1.3992213947315253,
+      "stand_pose": 16.362005287388868,
+      "stay_home_penalty": -1.135228103193479,
+      "stick_it_penalty": -10.082603289565895,
+      "still_head_penalty": 0.0,
+      "straight_flip_penalty": -21.371258839206035,
+      "tuck_ball": 0.0
+     }
+    },
+    {
+     "obs_abs": 3723.240454283252,
+     "obs_sum": -26.002287303796038,
+     "reward": 167.59866981296557,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "arch_over": 9.237467807363858,
+      "calm_landed_penalty": 0.0,
+      "feet_under": 4.508560112609675,
+      "flip_progress": 51.781878249877074,
+      "gentle_head_penalty": -6.898984183583053,
+      "gentle_joints_penalty": -8.987463446337769,
+      "head_rise": 1.7667732748269698,
+      "land_tall": 168.8176013900636,
+      "landed_hold": 0.0,
+      "lean_back": 0.0,
+      "legs_over": 0.0,
+      "neck_kip": 0.0,
+      "neck_pushup": 16.64731054678559,
+      "no_jaw_parking_penalty": 0.0,
+      "no_limit_parking_penalty": -1.8554281276730995,
+      "push_off": 0.0,
+      "save_energy_penalty": -9.25530478114758,
+      "smooth_moves_penalty": -14.519475121498107,
+      "soft_landings_penalty": -1.4147365678398565,
+      "stand_pose": 0.0,
+      "stay_home_penalty": -1.0177903797329566,
+      "stick_it_penalty": 0.0,
+      "still_head_penalty": -13.904281987429723,
+      "straight_flip_penalty": -27.307456973319095,
+      "tuck_ball": 0.0
+     }
+    }
+   ]
+  ],
+  "imitate-xml": [
+   "f29faece9897cf0acc56f8d8e08098c1bbc3276318df512c9d66406cd8a4b5fc",
+   {
+    "gentle_head_penalty": "-0x1.9defb4cf80921p+1",
+    "no_limit_parking_penalty": "-0x1.76c2b8fee317cp+1",
+    "no_slip_penalty": "0x0.0p+0",
+    "no_spin_penalty": "0x0.0p+0",
+    "on_feet": "0x0.0p+0",
+    "pose_match": "0x1.e3e7baf9dd1bbp+7",
+    "rotation_match": "0x1.91adde3ef9073p+6",
+    "save_energy_penalty": "-0x1.218f302317a7ap+2",
+    "soft_landings_penalty": "-0x1.958f609eed971p-1",
+    "stick_it": "0x0.0p+0",
+    "travel": "0x0.0p+0"
+   },
+   [
+    {
+     "obs_abs": 3668.3412017683804,
+     "obs_sum": 63.373208567609254,
+     "reward": 330.89422227167483,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "gentle_head_penalty": -3.233877755469749,
+      "no_limit_parking_penalty": -2.9278174633565737,
+      "no_slip_penalty": 0.0,
+      "no_spin_penalty": 0.0,
+      "on_feet": 0.0,
+      "pose_match": 241.95259838890146,
+      "rotation_match": 100.4197931136603,
+      "save_energy_penalty": -4.524364504117893,
+      "soft_landings_penalty": -0.7921095079425823,
+      "stick_it": 0.0,
+      "travel": 0.0
+     }
+    },
+    {
+     "obs_abs": 3759.852111109707,
+     "obs_sum": -154.50751788396155,
+     "reward": 368.6028336949305,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "gentle_head_penalty": -2.438545528655324,
+      "no_limit_parking_penalty": -2.866497390357605,
+      "no_slip_penalty": 0.0,
+      "no_spin_penalty": 0.0,
+      "on_feet": 0.0,
+      "pose_match": 249.02927360331196,
+      "rotation_match": 130.68253463892324,
+      "save_energy_penalty": -4.404710233560263,
+      "soft_landings_penalty": -1.3992213947315253,
+      "stick_it": 0.0,
+      "travel": 0.0
+     }
+    },
+    {
+     "obs_abs": 3674.620851432468,
+     "obs_sum": -144.67741158345598,
+     "reward": 369.05664819262466,
+     "steps": 80,
+     "terminated": false,
+     "terms": {
+      "gentle_head_penalty": -3.9371652697124135,
+      "no_limit_parking_penalty": -4.0096145929457565,
+      "no_slip_penalty": 0.0,
+      "no_spin_penalty": 0.0,
+      "on_feet": 0.0,
+      "pose_match": 252.27243674857263,
+      "rotation_match": 130.18338433816646,
+      "save_energy_penalty": -4.400284782867574,
+      "soft_landings_penalty": -1.0521082485884043,
+      "stick_it": 0.0,
+      "travel": 0.0
+     }
+    }
+   ]
+  ],
+  "one_leg-xml": [
+   "181bfb7ea946858906d8fc3eb8b084a3b4c88d6271d41e0354ec00820d8fd40c",
+   {
+    "calm_body_penalty": "-0x1.313f44e3253a4p+3",
+    "face_home_penalty": "-0x1.b06c36459b1a0p+3",
+    "flat_stance_foot": "0x1.9603463bee16cp+5",
+    "foot_in_air": "0x1.afe5cf9784e19p-1",
+    "gentle_joints_penalty": "-0x1.b7452272cfe71p+3",
+    "head_up": "0x1.fecbf37c6612bp+3",
+    "head_up_pull": "0x1.ffadd915c04e0p+4",
+    "no_stall_penalty": "0x0.0p+0",
+    "one_leg_hold": "0x1.0c8daa11c0000p+4",
+    "planted_foot": "0x1.f000000000000p+3",
+    "save_energy_penalty": "-0x1.5b58b8e29c096p+2",
+    "smooth_moves_penalty": "-0x1.642d36999999cp+4",
+    "stay_home_penalty": "-0x1.5b533851f7755p-2",
+    "stay_put_penalty": "-0x1.c2ef7ff3e1c1ap+0",
+    "stay_upright": "0x1.1ee16d6bd002ep+5"
+   },
+   [
+    {
+     "obs_abs": 2137.0173737847144,
+     "obs_sum": 49.240688012003375,
+     "reward": 101.1137945106747,
+     "steps": 49,
+     "terminated": true,
+     "terms": {
+      "calm_body_penalty": -9.538973277705573,
+      "face_home_penalty": -13.51320947260757,
+      "flat_stance_foot": 50.75159880466785,
+      "foot_in_air": 0.8435501930675314,
+      "gentle_joints_penalty": -13.727189277880116,
+      "head_up": 15.96239637657762,
+      "head_up_pull": 31.979943356481158,
+      "no_stall_penalty": 0.0,
+      "one_leg_hold": 16.784586018882692,
+      "planted_foot": 15.5,
+      "save_energy_penalty": -5.4272901738151145,
+      "smooth_moves_penalty": -22.261038398742684,
+      "stay_home_penalty": -0.33918464660915976,
+      "stay_put_penalty": -1.7614669771589946,
+      "stay_upright": 35.860071985517024
+     }
+    },
+    {
+     "obs_abs": 1394.5254238083144,
+     "obs_sum": -126.07679853140144,
+     "reward": 53.45101637446914,
+     "steps": 31,
+     "terminated": false,
+     "terms": {
+      "calm_body_penalty": -8.003689287946132,
+      "face_home_penalty": -6.955014832682714,
+      "flat_stance_foot": 24.692910329181835,
+      "foot_in_air": 0.3271582282499363,
+      "gentle_joints_penalty": -9.160113472711634,
+      "head_up": 8.335952909063103,
+      "head_up_pull": 19.875261855238517,
+      "no_stall_penalty": 0.0,
+      "one_leg_hold": 10.644176959991455,
+      "planted_foot": 10.5,
+      "save_energy_penalty": -3.4935771936483464,
+      "smooth_moves_penalty": -15.1788959980011,
+      "stay_home_penalty": -0.2082780912848595,
+      "stay_put_penalty": -0.8497158137499363,
+      "stay_upright": 22.924840782769024
+     }
+    },
+    {
+     "obs_abs": 1294.045819557039,
+     "obs_sum": -56.15475875255652,
+     "reward": 58.760842003472845,
+     "steps": 29,
+     "terminated": true,
+     "terms": {
+      "calm_body_penalty": -8.157116213724418,
+      "face_home_penalty": -2.0343157438153363,
+      "flat_stance_foot": 25.592048294496625,
+      "foot_in_air": 0.4187545862033071,
+      "gentle_joints_penalty": -8.33571470923383,
+      "head_up": 8.34094857070783,
+      "head_up_pull": 18.614725029305642,
+      "no_stall_penalty": 0.0,
+      "one_leg_hold": 9.163882970809937,
+      "planted_foot": 8.5,
+      "save_energy_penalty": -3.0183399766953483,
+      "smooth_moves_penalty": -13.040185999870301,
+      "stay_home_penalty": -0.42444787039187254,
+      "stay_put_penalty": -0.9613498251277295,
+      "stay_upright": 24.101952890808334
+     }
+    },
+    {
+     "obs_abs": 2222.055069787544,
+     "obs_sum": -14.131915420817677,
+     "reward": 92.87182789314683,
+     "steps": 51,
+     "terminated": false,
+     "terms": {
+      "calm_body_penalty": -7.367018755186493,
+      "face_home_penalty": -4.657310307938727,
+      "flat_stance_foot": 38.8251814840489,
+      "foot_in_air": 14.446329102451706,
+      "gentle_joints_penalty": -14.970296616987753,
+      "head_up": 12.157779748533907,
+      "head_up_pull": 32.367225881508645,
+      "no_stall_penalty": -0.5156466963461772,
+      "one_leg_hold": 7.480430848561809,
+      "planted_foot": 17.0,
+      "save_energy_penalty": -5.667343301879191,
+      "smooth_moves_penalty": -24.206007075309746,
+      "stay_home_penalty": -0.09872827856539514,
+      "stay_put_penalty": -0.6400435708733199,
+      "stay_upright": 28.717275431128655
+     }
+    },
+    {
+     "obs_abs": 1514.900793784942,
+     "obs_sum": -71.3963850444743,
+     "reward": 52.20144814987688,
+     "steps": 33,
+     "terminated": true,
+     "terms": {
+      "calm_body_penalty": -7.449832712024292,
+      "face_home_penalty": -2.0224054214328393,
+      "flat_stance_foot": 29.362138383902465,
+      "foot_in_air": 0.9762434501726202,
+      "gentle_joints_penalty": -10.490810580720956,
+      "head_up": 7.255274403054562,
+      "head_up_pull": 20.72985811103552,
+      "no_stall_penalty": 0.0,
+      "one_leg_hold": 8.194620527543975,
+      "planted_foot": 9.0,
+      "save_energy_penalty": -3.8005552646295104,
+      "smooth_moves_penalty": -15.443869102001193,
+      "stay_home_penalty": -0.4726204151424272,
+      "stay_put_penalty": -1.4979000093535388,
+      "stay_upright": 17.861306779472464
+     }
+    },
+    {
+     "obs_abs": 1507.1691009632486,
+     "obs_sum": -121.99457383700064,
+     "reward": 50.82582411336176,
+     "steps": 34,
+     "terminated": true,
+     "terms": {
+      "calm_body_penalty": -8.585374338849359,
+      "face_home_penalty": -7.707597304457281,
+      "flat_stance_foot": 23.52414380364743,
+      "foot_in_air": 0.24054699330228294,
+      "gentle_joints_penalty": -9.765899531046548,
+      "head_up": 5.539074279637863,
+      "head_up_pull": 20.400330843105074,
+      "no_stall_penalty": 0.0,
+      "one_leg_hold": 9.639584406215363,
+      "planted_foot": 9.5,
+      "save_energy_penalty": -3.6188408611936946,
+      "smooth_moves_penalty": -14.708345890045166,
+      "stay_home_penalty": -0.1962015989987893,
+      "stay_put_penalty": -1.5471785648616008,
+      "stay_upright": 28.1115818769062
+     }
+    },
+    {
+     "obs_abs": 543.4900747318752,
+     "obs_sum": -48.28309996693861,
+     "reward": 37.84026018215661,
+     "steps": 13,
+     "terminated": false,
+     "terms": {
+      "calm_body_penalty": -1.9475820894699747,
+      "face_home_penalty": -0.7943718172027487,
+      "flat_stance_foot": 14.862417148861296,
+      "foot_in_air": 0.054791379514054245,
+      "gentle_joints_penalty": -3.5803409923206675,
+      "head_up": 6.117957593109604,
+      "head_up_pull": 8.759454951424512,
+      "no_stall_penalty": 0.0,
+      "one_leg_hold": 0.0,
+      "planted_foot": 4.0,
+      "save_energy_penalty": -1.414363078177968,
+      "smooth_moves_penalty": -5.663818669319154,
+      "stay_home_penalty": -0.005342363931765144,
+      "stay_put_penalty": -0.11622450419379668,
+      "stay_upright": 17.56768262386322
+     }
+    }
+   ]
+  ],
+  "run-bam": [
+   "61300464b23d29d82a63256816ce5c5d029824fb119325db0da457d5fb2e509f",
+   {
+    "air_time": "0x0.0p+0",
+    "calm_roll_penalty": "-0x1.093456cfea8a5p+3",
+    "fall_penalty": "0x0.0p+0",
+    "foot_clearance_penalty": "-0x1.02047619bfefbp-1",
+    "head_up": "0x1.23c6449a00000p+7",
+    "keep_pace": "0x1.6e71111eb4474p+2",
+    "no_limit_parking_penalty": "-0x1.811ca0422ab44p+0",
+    "plant_the_foot_penalty": "-0x1.3f0cd9c97ec21p-5",
+    "pose": "0x1.a3ad0ad4e55b3p+3",
+    "smooth_moves_penalty": "-0x1.406a667333336p+5",
+    "stay_upright": "0x1.f464362ccc000p+5",
+    "track_turn": "0x1.dc19a12ea95f9p+1"
+   },
+   [
+    {
+     "obs_abs": 1575.118539365183,
+     "obs_sum": -65.2266583131277,
+     "reward": 180.60940796643024,
+     "steps": 45,
+     "terminated": true,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -8.287639051519657,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.5039402872498323,
+      "head_up": 145.88724213838577,
+      "keep_pace": 5.725651054367621,
+      "no_limit_parking_penalty": -1.5043430482425757,
+      "plant_the_foot_penalty": -0.03894655739346598,
+      "pose": 13.11487332898364,
+      "smooth_moves_penalty": -40.05195322036745,
+      "stay_upright": 62.5489314555889,
+      "track_turn": 3.71953215387725
+     }
+    },
+    {
+     "obs_abs": 1298.340115474406,
+     "obs_sum": -28.51905902264116,
+     "reward": 180.52227936316976,
+     "steps": 35,
+     "terminated": true,
+     "terms": {
+      "air_time": 18.0,
+      "calm_roll_penalty": -8.313214396092832,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.5040914250098136,
+      "head_up": 114.02875846624374,
+      "keep_pace": 33.94859831430405,
+      "no_limit_parking_penalty": 0.0,
+      "plant_the_foot_penalty": -0.027731548903633215,
+      "pose": 14.062309131962087,
+      "smooth_moves_penalty": -34.086127233505245,
+      "stay_upright": 39.94141091092024,
+      "track_turn": 3.4723671432511978
+     }
+    },
+    {
+     "obs_abs": 1417.4420558576094,
+     "obs_sum": -67.77681720744295,
+     "reward": 129.61133914346206,
+     "steps": 38,
+     "terminated": true,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -10.455563804394895,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.46888155916783786,
+      "head_up": 120.66983106732368,
+      "keep_pace": 0.0,
+      "no_limit_parking_penalty": -0.05505996767935953,
+      "plant_the_foot_penalty": -0.046207254309555364,
+      "pose": 7.6725198693196734,
+      "smooth_moves_penalty": -33.43308663368225,
+      "stay_upright": 44.37116396793863,
+      "track_turn": 1.3566234581140124
+     }
+    },
+    {
+     "obs_abs": 1468.3205801275908,
+     "obs_sum": 156.66835818294203,
+     "reward": 163.0921460202384,
+     "steps": 40,
+     "terminated": true,
+     "terms": {
+      "air_time": 9.0,
+      "calm_roll_penalty": -8.863225507701266,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.5071074670209482,
+      "head_up": 130.58702754974365,
+      "keep_pace": 0.9342175647779303,
+      "no_limit_parking_penalty": 0.0,
+      "plant_the_foot_penalty": -0.03527608628406465,
+      "pose": 23.061001061609662,
+      "smooth_moves_penalty": -38.3424750804901,
+      "stay_upright": 44.55474231910193,
+      "track_turn": 2.7032416665016146
+     }
+    },
+    {
+     "obs_abs": 51.05883234279463,
+     "obs_sum": 9.604290235496592,
+     "reward": 13.575818012525618,
+     "steps": 2,
+     "terminated": false,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -0.00559823104272975,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.07646513346205455,
+      "head_up": 6.819415926933289,
+      "keep_pace": 0.0,
+      "no_limit_parking_penalty": 0.0,
+      "plant_the_foot_penalty": 0.0,
+      "pose": 1.3387406478194162,
+      "smooth_moves_penalty": -1.6870294570922852,
+      "stay_upright": 3.9983038902282715,
+      "track_turn": 3.1884503691417123
+     }
+    },
+    {
+     "obs_abs": 1322.3798947017058,
+     "obs_sum": -80.88213453139178,
+     "reward": 196.30459571715664,
+     "steps": 37,
+     "terminated": true,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -8.842003025054423,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.3640292505987241,
+      "head_up": 115.59268862009048,
+      "keep_pace": 47.46333191223285,
+      "no_limit_parking_penalty": 0.0,
+      "plant_the_foot_penalty": -0.0409917609186737,
+      "pose": 29.174781253844866,
+      "smooth_moves_penalty": -33.67023327350617,
+      "stay_upright": 45.17187276412733,
+      "track_turn": 1.81917847693912
+     }
+    },
+    {
+     "obs_abs": 1339.8920897979406,
+     "obs_sum": -89.15795882878592,
+     "reward": 174.686201776039,
+     "steps": 40,
+     "terminated": true,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -9.717064111351945,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.26559923292066706,
+      "head_up": 119.96089857816696,
+      "keep_pace": 15.318872128671268,
+      "no_limit_parking_penalty": -2.759337947228064,
+      "plant_the_foot_penalty": -0.02584574050435092,
+      "pose": 25.081079751679333,
+      "smooth_moves_penalty": -35.156941103935246,
+      "stay_upright": 57.92056390980724,
+      "track_turn": 4.329575543654546
+     }
+    },
+    {
+     "obs_abs": 90.02640019869432,
+     "obs_sum": -15.945099918870255,
+     "reward": 17.870084820761434,
+     "steps": 3,
+     "terminated": false,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -0.043054409485278534,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.03603517456413965,
+      "head_up": 9.965625494718552,
+      "keep_pace": 0.0,
+      "no_limit_parking_penalty": 0.0,
+      "plant_the_foot_penalty": -0.0012211525281685138,
+      "pose": 2.3108671448592313,
+      "smooth_moves_penalty": -2.024706244468689,
+      "stay_upright": 5.972173452377319,
+      "track_turn": 1.726435709852606
+     }
+    }
+   ]
+  ],
+  "run-xml": [
+   "966ea4fbed4cb778b64083de674f1081f124837b13ded3cb6a70f3ecbbb25104",
+   {
+    "air_time": "0x0.0p+0",
+    "calm_roll_penalty": "-0x1.27923b62fd849p+3",
+    "fall_penalty": "0x0.0p+0",
+    "foot_clearance_penalty": "-0x1.94bcd3e075aa7p-1",
+    "head_up": "0x1.41ee8af000000p+7",
+    "keep_pace": "0x1.3bec58c131e33p+3",
+    "no_limit_parking_penalty": "-0x1.0800342190edcp+1",
+    "plant_the_foot_penalty": "-0x1.65a358f45433dp-4",
+    "pose": "0x1.06613527e1f31p+4",
+    "smooth_moves_penalty": "-0x1.6c25edb333336p+5",
+    "stay_upright": "0x1.004a835012000p+6",
+    "track_turn": "0x1.228dd7c4cb98fp+2"
+   },
+   [
+    {
+     "obs_abs": 2184.3497175065568,
+     "obs_sum": -111.39501364913303,
+     "reward": 198.15446724705566,
+     "steps": 50,
+     "terminated": true,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -9.236600583401144,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.7905031405924391,
+      "head_up": 160.96590375900269,
+      "keep_pace": 9.872600915273415,
+      "no_limit_parking_penalty": -2.062506214513503,
+      "plant_the_foot_penalty": -0.08731398341957415,
+      "pose": 16.39873233393809,
+      "smooth_moves_penalty": -45.51851978302004,
+      "stay_upright": 64.07276654348243,
+      "track_turn": 4.5399074003056645
+     }
+    },
+    {
+     "obs_abs": 1346.9854547888972,
+     "obs_sum": -142.32902721548453,
+     "reward": 141.46428787730468,
+     "steps": 30,
+     "terminated": false,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -4.221139347034307,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.4580479485572991,
+      "head_up": 93.17117285728455,
+      "keep_pace": 32.38734451164554,
+      "no_limit_parking_penalty": -0.028049541613015976,
+      "plant_the_foot_penalty": -0.04683837380572119,
+      "pose": 6.9136693279309505,
+      "smooth_moves_penalty": -29.849639654159546,
+      "stay_upright": 40.42353421449661,
+      "track_turn": 3.1722818311169036
+     }
+    },
+    {
+     "obs_abs": 1615.956272987154,
+     "obs_sum": -74.96834527418832,
+     "reward": 161.22968325912757,
+     "steps": 34,
+     "terminated": true,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -12.536160278832927,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.5641700832601578,
+      "head_up": 103.95872095227242,
+      "keep_pace": 43.828986161249354,
+      "no_limit_parking_penalty": -0.5659744702308797,
+      "plant_the_foot_penalty": -0.04126683614856931,
+      "pose": 15.257072295959182,
+      "smooth_moves_penalty": -30.619417858123782,
+      "stay_upright": 42.15373522124719,
+      "track_turn": 0.35815815499575115
+     }
+    },
+    {
+     "obs_abs": 1517.7866353292338,
+     "obs_sum": -16.171586022755946,
+     "reward": 130.98513111142674,
+     "steps": 35,
+     "terminated": true,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -7.932249432117123,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.5888294768400644,
+      "head_up": 113.07043546438217,
+      "keep_pace": 1.7707936559907602,
+      "no_limit_parking_penalty": -1.2313180730544258,
+      "plant_the_foot_penalty": -0.02603548105700232,
+      "pose": 17.501699288242445,
+      "smooth_moves_penalty": -33.25814518928527,
+      "stay_upright": 38.11098179745022,
+      "track_turn": 3.5677985577150277
+     }
+    },
+    {
+     "obs_abs": 401.4634909100132,
+     "obs_sum": 54.832572347368114,
+     "reward": 52.23270501848804,
+     "steps": 11,
+     "terminated": false,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -0.7172305902524934,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.1365558778348407,
+      "head_up": 35.012382209300995,
+      "keep_pace": 0.0,
+      "no_limit_parking_penalty": 0.0,
+      "plant_the_foot_penalty": -0.011188361695070809,
+      "pose": 3.7154422301553858,
+      "smooth_moves_penalty": -9.816244506835938,
+      "stay_upright": 21.186575651168823,
+      "track_turn": 2.999524264481172
+     }
+    },
+    {
+     "obs_abs": 1546.5767305884801,
+     "obs_sum": -60.14479307594593,
+     "reward": 126.82159259102183,
+     "steps": 33,
+     "terminated": true,
+     "terms": {
+      "air_time": 15.0,
+      "calm_roll_penalty": -10.004493713575338,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.4976247083483838,
+      "head_up": 101.84637099504471,
+      "keep_pace": 3.4521645140569355,
+      "no_limit_parking_penalty": 0.0,
+      "plant_the_foot_penalty": -0.036264302396385804,
+      "pose": 14.20572903204791,
+      "smooth_moves_penalty": -30.887738204002385,
+      "stay_upright": 31.589029534428846,
+      "track_turn": 2.1544194437659354
+     }
+    },
+    {
+     "obs_abs": 1521.6308083893382,
+     "obs_sum": -125.68258093396435,
+     "reward": 129.418504949453,
+     "steps": 34,
+     "terminated": true,
+     "terms": {
+      "air_time": 9.0,
+      "calm_roll_penalty": -11.664439597869851,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.45066502518764906,
+      "head_up": 97.64113810658455,
+      "keep_pace": 7.859441640513069,
+      "no_limit_parking_penalty": -3.4864892312583757,
+      "plant_the_foot_penalty": -0.015525623466001257,
+      "pose": 13.849830530027916,
+      "smooth_moves_penalty": -29.416691780090332,
+      "stay_upright": 45.20928761875257,
+      "track_turn": 0.8926183114471249
+     }
+    },
+    {
+     "obs_abs": 499.8155264076777,
+     "obs_sum": -23.872741505969316,
+     "reward": 70.19283482248427,
+     "steps": 13,
+     "terminated": false,
+     "terms": {
+      "air_time": 0.0,
+      "calm_roll_penalty": -0.6632985019107563,
+      "fall_penalty": 0.0,
+      "foot_clearance_penalty": -0.14229583860415168,
+      "head_up": 42.11391490697861,
+      "keep_pace": 1.955559161928623,
+      "no_limit_parking_penalty": 0.0,
+      "plant_the_foot_penalty": -0.01700239642847873,
+      "pose": 10.377400217555529,
+      "smooth_moves_penalty": -11.327637338638308,
+      "stay_upright": 25.630130171775818,
+      "track_turn": 2.266064439827402
+     }
+    }
+   ]
+  ],
+  "stand-xml": [
+   "f51a71d2e4c0261c496370ecabb42d7552a4f9b4e9d2d8183096a216d67ede36",
+   {
+    "both_feet": "0x1.6800000000000p+4",
+    "face_home_penalty": "-0x1.b06c36459b1a0p+2",
+    "flat_feet": "0x1.32ba0df8ffdd4p+5",
+    "gentle_joints_penalty": "-0x1.24d8c1a1dfef7p+2",
+    "head_up": "0x1.89d4ef13aa5f2p+5",
+    "hold_still_penalty": "-0x1.313f44e3253a4p+4",
+    "no_limit_parking_penalty": "-0x1.949ff2d75ee7ap+1",
+    "normal_pose": "0x1.142ab9d5d4fbcp+6",
+    "save_energy_penalty": "-0x1.5b58b8e29c096p+2",
+    "smooth_moves_penalty": "-0x1.1cf0f87ae147bp+3",
+    "stand_tall": "0x1.12e9a2128137dp+7",
+    "stay_home_penalty": "-0x1.5b533851f7755p-2",
+    "stay_upright": "0x1.7e81e73a6aae7p+5"
+   },
+   [
+    {
+     "obs_abs": 2137.0173737847144,
+     "obs_sum": 49.240688012003375,
+     "reward": 316.13898459903635,
+     "steps": 49,
+     "terminated": true,
+     "terms": {
+      "both_feet": 22.5,
+      "face_home_penalty": -6.756604736303785,
+      "flat_feet": 38.340846963222845,
+      "gentle_joints_penalty": -4.575729759293373,
+      "head_up": 49.22897162784274,
+      "hold_still_penalty": -19.077946555411145,
+      "no_limit_parking_penalty": -3.161131243859754,
+      "normal_pose": 69.04172453033874,
+      "save_energy_penalty": -5.4272901738151145,
+      "smooth_moves_penalty": -8.90441535949707,
+      "stand_tall": 137.45631463839882,
+      "stay_home_penalty": -0.33918464660915976,
+      "stay_upright": 47.81342931402269
+     }
+    },
+    {
+     "obs_abs": 999.0546809027437,
+     "obs_sum": -121.21721291891299,
+     "reward": 63.81617962209826,
+     "steps": 18,
+     "terminated": true,
+     "terms": {
+      "both_feet": 10.5,
+      "face_home_penalty": -1.7078814056548899,
+      "flat_feet": 1.6371229968255214,
+      "gentle_joints_penalty": -3.298677309594973,
+      "head_up": 13.164534524537496,
+      "hold_still_penalty": -11.774956526973227,
+      "no_limit_parking_penalty": -0.006310918691888799,
+      "normal_pose": 21.137579880207873,
+      "save_energy_penalty": -2.4871788436354754,
+      "smooth_moves_penalty": -3.4923691082000734,
+      "stand_tall": 40.085271450487085,
+      "stay_home_penalty": -0.23324229346862857,
+      "stay_upright": 0.29228717625943545
+     }
+    },
+    {
+     "obs_abs": 537.5336596695415,
+     "obs_sum": -94.6878376765817,
+     "reward": 90.66051880213598,
+     "steps": 13,
+     "terminated": false,
+     "terms": {
+      "both_feet": 9.0,
+      "face_home_penalty": -1.3569678366680271,
+      "flat_feet": 10.621790893844526,
+      "gentle_joints_penalty": -1.082040598960311,
+      "head_up": 14.733068797530205,
+      "hold_still_penalty": -8.317980970740013,
+      "no_limit_parking_penalty": 0.0,
+      "normal_pose": 18.326478098808995,
+      "save_energy_penalty": -1.3393132802685717,
+      "smooth_moves_penalty": -2.526709680557251,
+      "stand_tall": 38.631140270217934,
+      "stay_home_penalty": -0.013341605307748255,
+      "stay_upright": 13.98439471423626
+     }
+    },
+    {
+     "obs_abs": 1544.9231493296393,
+     "obs_sum": -87.7176102118392,
+     "reward": 214.4862605550305,
+     "steps": 34,
+     "terminated": true,
+     "terms": {
+      "both_feet": 18.0,
+      "face_home_penalty": -3.289324915358714,
+      "flat_feet": 22.667360481487766,
+      "gentle_joints_penalty": -3.4506192212980804,
+      "head_up": 32.38377290929703,
+      "hold_still_penalty": -18.1110026782394,
+      "no_limit_parking_penalty": -0.022542201929729194,
+      "normal_pose": 47.788006714957184,
+      "save_energy_penalty": -3.669045084520356,
+      "smooth_moves_penalty": -6.123883571624754,
+      "stand_tall": 93.1160292093884,
+      "stay_home_penalty": -0.5992389320739038,
+      "stay_upright": 35.796747844945
+     }
+    },
+    {
+     "obs_abs": 967.6927494211413,
+     "obs_sum": -22.241457809024723,
+     "reward": 60.05541220998635,
+     "steps": 17,
+     "terminated": true,
+     "terms": {
+      "both_feet": 6.0,
+      "face_home_penalty": -1.4732243889796433,
+      "flat_feet": 0.6103554371573425,
+      "gentle_joints_penalty": -3.4034680453213784,
+      "head_up": 17.572580986209783,
+      "hold_still_penalty": -8.06849833428938,
+      "no_limit_parking_penalty": 0.0,
+      "normal_pose": 18.885578588084545,
+      "save_energy_penalty": -2.5023559039146015,
+      "smooth_moves_penalty": -3.294033794403076,
+      "stand_tall": 35.6496634788157,
+      "stay_home_penalty": -0.13226692765476133,
+      "stay_upright": 0.21108111428182497
+     }
+    },
+    {
+     "obs_abs": 1101.4050149054965,
+     "obs_sum": -10.355052001425065,
+     "reward": 67.88908574466286,
+     "steps": 18,
+     "terminated": true,
+     "terms": {
+      "both_feet": 4.5,
+      "face_home_penalty": -0.49623706220491326,
+      "flat_feet": 2.656275369804719,
+      "gentle_joints_penalty": -4.497964458272914,
+      "head_up": 18.023928851509154,
+      "hold_still_penalty": -6.8564028044183996,
+      "no_limit_parking_penalty": -1.7377458658302274,
+      "normal_pose": 20.360413843560877,
+      "save_energy_penalty": -2.724320484576381,
+      "smooth_moves_penalty": -3.348710594177246,
+      "stand_tall": 41.296293987269166,
+      "stay_home_penalty": -0.1477875086527916,
+      "stay_upright": 0.861342470651806
+     }
+    },
+    {
+     "obs_abs": 427.36986400472233,
+     "obs_sum": 37.787656441971194,
+     "reward": 89.01735020337608,
+     "steps": 11,
+     "terminated": false,
+     "terms": {
+      "both_feet": 12.0,
+      "face_home_penalty": -0.13749986691450752,
+      "flat_feet": 7.824980166574821,
+      "gentle_joints_penalty": -0.8876277422664142,
+      "head_up": 10.031594948549577,
+      "hold_still_penalty": -3.059584309368543,
+      "no_limit_parking_penalty": 0.0,
+      "normal_pose": 15.447234390039405,
+      "save_energy_penalty": -1.1586550010222427,
+      "smooth_moves_penalty": -1.9632489013671874,
+      "stand_tall": 31.847411860655342,
+      "stay_home_penalty": -0.02365429112728204,
+      "stay_upright": 19.096398949623108
+     }
+    },
+    {
+     "obs_abs": 1057.8648964117456,
+     "obs_sum": 163.20461594939115,
+     "reward": 71.20776609294441,
+     "steps": 17,
+     "terminated": true,
+     "terms": {
+      "both_feet": 7.5,
+      "face_home_penalty": -4.370080532211208,
+      "flat_feet": 5.97213506746337,
+      "gentle_joints_penalty": -4.156282733185122,
+      "head_up": 16.056091873428088,
+      "hold_still_penalty": -16.062348730239073,
+      "no_limit_parking_penalty": 0.0,
+      "normal_pose": 19.845872088504233,
+      "save_energy_penalty": -2.6990801965695805,
+      "smooth_moves_penalty": -3.1549474906921393,
+      "stand_tall": 37.58915887228865,
+      "stay_home_penalty": -0.20101060909826898,
+      "stay_upright": 14.888258483255477
+     }
+    },
+    {
+     "obs_abs": 2041.2429877162213,
+     "obs_sum": 108.52253004332306,
+     "reward": 298.1208975394305,
+     "steps": 46,
+     "terminated": true,
+     "terms": {
+      "both_feet": 22.5,
+      "face_home_penalty": -5.402035848826636,
+      "flat_feet": 32.2936535880751,
+      "gentle_joints_penalty": -4.515648364552268,
+      "head_up": 38.228708840138836,
+      "hold_still_penalty": -16.027778326548745,
+      "no_limit_parking_penalty": -2.881287375160672,
+      "normal_pose": 64.94642444572688,
+      "save_energy_penalty": -4.885928968975139,
+      "smooth_moves_penalty": -8.009956974983215,
+      "stand_tall": 129.4488833117707,
+      "stay_home_penalty": -0.7066447326944256,
+      "stay_upright": 53.13250794546008
+     }
+    },
+    {
+     "obs_abs": 720.0550467050052,
+     "obs_sum": -71.62671455199597,
+     "reward": 130.81891161759262,
+     "steps": 17,
+     "terminated": false,
+     "terms": {
+      "both_feet": 16.5,
+      "face_home_penalty": -0.6186699794894608,
+      "flat_feet": 14.90682868061773,
+      "gentle_joints_penalty": -1.5510335902975063,
+      "head_up": 16.025546274510965,
+      "hold_still_penalty": -5.345655799458015,
+      "no_limit_parking_penalty": 0.0,
+      "normal_pose": 23.511016492574626,
+      "save_energy_penalty": -1.8525557470568745,
+      "smooth_moves_penalty": -3.0664291381835933,
+      "stand_tall": 49.4252913413612,
+      "stay_home_penalty": -0.009845275789232905,
+      "stay_upright": 22.894418358802795
+     }
+    }
+   ]
+  ],
+  "walkenv-bam": [
+   "d16abb3ced2f1d12963c6e41b69906a6bb8d7b3d346eba909697c61daa76c196",
+   {
+    "action_rate_penalty": "-0x1.3a00c4599999cp+5",
+    "ang_vel_xy_penalty": "-0x1.bfbbc93077f70p+3",
+    "feet_air_time": "0x0.0p+0",
+    "head_pose": "0x1.4671bd8800000p+6",
+    "pose": "0x1.eab43efac4b38p+4",
+    "track_ang_vel": "0x1.dc19a12ea95f9p+1",
+    "track_lin_vel": "0x1.0f3ba03c398fep+4",
+    "upright": "0x1.ab873d129ce47p+5"
+   },
+   [
+    {
+     "obs_abs": 1535.2921216788818,
+     "obs_sum": -66.03616741270525,
+     "reward": 133.1506560691347,
+     "steps": 44,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -39.25037450790407,
+      "ang_vel_xy_penalty": -13.991673082986125,
+      "feet_air_time": 0.0,
+      "head_pose": 81.61107456684113,
+      "pose": 30.66900537449257,
+      "track_ang_vel": 3.71953215387725,
+      "track_lin_vel": 16.95205710912068,
+      "upright": 53.44103445569322
+     }
+    },
+    {
+     "obs_abs": 1332.99281952178,
+     "obs_sum": -74.91943008560338,
+     "reward": 121.88415524185042,
+     "steps": 36,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -35.904896116256715,
+      "ang_vel_xy_penalty": -12.096993421410454,
+      "feet_air_time": 3.0,
+      "head_pose": 64.2717113494873,
+      "pose": 24.05347185752982,
+      "track_ang_vel": 2.934117718488984,
+      "track_lin_vel": 33.5589473878641,
+      "upright": 42.06779646614735
+     }
+    },
+    {
+     "obs_abs": 1125.0566630201938,
+     "obs_sum": -88.14838363308809,
+     "reward": 85.49118054743035,
+     "steps": 30,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -26.84502696990967,
+      "ang_vel_xy_penalty": -18.11279480382095,
+      "feet_air_time": 0.0,
+      "head_pose": 55.02592957019806,
+      "pose": 20.00171372746281,
+      "track_ang_vel": 0.5078976207947244,
+      "track_lin_vel": 26.131016067061097,
+      "upright": 28.78244533564429
+     }
+    },
+    {
+     "obs_abs": 1278.4608641172526,
+     "obs_sum": 18.662603750941344,
+     "reward": 126.1742622483151,
+     "steps": 37,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -34.77095479965209,
+      "ang_vel_xy_penalty": -16.75607367920927,
+      "feet_air_time": 6.0,
+      "head_pose": 68.82368278503418,
+      "pose": 27.200299487834208,
+      "track_ang_vel": 1.2692329149153783,
+      "track_lin_vel": 40.79573458729227,
+      "upright": 33.61234095210045
+     }
+    },
+    {
+     "obs_abs": 425.8030342895363,
+     "obs_sum": 2.0484773381904233,
+     "reward": 53.866625918983864,
+     "steps": 13,
+     "terminated": false,
+     "terms": {
+      "action_rate_penalty": -12.233749270439148,
+      "ang_vel_xy_penalty": -1.1453834372660128,
+      "feet_air_time": 0.0,
+      "head_pose": 23.6586412191391,
+      "pose": 10.629882503250482,
+      "track_ang_vel": 1.846532368889903,
+      "track_lin_vel": 11.415597910434125,
+      "upright": 19.69510462497542
+     }
+    },
+    {
+     "obs_abs": 1454.9231122106285,
+     "obs_sum": 83.8171037890861,
+     "reward": 151.7775248140937,
+     "steps": 42,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -38.89382345676423,
+      "ang_vel_xy_penalty": -12.779499703554318,
+      "feet_air_time": 0.0,
+      "head_pose": 75.60183012485504,
+      "pose": 29.644775523398813,
+      "track_ang_vel": 3.47431723929324,
+      "track_lin_vel": 54.75755482673099,
+      "upright": 39.97237026013416
+     }
+    },
+    {
+     "obs_abs": 922.9629751925822,
+     "obs_sum": -93.227217136533,
+     "reward": 54.18622629300208,
+     "steps": 26,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -22.78595962524414,
+      "ang_vel_xy_penalty": -17.415467641152425,
+      "feet_air_time": 0.0,
+      "head_pose": 43.54452085494995,
+      "pose": 16.77012488912803,
+      "track_ang_vel": 1.8686506193870367,
+      "track_lin_vel": 5.464485686936808,
+      "upright": 26.739871508996814
+     }
+    },
+    {
+     "obs_abs": 424.0367473216029,
+     "obs_sum": -26.958295816206373,
+     "reward": 63.08288746428912,
+     "steps": 12,
+     "terminated": false,
+     "terms": {
+      "action_rate_penalty": -9.933223891258242,
+      "ang_vel_xy_penalty": -0.8421267941800268,
+      "feet_air_time": 0.0,
+      "head_pose": 20.84549880027771,
+      "pose": 7.765732651384963,
+      "track_ang_vel": 1.550849670485979,
+      "track_lin_vel": 20.433534259535648,
+      "upright": 23.26262276804308
+     }
+    }
+   ]
+  ],
+  "walkenv-xml": [
+   "687929ff2c16b7832be0b19658adb921e687e113bb2858036ffc9475bc62dd95",
+   {
+    "action_rate_penalty": "-0x1.642d36999999cp+5",
+    "ang_vel_xy_penalty": "-0x1.0b1c9cdab10c5p+4",
+    "feet_air_time": "0x0.0p+0",
+    "head_pose": "0x1.68bae2b000000p+6",
+    "pose": "0x1.08b89bdc13459p+5",
+    "track_ang_vel": "0x1.228dd7c4cb98fp+2",
+    "track_lin_vel": "0x1.2eee5d4d24d51p+4",
+    "upright": "0x1.929fd4824805dp+5"
+   },
+   [
+    {
+     "obs_abs": 2128.2221651005675,
+     "obs_sum": -85.62844455958111,
+     "reward": 135.85722797052694,
+     "steps": 49,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -44.52207679748537,
+      "ang_vel_xy_penalty": -16.694485525383033,
+      "feet_air_time": 0.0,
+      "head_pose": 90.1825053691864,
+      "pose": 33.0901410287267,
+      "track_ang_vel": 4.5399074003056645,
+      "track_lin_vel": 18.93319444784476,
+      "upright": 50.32804204733177
+     }
+    },
+    {
+     "obs_abs": 1427.2963328707847,
+     "obs_sum": -76.50368342263391,
+     "reward": 96.51708101595216,
+     "steps": 31,
+     "terminated": false,
+     "terms": {
+      "action_rate_penalty": -30.3577919960022,
+      "ang_vel_xy_penalty": -10.688846997220562,
+      "feet_air_time": 3.0,
+      "head_pose": 54.32195019721985,
+      "pose": 18.52785078946225,
+      "track_ang_vel": 2.0214909813876805,
+      "track_lin_vel": 27.768322740816803,
+      "upright": 31.924105300288307
+     }
+    },
+    {
+     "obs_abs": 1517.6230699414155,
+     "obs_sum": -80.94142431113869,
+     "reward": 102.47464190756358,
+     "steps": 33,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -29.81489753723145,
+      "ang_vel_xy_penalty": -21.079495163742763,
+      "feet_air_time": 0.0,
+      "head_pose": 58.763906598091125,
+      "pose": 19.810516847199704,
+      "track_ang_vel": 1.8632579411207868,
+      "track_lin_vel": 37.327237064718766,
+      "upright": 35.60411615740737
+     }
+    },
+    {
+     "obs_abs": 1639.7728045214317,
+     "obs_sum": -22.842093176499475,
+     "reward": 89.18864680912633,
+     "steps": 36,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -34.16578168869018,
+      "ang_vel_xy_penalty": -20.869606387025065,
+      "feet_air_time": 9.0,
+      "head_pose": 65.58361172676086,
+      "pose": 23.632827086559086,
+      "track_ang_vel": 1.074243741633571,
+      "track_lin_vel": 22.61638931150357,
+      "upright": 22.316963018384477
+     }
+    },
+    {
+     "obs_abs": 422.8828042400128,
+     "obs_sum": 19.96905428971513,
+     "reward": 41.08922563669902,
+     "steps": 11,
+     "terminated": false,
+     "terms": {
+      "action_rate_penalty": -9.816244506835938,
+      "ang_vel_xy_penalty": -1.2488424961691496,
+      "feet_air_time": 0.0,
+      "head_pose": 19.376170754432678,
+      "pose": 7.569028991647358,
+      "track_ang_vel": 2.222685956358184,
+      "track_lin_vel": 3.113360199036629,
+      "upright": 19.873066738229266
+     }
+    },
+    {
+     "obs_abs": 1710.190124896617,
+     "obs_sum": -127.46696354934829,
+     "reward": 120.96538011693464,
+     "steps": 36,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -33.00213243961335,
+      "ang_vel_xy_penalty": -17.735388663223485,
+      "feet_air_time": 24.0,
+      "head_pose": 63.5476211309433,
+      "pose": 25.28862685891995,
+      "track_ang_vel": 0.5226953761764848,
+      "track_lin_vel": 38.40434164923818,
+      "upright": 19.939616204493564
+     }
+    },
+    {
+     "obs_abs": 1422.912673154904,
+     "obs_sum": -149.92031255952315,
+     "reward": 77.87311692642585,
+     "steps": 32,
+     "terminated": true,
+     "terms": {
+      "action_rate_penalty": -28.89930410385132,
+      "ang_vel_xy_penalty": -25.09875426850709,
+      "feet_air_time": 12.0,
+      "head_pose": 53.39416813850403,
+      "pose": 19.68846415265439,
+      "track_ang_vel": 2.195872101063065,
+      "track_lin_vel": 10.839280959481453,
+      "upright": 33.75338994708129
+     }
+    },
+    {
+     "obs_abs": 499.61640282312874,
+     "obs_sum": -37.958731852588244,
+     "reward": 45.46256075524472,
+     "steps": 12,
+     "terminated": false,
+     "terms": {
+      "action_rate_penalty": -9.933223891258242,
+      "ang_vel_xy_penalty": -2.261375478117436,
+      "feet_air_time": 0.0,
+      "head_pose": 22.774917602539062,
+      "pose": 7.275004771479502,
+      "track_ang_vel": 0.7145743250756793,
+      "track_lin_vel": 7.82170669454112,
+      "upright": 19.070956730985046
+     }
+    }
+   ]
+  ]
+ },
+ "provenance": {
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "microduck_rl": "badc4e7ffe5507fd7acb1a21487bd2925c1afe5a",
+  "mujoco": "3.10.0",
+  "numpy": "2.5.3",
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "python": "3.12.14"
+ }
+}

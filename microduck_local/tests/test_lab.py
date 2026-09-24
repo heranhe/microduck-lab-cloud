@@ -397,6 +397,8 @@ def test_lab_state_round_trip(fake_popen, monkeypatch, tmp_path):
     assert data["ducks"][0] == {"id": "d0", "label": "alpha_walking",
                                 "policy": None,
                                 "onnxPath": "/policies/alpha_walking.onnx",
+                                # which body this roster slot is (robots/spec.py)
+                                "robot": "microduck",
                                 "showcase": False}
     assert data["ducks"][1]["policy"] == "pollen:alpha_stand"
 
@@ -1233,6 +1235,40 @@ def test_showcase_duck_hands_off_to_a_standing_brain(fake_popen):
     assert duck.handed is False   # every episode starts on the trick again
 
 
+def test_find_ball_hands_off_to_the_kick_it_aims(fake_popen):
+    """find_ball exists to aim the ball-BLIND kick policies, so its showcase
+    handoff target is the kick, not the stand every trick lands into — and
+    the condition comes from the behavior, so this duck and render-rollout
+    ask the identical question instead of two copies of a rule."""
+    run = _mk_teach_run("teach-find_ball-abc123-s3", behavior="find_ball")
+    ho = V.handoff_for(str(run / "policy.onnx"))
+    assert ho is not None and ho[1] == "ball_kick_right"
+    duck = V.Duck("d7", "fb", V._zero_infer, seed=1,
+                  env_kwargs={"behavior_id": "find_ball"})
+    duck.handoff_infer, duck.handoff_label = ho
+    duck.env._ball_aim_steps = 0
+    assert duck._handoff_due() is False
+    duck.env._ball_aim_steps = B._BALL_AIM_STEPS
+    assert duck._handoff_due() is True
+
+
+def test_find_ball_keeps_the_heading_it_turned_to(fake_popen):
+    """The lab's post-handoff yaw correction undoes the drift a LANDING
+    imparts. find_ball's turn is the deliverable, so the correction is off
+    for it — otherwise the commander spins the duck off the ball it just
+    squared up on, and hands the kick nothing."""
+    flip = V.Duck("d5", "bf", V._zero_infer, seed=1,
+                  env_kwargs={"behavior_id": "backflip"})
+    ball = V.Duck("d6", "fb", V._zero_infer, seed=1,
+                  env_kwargs={"behavior_id": "find_ball"})
+    for duck in (flip, ball):
+        duck.handed = True
+        duck._settle = 100          # past the ~1 s landing settle
+        duck.env.home_yaw = 1.2     # a heading 69 deg off where it is now
+    assert flip._recenter_wz() is not None, "the flip still recentres"
+    assert ball._recenter_wz() is None
+
+
 def test_plain_assign_has_no_handoff(fake_popen):
     """Only showcase ducks hand off — a single-stage assign is being watched
     for what THAT policy does, unaided."""
@@ -1398,6 +1434,114 @@ def test_teach_endpoint_makes_the_budget_sticky(fake_popen, monkeypatch):
     assert V.load_teach_weights()["backflip"]["stageSteps"] == {"1": 400_000}
 
 
+# ------------------------------------------------- imitation runs keep their clip
+
+
+def _seed_clip(monkeypatch, tmp_path, name):
+    clips = tmp_path / "clips"
+    clips.mkdir(exist_ok=True)
+    monkeypatch.setenv("MICRODUCK_CLIPS_DIR", str(clips))
+    (clips / f"{name}.json").write_text(json.dumps(
+        {"version": 1, "name": name, "duration": 1.0, "loop": False,
+         "keys": [{"t": 0.0, "joints": [float(j) for j in C.DEFAULT_POSE], "rootPitch": 0.0}]}))
+
+
+def _launch_env(proc):
+    return proc.kwargs.get("env") or {}
+
+
+def test_teach_text_is_the_behavior_id(fake_popen, monkeypatch, tmp_path):
+    """The panel's retrain/fine-tune buttons send the card's id. Before, they
+    echoed its TITLE — and an imitation card is titled after its clip, so
+    `Perform “backflip”` retrained the floor-roll recipe, `Perform
+    “sprint-cycle”` the runner, and a clip named after nothing matched
+    nothing at all."""
+    import importlib
+    monkeypatch.setattr(importlib, "reload", lambda m: m)
+    _seed_clip(monkeypatch, tmp_path, "backflip")
+    app = V.make_app([])
+    teach = _endpoint(app, "/teach", "POST")
+    stop = _endpoint(app, "/teach/stop", "POST")
+
+    out = asyncio.run(teach(V.TeachReq(text="imitate", clip="backflip")))
+    assert out["matched"]
+    assert out["job"]["behavior"]["id"] == "imitate"
+    assert out["job"]["behavior"]["clip"] == "backflip"
+    assert out["job"]["behavior"]["title"] == "Perform “backflip”"
+    assert _launch_env(fake_popen[-1])["MICRODUCK_CLIP"] == "backflip"
+    asyncio.run(stop())
+
+    # The lab's own display title still reaches the imitation recipe with
+    # that clip (an older panel echoes it back verbatim) — it must never
+    # pick the recipe that owns a keyword inside the clip's name.
+    out = asyncio.run(teach(V.TeachReq(text="Perform “backflip”")))
+    assert out["matched"], out
+    assert out["job"]["behavior"]["id"] == "imitate"
+    assert _launch_env(fake_popen[-1])["MICRODUCK_CLIP"] == "backflip"
+    asyncio.run(stop())
+
+    # ...and a title naming a clip that was never saved is refused, not
+    # silently trained against the recipe's default clip.
+    out = asyncio.run(teach(V.TeachReq(text="Perform “nope”")))
+    assert not out["matched"] and "nope" in out["message"]
+
+    # Every other card id round-trips too — the panel special-cases nothing.
+    # Scoped to the DUCK: the registry also carries another body's tasks
+    # (behaviors/g1_tasks.py), and this app's roster is a duck one, so a G1
+    # id correctly matches nothing here.
+    for b in B.for_robot("microduck"):
+        out = asyncio.run(teach(V.TeachReq(text=b.id)))
+        assert out["matched"] and out["job"]["behavior"]["id"] == b.id, b.id
+        asyncio.run(stop())
+
+
+def test_adopted_imitation_run_keeps_its_clip(fake_popen, monkeypatch, tmp_path):
+    """Seating a finished imitation run (POST /teach/load — what clicking its
+    duck does) must bring its clip back: the card is titled after it, and a
+    ✨ fine-tune practices the SAME motion. train_behavior records the clip in
+    behavior.json for exactly this; a fine-tune request that omits the clip
+    inherits the run's, rather than the recipe's default."""
+    import importlib
+    monkeypatch.setattr(importlib, "reload", lambda m: m)
+    _seed_clip(monkeypatch, tmp_path, "hop")
+    _seed_clip(monkeypatch, tmp_path, "backflip")
+    run = _seed_finished_run("teach-imitate-hop-abc123", behavior="imitate")
+    json_meta = json.loads((run / "behavior.json").read_text())
+    (run / "behavior.json").write_text(json.dumps({**json_meta, "clip": "hop"}))
+    for f in ("model.zip", "vecnormalize.pkl"):
+        (run / f).write_bytes(b"x")
+    app = V.make_app([])
+    load = _endpoint(app, "/teach/load", "POST")
+    teach = _endpoint(app, "/teach", "POST")
+
+    seated = asyncio.run(load(V.LoadRunReq(policy="run:teach-imitate-hop-abc123")))
+    assert seated["ok"], seated
+    assert seated["job"]["behavior"]["clip"] == "hop"
+    assert seated["job"]["behavior"]["title"] == "Perform “hop”"
+
+    # Fine-tune the way the panel does now: id + the card's clip.
+    out = asyncio.run(teach(V.TeachReq(text="imitate", clip="hop",
+                                       initFrom="teach-imitate-hop-abc123")))
+    assert out["matched"], out
+    assert _launch_env(fake_popen[-1])["MICRODUCK_CLIP"] == "hop"
+    assert _flag(fake_popen[-1].cmd, "--init-from") == str(run)
+    asyncio.run(_endpoint(app, "/teach/stop", "POST")())
+
+    # An older panel sends no clip at all: the run's own clip still wins over
+    # the recipe default ("backflip").
+    out = asyncio.run(teach(V.TeachReq(text="imitate",
+                                       initFrom="teach-imitate-hop-abc123")))
+    assert out["matched"], out
+    assert _launch_env(fake_popen[-1])["MICRODUCK_CLIP"] == "hop"
+    asyncio.run(_endpoint(app, "/teach/stop", "POST")())
+
+    # A run that predates the record seats clip-less, like before.
+    old = _seed_finished_run("teach-imitate-old111", behavior="imitate")
+    seated = asyncio.run(load(V.LoadRunReq(policy="run:teach-imitate-old111")))
+    assert seated["ok"] and "clip" not in seated["job"]["behavior"]
+    assert V.run_clip(old) is None
+
+
 def test_teach_steps_override_does_not_poison_the_sticky_budget(fake_popen,
                                                                 monkeypatch):
     import importlib
@@ -1456,6 +1600,76 @@ def test_teach_load_seats_finished_run(fake_popen, monkeypatch):
     assert asyncio.run(teach(V.TeachReq(text="spin in place")))["matched"]
     refused = asyncio.run(load(V.LoadRunReq(policy="run:teach-spin-adopt1")))
     assert not refused["ok"] and "stop it first" in refused["message"]
+    asyncio.run(stop())
+
+
+def test_fine_tune_merges_over_the_seated_runs_weights(fake_popen, monkeypatch):
+    """Retrain/fine-tune of a seated run must carry the weights that run
+    ACTUALLY trained under. Observed 2026-09-04: an imitate run seated via
+    /teach/load with rotation_match at 6.05 was fine-tuned after adding one
+    catalog term; the panel sent only the touched keys, the server took that
+    dict as the complete override set, and rotation_match fell back to the
+    recipe's 4.00 with no message. With initFrom the server now layers the
+    request over the run's behavior.json — a delta can't reset the rest."""
+    import importlib
+    monkeypatch.setattr(importlib, "reload", lambda m: m)
+    run = _seed_finished_run("teach-spin-seat7", weights={"spin_fast": 6.05})
+    (run / "model.zip").touch()
+    (run / "vecnormalize.pkl").touch()
+    # A stale sticky crank must NOT be the fine-tune's base either — the
+    # brain being continued is the base.
+    V.save_teach_weights({"spin": {**V.empty_sticky(),
+                                   "weights": {"spin_fast": 9.0}}})
+    app = V.make_app([])
+    load = _endpoint(app, "/teach/load", "POST")
+    teach = _endpoint(app, "/teach", "POST")
+    stop = _endpoint(app, "/teach/stop", "POST")
+
+    seated = asyncio.run(load(V.LoadRunReq(policy="run:teach-spin-seat7")))
+    assert seated["ok"] and seated["job"]["weights"]["spin_fast"] == 6.05
+
+    # The panel's old shape: only the added catalog term in `weights`.
+    out = asyncio.run(teach(V.TeachReq(text="spin in place",
+                                       initFrom="teach-spin-seat7",
+                                       weights={"head_up": 1.0})))
+    assert out["matched"]
+    argv = fake_popen[0].cmd
+    assert _flag(argv, "--init-from") == str(run)
+    assert json.loads(_flag(argv, "--weights-json")) == {"spin_fast": 6.05,
+                                                         "head_up": 1.0}
+    assert out["job"]["weights"]["spin_fast"] == 6.05
+    assert out["job"]["weights"]["head_up"] == 1.0
+    # …and the merged set is what sticks for this behavior.
+    assert V.load_teach_weights()["spin"]["weights"] == {"spin_fast": 6.05,
+                                                         "head_up": 1.0}
+    asyncio.run(stop())
+
+    # An explicit value for a key the run trained under still wins (that is
+    # the user dragging the slider), and no weights at all means "exactly
+    # what the run had", not the sticky set or the recipe defaults.
+    out = asyncio.run(teach(V.TeachReq(text="spin in place",
+                                       initFrom="teach-spin-seat7",
+                                       weights={"spin_fast": 3.0})))
+    assert json.loads(_flag(fake_popen[1].cmd, "--weights-json")) == {
+        "spin_fast": 3.0}
+    asyncio.run(stop())
+    out = asyncio.run(teach(V.TeachReq(text="spin in place",
+                                       initFrom="teach-spin-seat7")))
+    assert json.loads(_flag(fake_popen[2].cmd, "--weights-json")) == {
+        "spin_fast": 6.05}
+    asyncio.run(stop())
+
+    # A run predating behavior.json fine-tunes under the request alone.
+    bare = V.RUNS_DIR / "teach-spin-bare7"
+    bare.mkdir(parents=True)
+    (bare / "model.zip").touch()
+    (bare / "vecnormalize.pkl").touch()
+    out = asyncio.run(teach(V.TeachReq(text="spin in place",
+                                       initFrom="teach-spin-bare7",
+                                       weights={"head_up": 1.0})))
+    assert out["matched"]
+    assert json.loads(_flag(fake_popen[3].cmd, "--weights-json")) == {
+        "head_up": 1.0}
     asyncio.run(stop())
 
 
@@ -2364,3 +2578,57 @@ def test_init_from_uses_the_one_run_name_validator(fake_popen):
     (run / "model.zip").touch()
     (run / "vecnormalize.pkl").touch()
     assert V.resolve_init_from("teach-spin-abc123") == run
+
+
+def test_cli_run_dir_is_tagged_so_the_lab_stops_driving_a_trick_brain(
+        fake_popen, tmp_path, monkeypatch):
+    """`duck-lab runs/find_ball` must behave like dropping the SAME dir from
+    the palette. build_ducks used to set only a label, so policy_id stayed
+    None, is_trick_duck() said False on the missing "run:" prefix, and the lab
+    posted its WASD velocity command to a ball brain that trained on zero
+    twist: 1058 falls and mean reward -3.2 in four minutes of
+    `duck-lab runs/find_ball`, against a duck that stood there quite happily
+    when the identical dir was assigned from the palette."""
+    monkeypatch.setattr(V, "RUNS_DIR", tmp_path)
+    V._TRICK_DUCK_CACHE.clear()
+    run = tmp_path / "find_ball"
+    run.mkdir()
+    (run / "policy.onnx").touch()
+    (run / "behavior.json").write_text(json.dumps({"behavior": "find_ball"}))
+    monkeypatch.setattr(V, "_onnx_infer", lambda p: V._zero_infer)
+
+    duck, = V.build_ducks(types.SimpleNamespace(policies=[str(run)],
+                                                checkpoints=None))
+    assert duck.policy_id == "run:find_ball"
+    assert V.is_trick_duck(duck) is True
+
+    # A LOCOMOTION run tagged the same way still gets driven — the tag says
+    # "look me up", not "hold still". test_locomotion_teach_runs_are_not_
+    # trick_ducks is the other half of that rule.
+    V._TRICK_DUCK_CACHE.clear()
+    runner = tmp_path / "teach-run-z"
+    runner.mkdir()
+    (runner / "policy.onnx").touch()
+    (runner / "behavior.json").write_text(json.dumps({"behavior": "run"}))
+    duck, = V.build_ducks(types.SimpleNamespace(policies=[str(runner)],
+                                                checkpoints=None))
+    assert duck.policy_id == "run:teach-run-z"
+    assert V.is_trick_duck(duck) is False
+
+
+def test_a_run_dir_from_somewhere_else_is_not_claimed_as_a_named_run(
+        fake_popen, tmp_path, monkeypatch):
+    """`run:<name>` is resolved by BARE NAME under RUNS_DIR, so only a dir that
+    really is RUNS_DIR/<name> may claim it. A scratch copy that happens to
+    share a basename must not inherit an unrelated run's behavior.json."""
+    monkeypatch.setattr(V, "RUNS_DIR", tmp_path / "runs")
+    (tmp_path / "runs").mkdir()
+    elsewhere = tmp_path / "scratch" / "find_ball"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "policy.onnx").touch()
+    monkeypatch.setattr(V, "_onnx_infer", lambda p: V._zero_infer)
+
+    duck, = V.build_ducks(types.SimpleNamespace(policies=[str(elsewhere)],
+                                               checkpoints=None))
+    assert duck.policy_id is None
+    assert duck.label == "find_ball"

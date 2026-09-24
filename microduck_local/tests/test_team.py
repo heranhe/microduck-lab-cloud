@@ -1,0 +1,1303 @@
+"""Soccer's second form: the team blackboard (brain/team.py), the chase
+brain's line-up geometry (behind the ball on the line to the goal, a
+walk-round via-point, a push when the goal is far), its head-down ball
+tracking and its wall rule, and a pitch with teams."""
+
+import math
+import os
+
+import numpy as np
+import pytest
+
+from microduck_local.brain.controllers import Chase, ChaseParams, _wrap
+from microduck_local.brain.gait import TURN_KICK
+from microduck_local.brain.runtime import Senses
+from microduck_local.brain.team import Team, brain_kwargs
+from microduck_local.brain.tracker import Track
+from microduck_local.sensors.detector import Detection, DetectionFrame
+from microduck_local.sensors.tof import TofFrame
+
+
+def test_team_roles_hysteresis_and_shared_ball():
+    """The board's shape: the quickest live claim attacks, the rest support
+    and rank by id, the ball is the freshest sighting, and a claim nobody
+    refreshes falls off after `stale_s`."""
+    tm = Team("left")
+    assert tm.attacker(0.0) is None and tm.role("d0", 0.0) == "attack"      # nobody: everyone attacks
+    tm.claim("d0", 1.0, 0.9, (0.5, 0.0))
+    tm.claim("d1", 1.0, 0.5, (0.52, 0.01))
+    assert tm.attacker(1.0) == "d1" and tm.role("d0", 1.0) == "support" and tm.rank("d0", 1.0) == 0
+    # d0 gets a little nearer: not clearly enough, and not for long enough.
+    tm.claim("d0", 1.1, 0.42, (0.5, 0.0))
+    tm.claim("d1", 1.1, 0.5, None)
+    assert tm.attacker(1.1) == "d1"
+    tm.claim("d0", 1.2, 0.2, (0.5, 0.0))
+    assert tm.attacker(1.2) == "d1"                                     # 0.67 s quicker, but only just now
+    for k in range(1, 15):                                              # …held past `hold_s`: the role moves
+        tm.claim("d0", 1.2 + 0.1 * k, 0.2, (0.5, 0.0))
+        tm.claim("d1", 1.2 + 0.1 * k, 0.5, None)
+        tm.attacker(1.2 + 0.1 * k)                                      # read every tick, as a duck does
+    assert tm.attacker(2.6) == "d0" and tm.role("d1", 2.6) == "support"
+    # The ball position is the freshest sighting; a stale claim drops out.
+    assert tm.ball(2.6) == (0.5, 0.0)
+    tm.claim("d0", 2.7, 0.3, None)
+    assert tm.members(3.65) == ["d0"] and tm.attacker(3.65) == "d0"      # d1's claim went stale
+    assert tm.members(9.0) == [] and tm.attacker(9.0) is None
+    assert "attacker" in tm.payload(2.6) and "cost" in tm.payload(2.6)["claims"]["d0"]
+
+
+def test_the_claim_is_the_time_to_reach_the_ball_not_the_distance_to_it():
+    """Measured on this walker (`walker-facts`): it walks at 0.45 m/s
+    (`ChaseParams.speed`) and a turn in place runs at ~0.7 rad/s once the
+    gait is kicked, 0.25 rad in the first cold second — so turning round
+    costs seconds that a straight line charges nothing for. A duck facing
+    the ball 0.6 m away is 1.0 s from it; one facing away 0.4 m away is
+    4.7 s from it, and it is the first that should be sent."""
+    tm = Team("left")
+    tm.claim("facing", 1.0, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))         # 0.6 m, nose on the ball
+    tm.claim("turned", 1.0, 0.4, (0.0, 0.0), (0.0, 0.4, math.pi / 2))     # 0.4 m, nose the other way
+    assert tm.cost("facing", 1.0) == pytest.approx((0.6 - tm.reach) / tm.speed, abs=1e-6)
+    assert tm.cost("turned", 1.0) == pytest.approx(
+        (math.pi - tm.turn_free) / tm.turn_rate + tm.cold_s + (0.4 - tm.reach) / tm.speed, abs=1e-6)
+    assert tm.attacker(1.0) == "facing"                                   # …though "turned" is 0.2 m nearer
+    # A claim with no pose to turn from is still the straight-line time.
+    tm.claim("blindfold", 1.0, 0.9, None, None)
+    assert tm.cost("blindfold", 1.0) == pytest.approx(0.9 / tm.speed, abs=1e-6)
+
+
+def test_a_duck_that_has_lost_sight_of_the_ball_does_not_resign_the_role():
+    """The chase brain claims `inf` the moment its ball track goes cold, and
+    the level camera loses a floor ball inside ~0.3 m — exactly where the
+    attacker lines up. The board now costs a blind duck off its OWN pose and
+    the freshest sighting anyone has, plus `blind_s`: on the ball and blind
+    still beats seeing it from a metre away, and a teammate that is really
+    quicker still takes over."""
+    tm = Team("left")
+    tm.claim("watcher", 1.0, 1.2, (0.0, 0.0), (1.2, 0.0, math.pi))        # sees it, 1.2 m out
+    tm.claim("onball", 1.0, math.inf, None, (0.2, 0.0, math.pi))          # lost it — it is at its feet
+    assert tm.cost("onball", 1.0) == pytest.approx((0.2 - tm.reach) / tm.speed + tm.blind_s, abs=1e-6)
+    assert tm.attacker(1.0) == "onball" and tm.role("watcher", 1.0) == "support"
+    # Nobody has ever seen the ball: a blind claim has nothing to cost.
+    empty = Team("right")
+    empty.claim("d0", 1.0, math.inf, None, (0.0, 0.0, 0.0))
+    assert empty.cost("d0", 1.0) == math.inf
+    # A teammate that really is quicker (0.3 m, facing it) still wins the
+    # role — it just has to hold the margin for `hold_s`.
+    for k in range(0, 15):
+        t = 1.0 + 0.1 * k
+        tm.claim("watcher", t, 0.3, (0.0, 0.0), (0.3, 0.0, math.pi))
+        tm.claim("onball", t, math.inf, None, (0.2, 0.0, math.pi))
+        tm.attacker(t)                                                    # read every tick, as a duck does
+    assert tm.attacker(2.4) == "watcher"
+
+
+def test_a_stale_claim_does_not_beat_a_fresh_one():
+    """One message a second over Wi-Fi means half the claims on the board are
+    the older one. A claim is worth `age_rate` seconds of cost per second of
+    age, so a duck that has not spoken for most of a second has to be that
+    much quicker to be believed — and past `stale_s` it stops counting."""
+    tm = Team("left")
+    tm.claim("fresh", 2.0, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))
+    tm.claim("old", 1.4, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))            # the same claim, 0.6 s ago
+    assert tm.cost("old", 2.0) == pytest.approx(tm.cost("fresh", 2.0) + 0.6 * tm.age_rate, abs=1e-6)
+    assert tm.attacker(2.0) == "fresh"
+    # "old" is really quicker — 0.5 s of it — but it said so 0.8 s ago, and
+    # the age eats the whole margin: the fresh incumbent keeps the role.
+    tm.claim("fresh", 3.0, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))
+    assert tm.attacker(3.0) == "fresh"
+    tm.claim("old", 3.2, 0.375, (0.0, 0.0), (0.375, 0.0, math.pi))        # 0.5 s quicker…
+    tm.claim("fresh", 4.0, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))
+    assert tm.cost("old", 4.0) > tm.cost("fresh", 4.0)                    # …but it said so 0.8 s ago
+    assert tm.attacker(4.0) == "fresh"
+    # Said afresh, and held, the same claim takes the role.
+    for k in range(0, 15):
+        t = 4.4 + 0.1 * k
+        tm.claim("fresh", t, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))
+        tm.claim("old", t, 0.3, (0.0, 0.0), (0.3, 0.0, math.pi))
+        tm.attacker(t)
+    assert tm.attacker(5.8) == "old"
+
+
+def test_the_role_moves_only_when_a_challenger_is_clearly_quicker_for_long_enough():
+    """The churn this replaces: over 3 seeds x 300 s of 3v3 the role changed
+    hands 11.6 times a duck a run and a quarter of the spells were under a
+    second. A challenger must be `switch_s` quicker and STAY that quick for
+    `hold_s`; a margin that lapses restarts the clock; `give_up_s` (the
+    incumbent out of the play) and a claim gone stale still move it at once."""
+    def board():
+        tm = Team("left")
+        tm.claim("a", 0.0, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))
+        tm.claim("b", 0.0, 1.2, (0.0, 0.0), (1.2, 0.0, math.pi))
+        assert tm.attacker(0.0) == "a"
+        return tm
+
+    # b becomes 0.78 s quicker (past `switch_s`) and holds it: the role moves
+    # only after `hold_s`, and never sooner.
+    tm = board()
+    for k in range(1, 20):
+        t = 0.1 * k
+        tm.claim("a", t, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))
+        tm.claim("b", t, 0.25, (0.0, 0.0), (0.25, 0.0, math.pi))
+        assert tm.attacker(t) == ("a" if t < 0.1 + tm.hold_s - 1e-9 else "b")
+    # A margin that lapses restarts the clock: alternating half-ticks never
+    # accumulate `hold_s` of pressure.
+    tm = board()
+    for k in range(1, 40):
+        t = 0.1 * k
+        tm.claim("a", t, 0.6, (0.0, 0.0), (0.6, 0.0, math.pi))
+        near = 0.25 if k % 2 else 0.62
+        tm.claim("b", t, near, (0.0, 0.0), (near, 0.0, math.pi))
+        assert tm.attacker(t) == "a"
+    # `give_up_s`: the incumbent turned away 2 m off is out of the play, and
+    # the role moves on the tick, without waiting.
+    tm = board()
+    tm.claim("a", 0.1, 2.0, (0.0, 0.0), (2.0, 0.0, 0.0))
+    tm.claim("b", 0.1, 0.3, (0.0, 0.0), (0.3, 0.0, math.pi))
+    assert tm.cost("a", 0.1) - tm.cost("b", 0.1) > tm.give_up_s and tm.attacker(0.1) == "b"
+    # A stale incumbent (nothing heard for `stale_s`) is replaced at once.
+    tm = board()
+    tm.claim("b", 1.5, 1.2, (0.0, 0.0), (1.2, 0.0, math.pi))
+    assert tm.members(1.5) == ["b"] and tm.attacker(1.5) == "b"
+
+
+def test_the_board_carries_the_balls_own_motion_into_the_cost():
+    """A kicked ball leaves at 1.4 m/s and slows to a stop on this floor,
+    so where it IS and where it will BE when a duck arrives are different
+    places. The board keeps a velocity from consecutive fixes by the same
+    duck (differencing across ducks is noise) and aims at the intercept: of
+    two ducks a metre away and both facing the ball, the one it is rolling
+    toward is far quicker than the one chasing it, where a straight line
+    calls them equal. Off — which is the SHIPPED default, measured: the
+    intercept churned the role worse than the straight fix — they are equal
+    again."""
+    def board(lead):
+        tm = Team("left", lead_max_s=lead)
+        for t, y in ((0.0, 0.0), (0.2, 0.2), (0.4, 0.4)):                 # a scout, 1.0 m/s along +y
+            tm.claim("scout", t, 2.0, (0.0, y), (0.0, -2.0, 0.0))
+        tm.claim("ahead", 0.4, math.inf, None, (0.0, 1.4, -math.pi / 2))
+        tm.claim("behind", 0.4, math.inf, None, (0.0, -0.6, math.pi / 2))
+        return tm
+
+    assert Team("left").lead_max_s == 0.0                                 # shipped off (measured)
+    on = board(1.5)
+    assert on._vel_hits >= 2 and on._vel[1] == pytest.approx(1.0, abs=1e-6)
+    assert on.cost("ahead", 0.4) < on.cost("behind", 0.4) - 2.0
+    off = board(0.0)
+    assert off.cost("ahead", 0.4) == pytest.approx(off.cost("behind", 0.4), abs=1e-6)
+    # A ball nobody has seen move twice, or moving slower than `vel_use`
+    # (the walking speed drags a coasting track's fix along with the duck),
+    # is aimed at where it is.
+    slow = Team("left", lead_max_s=1.5)
+    for t, y in ((0.0, 0.0), (0.2, 0.04), (0.4, 0.08)):                   # 0.2 m/s: noise, not a roll
+        slow.claim("scout", t, 2.0, (0.0, y), (0.0, -2.0, 0.0))
+    slow.claim("ahead", 0.4, math.inf, None, (0.0, 1.08, -math.pi / 2))
+    slow.claim("behind", 0.4, math.inf, None, (0.0, -0.92, math.pi / 2))
+    assert slow.cost("ahead", 0.4) == pytest.approx(slow.cost("behind", 0.4), abs=1e-6)
+
+
+def _ball(bearing, rng):
+    return Track(1, "ball", bearing, 0.0, 0.1, rng, 0.9, 0.0, 0.0, hits=2)
+
+
+def test_chase_plans_behind_the_ball_toward_the_goal_and_clamps_when_it_cannot_reach_it():
+    p = ChaseParams()
+    b = Chase(p, goal=(1.5, 0.0))
+    # Ball 0.4 m ahead, duck at the origin facing +x, goal at +1.5: behind it already, kick spot.
+    spot = b._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
+    # The body stands rotated by the kick map's deflection so the KICK flies along the line (u = 0).
+    defl = {"kick_left": p.kick_deflect_left, "kick_right": p.kick_deflect_right}[spot[2]]
+    h = -defl
+    side = -p.kick_side if spot[2] == "kick_left" else p.kick_side
+    assert spot[4] == "kick" and abs(spot[3] - h) < 1e-9
+    assert abs(spot[0] - (0.4 - p.kick_ahead * math.cos(h) - side * math.sin(h))) < 1e-9
+    assert abs(spot[1] - (0.0 - p.kick_ahead * math.sin(h) + side * math.cos(h))) < 1e-9
+    assert abs(math.hypot(spot[0] - 0.4, spot[1]) - math.hypot(p.kick_ahead, p.kick_side)) < 1e-9
+    # The goal is more than `aim_max` off the line of sight. The shipped
+    # `aim_mode` clamps to the cone's edge ON THE GOAL'S SIDE; "los" (the old
+    # default) gives that up and kicks straight down the line of sight, which
+    # is what sent half of every battery's kicks toward the kicker's own goal.
+    assert p.aim_mode == "clamp"
+    side_b = Chase(p, goal=(0.0, 1.5))
+    spot = side_b._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
+    defl_b = {"kick_left": p.kick_deflect_left, "kick_right": p.kick_deflect_right}[spot[2]]
+    assert abs(spot[3] + defl_b - p.aim_max) < 1e-9          # +aim_max: the goal is to the LEFT
+    old = Chase(ChaseParams(aim_mode="los"), goal=(0.0, 1.5))
+    spot_los = old._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
+    assert abs(spot_los[3] + {"kick_left": p.kick_deflect_left,
+                              "kick_right": p.kick_deflect_right}[spot_los[2]]) < 1e-9
+    # …and mirrored, so a sign error cannot hide: a goal to the RIGHT clamps
+    # the other way. (The two together are the whole content of the rule.)
+    mir = Chase(p, goal=(0.0, -1.5))
+    spot_m = mir._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
+    defl_m = {"kick_left": p.kick_deflect_left, "kick_right": p.kick_deflect_right}[spot_m[2]]
+    assert abs(spot_m[3] + defl_m + p.aim_max) < 1e-9
+    # Pushing is off by default (measured); switched on, a far goal gives a push spot squarely behind the ball.
+    assert ChaseParams().push_beyond == math.inf
+    far = Chase(ChaseParams(push_beyond=1.4), goal=(3.0, 0.0))
+    spot = far._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
+    assert spot[4] == "push" and spot[2] is None and abs(spot[0] - (0.4 - p.push_behind)) < 1e-9 and spot[1] == 0.0
+    # No goal known: the heading it was placed with is the line.
+    free = Chase(p)
+    free.attack = 0.5
+    spot = free._plan((0.0, 0.0, 0.0), _ball(0.0, 0.4))
+    assert abs(spot[3] - (0.5 - {"kick_left": p.kick_deflect_left, "kick_right": p.kick_deflect_right}[spot[2]])) < 1e-9 and spot[4] == "kick"
+    assert free._own_goal((0.0, 0.0, 0.0))[0] < 0
+    # The foot keeps its choice near the line (hysteresis), flips well off it.
+    b.spot = ("x", "y", "kick_left", 0.0, "kick")
+    assert b._plan((0.0, 0.01, 0.0), _ball(-0.02, 0.4))[2] == "kick_left"
+    assert b._plan((0.0, 0.3, 0.0), _ball(-0.6, 0.4))[2] == "kick_right"
+
+
+def _senses(t, ball=None, tof=None, odom=(0.0, 0.0, 0.0), speed=0.3):
+    det = None if ball is None else DetectionFrame(t, [Detection("ball", "ball0", ball[0], -0.3, 0.12, ball[1], 0.9)])
+    return Senses(t=t, det=det, det_age=None if det is None else 0.0, tof=tof, tof_age=None if tof is None else 0.0,
+                  speed=speed, odom=odom)
+
+
+def test_chase_pitches_the_head_down_walking_at_a_near_ball_and_not_when_turning():
+    b = Chase(ChaseParams(predict_s=3.0, head_yaw_when="always"), goal=(1.5, 0.0))   # a longer memory than the shipped 1 s
+    b.step(_senses(0.0, (0.05, 1.5)))
+    out = b.step(_senses(0.1, (0.05, 1.2)))
+    assert out.note == "chase" and out.twist[0] > 0 and out.head[1] == 0.0      # still far: level pitch...
+    assert abs(out.head[2] - 0.9 * 0.05) < 0.02                                   # ...but the head yaws toward the ball
+    for k in range(3):                                                      # the track smooths in
+        out = b.step(_senses(0.2 + 0.1 * k, (0.05, 0.7)))
+    assert out.note in ("chase", "lineup") and out.twist[0] > 0
+    assert 0.0 < out.head[1] <= b.p.head_down and abs(out.head[1] - b._gaze(0.7)) < 0.15   # follows the range
+    assert b._gaze(0.15) == b.p.head_down and b._gaze(2.0) == 0.0
+    # Turning in place toward a ball off to the side: head level (the walker cannot turn with it down).
+    c = Chase(ChaseParams(predict_s=3.0, head_yaw_when="always"), goal=(1.5, 0.0))
+    c.step(_senses(0.0, (1.2, 0.7), speed=0.0))
+    out = c.step(_senses(0.1, (1.2, 0.7), speed=0.0))
+    assert out.note == "turn" and out.head[1] == 0.0 and out.head[2] != 0.0   # level pitch, the head yawed to the ball
+
+
+def test_a_shot_is_declined_when_the_ball_is_too_far_to_the_side():
+    """`kick_side_max`: the side offset IS the aim error (+1.90 deg per cm,
+    measured over 462 kicks) and no rotation removes it, because the spot is
+    laid out in the body heading so every rotation moves the offset. The one
+    lever left is declining the swing. It refuses only on a FRESH estimate —
+    with none, the plan's own assumed ball sits ON the sweet spot by
+    construction, so gating on it would refuse nothing and gating on nothing
+    would be a duck that never kicks."""
+    b = Chase(ChaseParams(kick_side_max=0.10), goal=(1.5, 0.0))
+    odom = (0.0, 0.0, 0.0)                       # at the origin, facing +x
+    # No estimate at all: never refuses.
+    b.predicted = None
+    assert b._too_wide(odom) is False
+    # A ball 6 cm to the side — inside the sweet spot — is a shot worth taking.
+    b.predicted = (0.30, 0.06)
+    assert b._too_wide(odom) is False
+    # 15 cm out is 28 degrees of aim error by the coefficient: refuse it.
+    b.predicted = (0.30, 0.15)
+    assert b._too_wide(odom) is True
+    assert Chase(ChaseParams(kick_side_max=0.10), goal=(1.5, 0.0)).declines == 0
+    # Symmetric, and measured in the BODY frame rather than the world's:
+    # the same ball, with the duck turned to face it, is straight ahead.
+    b.predicted = (0.30, -0.15)
+    assert b._too_wide(odom) is True
+    assert b._too_wide((0.0, 0.0, math.atan2(-0.15, 0.30))) is False
+    # Off by default, so the shipped brain declines nothing.
+    off = Chase(ChaseParams(), goal=(1.5, 0.0))
+    off.predicted = (0.30, 0.90)
+    assert off.p.kick_side_max == 0.0 and off._too_wide(odom) is False
+
+
+def test_a_keeper_owns_the_box_holds_the_line_inside_the_posts_and_never_goes_up_the_pitch(monkeypatch):
+    """The keeper (roadmap Track 4 s6 B.2): its zone is the last fifth in
+    front of its own mouth and the field players share the rest as they
+    would without one; the board never sends it after a loose ball, not
+    even as the fallback; its post is `keeper_depth` out on the ball-to-goal
+    line, clamped inside the posts; and it blocks by default."""
+    from microduck_local.brain.team import zones_for
+    assert zones_for({"a": "keeper", "b": "striker"}) == {"striker": (-0.8, 1.0), "keeper": (-1.0, -0.8)}
+    assert zones_for({"a": "keeper", "b": "defender", "c": "striker"}) == {
+        "defender": (-0.8, 0.0), "striker": (0.0, 1.0), "keeper": (-1.0, -0.8)}
+    assert zones_for({"a": "defender", "b": "striker"}) == {"defender": (-1.0, 0.0), "striker": (0.0, 1.0)}
+    # A loose ball nobody's zone covers: the board falls back to the FIELD, never the keeper.
+    tm = Team("cream")
+    tm.half_x, tm.attack_sign = 1.5, 1.0
+    tm.jobs = {"k": "keeper", "d": "defender"}                     # thirds off the box: nobody owns a = 0.8
+    tm.claim("k", 0.0, 0.3, (1.2, 0.0), (-1.3, 0.0, 0.0))          # the keeper even claims to be nearer
+    tm.claim("d", 0.0, 2.0, (1.2, 0.0), (-0.5, 0.0, 0.0))
+    assert tm.candidates(0.0) == ["d"]
+    # …and inside its box the keeper is the one allowed, as any owner is.
+    tm.claim("k", 0.1, 0.3, (-1.4, 0.0), (-1.3, 0.0, 0.0))
+    tm.claim("d", 0.1, 1.0, (-1.4, 0.0), (-0.5, 0.0, 0.0))
+    assert tm.candidates(0.1) == ["k"]
+    # The post.
+    tm.jobs = {"k": "keeper", "s": "striker"}
+    b = Chase(ChaseParams(), goal=(1.5, 0.0), team=tm, duck_id="k", bounds=(1.5, 1.25), goal_w=0.7, role="keeper")
+    b._senses = Senses(t=0.0)
+    here = (-1.3, 0.0, 0.0)
+    t1 = b._hold_target((0.0, 0.0), here)                              # ball dead centre: on the centre line
+    assert abs(t1[0] - (-1.5 + b.p.keeper_depth)) < 1e-9 and abs(t1[1]) < 1e-9
+    t2 = b._hold_target((0.0, 1.2), here)                              # ball wide: where its line crosses the depth
+    assert abs(t2[0] - (-1.25)) < 1e-9 and 0.15 < t2[1] < 0.25
+    t3 = b._hold_target((-1.3, 1.2), here)                             # ball beside the goal: pinned to the near post
+    assert abs(t3[1] - 0.30) < 1e-9
+    assert b.p.intercept_eta == b.p.keeper_intercept_eta > 0             # a keeper blocks by default
+    assert Chase(ChaseParams(), goal=(1.5, 0.0), role="striker").p.intercept_eta == 0.0
+    monkeypatch.setenv("MICRODUCK_CHASE", "intercept_eta=0")     # restored after the test, not deleted
+    assert Chase(ChaseParams.from_env(), goal=(1.5, 0.0), role="keeper").p.intercept_eta == 0.0   # a battery wins
+    monkeypatch.delenv("MICRODUCK_CHASE")
+
+
+def test_a_drifting_odometry_turns_the_localiser_on_and_ideal_leaves_it_off(monkeypatch):
+    """`brain_kwargs`: a duck whose odometry preset is not `ideal` gets the
+    goal-post particle filter (roadmap Track 4 s6 C.2); at `ideal` the
+    frames already agree and every soccer number was measured there, so the
+    shipped brain stays bit for bit. A battery's MICRODUCK_CHASE wins."""
+    from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
+    from microduck_local.world import World, make_pitch
+    sc = make_pitch(per_side=1)
+    sc.ducks[0].odom, sc.ducks[1].odom = "datasheet", "ideal"
+    infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")
+    w = World(sc, infer_for={d.id: infer for d in sc.ducks}, seed=0)
+    teams: dict = {}
+    drift = brain_kwargs(sc.ducks[0], w, teams)
+    ideal = brain_kwargs(sc.ducks[1], w, teams)
+    assert drift["p"].localize is True and ideal.get("p", ChaseParams()).localize is False   # 1v1 at ideal: off
+    b = Chase(**drift)
+    assert b.loc is not None and len(b.loc.posts) == 4
+    assert Chase(**ideal).loc is None
+    # A battery that speaks (`localize=0`) wins over the roster rule. For a
+    # lone duck there is then no params object at all - `Chase.__init__`
+    # reads MICRODUCK_CHASE itself - so what is locked is the BRAIN's state.
+    monkeypatch.setenv("MICRODUCK_CHASE", "localize=0")
+    kw = brain_kwargs(sc.ducks[0], w, {})
+    assert kw.get("p", ChaseParams()).localize is False        # the local kicks add only their exit angles
+    c = Chase(**kw)
+    assert c.p.localize is False and c.loc is None
+    monkeypatch.delenv("MICRODUCK_CHASE")
+
+
+def test_the_head_yaw_is_gated_on_forward_clearance_and_fails_open():
+    """`yaw_clear`: the head only leaves the walking line while the bumper
+    says the line is empty. The ToF is ON THE HEAD, so a yawed head reports
+    `+inf` honestly and the duck walks with no forward obstacle sense —
+    which is where head tracking's falls came from (roadmap 4e: gating this
+    removed 1.60 falls a run over 48 paired seeds while giving up no
+    ball-in-view at all). The gate FAILS OPEN on a dead sensor: no fresh ToF
+    means `ahead` is `+inf`, so the duck tracks the ball rather than freezing
+    its head on a sensor that has stopped reporting."""
+    clear = np.full((8, 8), 2000, np.uint16)
+    near = np.full((8, 8), 2000, np.uint16)
+    near[2:5, 3:5] = 400                                   # 0.40 m ahead, inside yaw_clear = 0.45
+
+    def chasing(p, depth):
+        """A ball 0.5 rad off the nose, walking in — head yaw would be
+        `head_yaw_gain` * 0.5 with nothing in the way."""
+        b = Chase(p, goal=(3.0, 0.0))
+        for k in range(5):
+            t = 0.1 * k
+            tof = None if depth is None else TofFrame(t=t, depth_mm=depth, valid=np.ones((8, 8), bool))
+            out = b.step(_senses(t, (0.5, 1.4 - 0.05 * k), tof))
+        return out
+
+    p = ChaseParams()
+    assert p.yaw_clear == 0.45 and p.head_yaw_when == "always" and p.predict_s > 0
+    wanted = p.head_yaw_gain * 0.5
+    # Clear ahead: the head goes to the ball, and the duck keeps walking.
+    out = chasing(p, clear)
+    assert out.note == "chase" and out.twist[0] > 0 and abs(out.head[2] - wanted) < 0.02
+    # Something inside the margin: the head stays on the walking line. The
+    # duck does NOT stop for this — the gate moves the head, not the gait.
+    out = chasing(p, near)
+    assert out.note == "chase" and out.twist[0] > 0 and out.head[2] == 0.0
+    # No ToF at all: fail open, not closed.
+    out = chasing(p, None)
+    assert abs(out.head[2] - wanted) < 0.02
+    # And with the gate off, the same near reading does not suppress anything
+    # — so the assertion above is measuring the gate and not the state machine.
+    out = chasing(ChaseParams(yaw_clear=0.0), near)
+    assert abs(out.head[2] - wanted) < 0.02
+
+
+# `_settling` walks a brain into its settle by the 2026-09-08 geometry; the line-up
+# tolerance shipped at 0.05 on 2026-09-10 (roadmap 12ao) and these scenes pin the
+# settle's HEAD behaviour, not the tolerance, so they keep the 3 cm they were laid on.
+def _settling(still: bool, neck: float = 0.0, yaw: bool = False,
+              heading_off: float = 0.0, stale: float | None = None, n: int = 9, **params):
+    """Walk a Chase in to the settle in front of a kick, the way the sim does:
+    a fixed ball at 0.5 m, a detection consistent with the pose every step,
+    and the duck closing half the remaining gap to its own spot. Returns the
+    brain and its last Intent.
+
+    `heading_off` leaves it ON the spot but off the kick heading — the
+    square-up, which is a turn in place and must take the head level.
+    `stale` moves the TRACK that far out in front before one last step: the
+    plan gone stale, which is the ordinary case in play (spot-to-ball a
+    median 0.285 m over 191 kicks) and the one a held gaze is for."""
+    b = Chase(ChaseParams(lineup_tol=0.03, gaze_still=still, gaze_neck=neck, gaze_yaw=yaw, **params), goal=(1.5, 0.0))
+    x, y, head = 0.0, 0.0, 0.0
+    out = None
+    for i in range(n):
+        rng = math.hypot(0.5 - x, 0.0 - y)
+        bear = _wrap(math.atan2(0.0 - y, 0.5 - x) - head)
+        out = b.step(_senses(0.1 * i, (bear, rng), odom=(x, y, head)))
+        if b.spot is not None:
+            sx, sy, _, u, _ = b.spot
+            x, y, head = x + 0.5 * (sx - x), y + 0.5 * (sy - y), u + heading_off
+    if stale is not None:
+        track = b.tracker.best("ball", 0.1 * (n - 1), min_hits=1)
+        track.xy = (x + stale * math.cos(head), y + stale * math.sin(head))
+        out = b.step(_senses(0.1 * n - 0.05, None, odom=(x, y, head)))   # still inside settle_s
+    return b, out
+
+
+def test_the_settle_raises_the_head_for_its_last_settle_head_level_seconds():
+    """`settle_head_level`: the held gaze puts the ball on the sweet spot and
+    leaves the head where the kick skill cannot swing (benched: 12/12 whiffs
+    from a head joint at +0.97 rad, 0/12 level, and 0.2-0.3 s of a level
+    command brings it back). So for the last `settle_head_level` seconds of
+    the settle the gaze is dropped and the head goes level. Early in the
+    settle the gaze holds exactly as before; 0 is the shipped brain."""
+    def settle_then(knob: float):
+        """Into the settle with a short walk-in (n=7 leaves most of the
+        0.4 s settle ahead), the plan gone stale the way play leaves it, then
+        one step early in the settle and one inside its last 0.2 s. Times
+        are taken from `b.t_state`, when the settle was entered."""
+        b, _ = _settling(True, neck=1.0, n=7, settle_head_level=knob)
+        assert b.state == "settle"
+        t_last, x, y, head = b._poses[-1]
+        early, late = b.t_state + 0.15, b.t_state + 0.25              # 0.4 - 0.2 = 0.2 is the boundary
+        assert early > t_last, (early, t_last)                          # time runs forward from the helper
+        track = b.tracker.best("ball", t_last, min_hits=1)
+        track.xy = (x + 0.22 * math.cos(head), y + 0.22 * math.sin(head))
+        a = b.step(_senses(early, None, odom=(x, y, head)))
+        assert b.state == "settle"
+        c = b.step(_senses(late, None, odom=(x, y, head)))
+        assert b.state == "settle"
+        return a, c
+    a, c = settle_then(0.2)
+    assert a.head[1] > 0.35 and a.head[0] < 0.0, a.head                 # early: gazing, the neck carrying it
+    # The last 0.2 s: neck and pitch level for the swing. The YAW slot is
+    # the head-tracking gaze (predict_s ships on) and is not this knob's.
+    assert c.head[0] == 0.0 and c.head[1] == 0.0, c.head
+    a, c = settle_then(0.0)
+    assert a.head[1] > 0.35 and c.head[1] > 0.35, (a.head, c.head)      # knob off: the gaze holds throughout
+    assert ChaseParams().settle_head_level == 0.0
+
+
+def test_chase_holds_the_gaze_through_the_settle_only_when_gaze_still_is_on():
+    """The gaze was gated on `vx > 0`, so the settle in front of every swing
+    was taken with the head level — and the level camera cannot see a floor
+    ball inside 0.37 m, which is where the ball is by then (measured,
+    scripts/probe_head_pitch.py). `gaze_still` holds it; off, nothing moves."""
+    for still in (False, True):
+        b, out = _settling(still)
+        assert b.state == "settle" and out.twist[0] == 0.0
+        # ON the spot the ball is 0.08 m ahead and 0.06 m to the foot's side —
+        # 37° off the nose, outside the camera's 31° half-field. No pitch
+        # reaches it, and `gaze_still` correctly declines.
+        assert out.head[1] == 0.0
+        # The ordinary case in play: the plan is stale and the ball is out in
+        # front, where a pitched head can see it and a level one cannot.
+        b, out = _settling(still, stale=0.22)
+        assert b.state == "settle" and out.twist == (0.0, 0.0, 0.0)
+        assert (out.head[1] > 0.35) is still, f"gaze_still={still} gave head {out.head}"
+    # A square-up is a turn in place: the head stays level even with
+    # `gaze_still` on, because the walker cannot turn in place head-down —
+    # and a COLD turn carries forward command, so the old `vx > 0` test would
+    # have let the head down for exactly that manoeuvre.
+    b, out = _settling(True, heading_off=0.6, stale=0.22)
+    assert out.twist[2] != 0.0 and out.head[1] == 0.0
+
+
+def test_chase_gaze_range_aims_at_where_the_ball_IS_and_refuses_what_is_off_the_lens():
+    """`Track.range` only moves on a hit, so a duck that has walked since the
+    last sighting would aim at a range it left behind. `_gaze_range` uses the
+    track's ODOMETRY position, and returns the bearing with it so `gaze_yaw`
+    can decide — refusing anything past the camera's horizontal half-field
+    when it may not."""
+    b = Chase(ChaseParams(gaze_still=True), goal=(1.5, 0.0))
+    b.step(_senses(0.0, (0.0, 0.5)))
+    b.step(_senses(0.1, (0.0, 0.5)))
+    track = b.tracker.best("ball", 0.1, min_hits=1)
+    assert track is not None and track.xy is not None and abs(track.range - 0.5) < 0.12
+    rng, bear = b._gaze_range((0.4, 0.0, 0.0), track)
+    assert abs(rng - 0.1) < 0.06 and abs(bear) < 0.05          # 0.1 m away NOW, not 0.5
+    assert b._gaze_range((0.0, 0.0, math.pi), track) is None   # behind us: no pitch reaches it
+    assert b._gaze_range((0.45, -0.06, 0.0), track) is None    # 50° off the nose: outside the lens
+    y = Chase(ChaseParams(gaze_still=True, gaze_yaw=True), goal=(1.5, 0.0))
+    assert y._gaze_range((0.45, -0.06, 0.0), track) is not None  # ...unless the head may yaw to it
+
+
+def test_chase_gaze_neck_splits_the_command_across_both_head_slots():
+    """`head_pose_cmd[0]` is `neck_pitch` and this brain never used it. Swept
+    on the walker the two slots ADD (0.79 rad/unit of head, 0.43 of neck,
+    standing) and cost very different amounts of forward speed, so the same
+    depression can be bought either way. `gaze_neck` is the fraction routed
+    to the neck; `_gaze`'s divisor follows it, so the LAW is unchanged."""
+    a, b = Chase(ChaseParams()), Chase(ChaseParams(gaze_neck=1.0))
+    assert a._head_pose(0.5) == (0.0, 0.5, 0.0, 0.0)          # off: the old tuple, to the bit
+    assert b._head_pose(0.5) == (-0.5, 0.5, 0.0, 0.0)         # the neck looks UP on a positive command
+    # Same wanted depression, fewer command units, because two slots deliver it.
+    want = a.p.cam_level + a.p.head_gain * a._gaze(0.4)
+    assert abs((b.p.cam_level + (b.p.head_gain + b.p.neck_gain) * b._gaze(0.4)) - want) < 1e-6
+    _, out = _settling(True, neck=1.0, stale=0.22)
+    assert out.head[0] == -out.head[1] and out.head[1] > 0.0
+
+
+def test_chase_wall_rule_turns_away_from_a_wall_beside_it():
+    depth = np.full((8, 8), 2000, np.uint16)
+    depth[2:5, 0:3] = 150                                  # a wall 15 cm off the LEFT columns
+    b = Chase(ChaseParams())
+    b.step(_senses(0.0, None, speed=0.0))
+    out = b.step(_senses(0.7, None, TofFrame(t=0.7, depth_mm=depth, valid=np.ones((8, 8), bool)), speed=0.0))
+    assert out.note == "search" and out.twist[2] == -1.0   # searching = a left turn, but the wall is there
+    depth[2:5, 5:8] = 100                                  # a wall nearer on the right: the left turn stands
+    out = b.step(_senses(0.8, None, TofFrame(t=0.8, depth_mm=depth, valid=np.ones((8, 8), bool)), speed=0.0))
+    assert out.twist[2] == 1.0
+
+
+def test_pitch_with_teams_and_brain_kwargs():
+    from microduck_local import contract as C
+    from microduck_local.world import World, make_pitch, validate_scenario
+    from microduck_local.world.scenario import PITCH_TEAMS
+    sc = make_pitch(per_side=2)
+    assert len(sc.ducks) == 4 and {d.team for d in sc.ducks} == set(PITCH_TEAMS)   # teams are colorways
+    assert validate_scenario(sc.to_dict()) == sc
+    assert make_pitch(per_side=3).name == "pitch-3v3" and len(make_pitch(per_side=3).ducks) == 6
+    if not C.SCENE_WALK_XML.exists():
+        pytest.skip("microduck_rl checkout not found")
+    w = World(sc)
+    teams: dict = {}
+    kw = {d.id: brain_kwargs(d, w, teams) for d in sc.ducks}
+    assert kw["d0"]["goal"][0] > 0 and kw["d2"]["goal"][0] < 0 and kw["d0"]["goal"] == kw["d1"]["goal"]
+    assert kw["d0"]["team"] is kw["d1"]["team"] and kw["d0"]["team"] is not kw["d2"]["team"]
+    assert set(teams) == set(PITCH_TEAMS)
+    assert kw["d0"]["p"].bump_stand_s == ChaseParams().team_bump_stand_s   # a roster with teammates: the bump sense on
+    solo = make_pitch(per_side=1)
+    solo_p = brain_kwargs(solo.ducks[0], World(solo), {}).get("p", ChaseParams())
+    assert solo_p.bump_stand_s == ChaseParams().bump_stand_s      # a lone attacker keeps the default (the local kicks add only their exits)
+    from microduck_local.world import Duck, Scenario
+    plain = Scenario(name="x", floor=(4, 4), ducks=[Duck("d0", (0, 0, 0), None, None, None, "chase")])
+    assert brain_kwargs(plain.ducks[0], World(plain), {}) == {}
+
+
+def test_a_measurement_sweep_reaches_a_roster_and_not_only_a_lone_duck():
+    """The playbook's rule 0, caught here rather than by a suspiciously flat
+    arm: `brain_kwargs` used to hand a roster `ChaseParams()` — the shipped
+    defaults — so every knob a battery set through `MICRODUCK_CHASE` was
+    silently discarded on any 2v2 or 3v3, and both arms of such an A/B ran
+    the same brain. The roster default (the bump sense) still applies, unless
+    the caller names that knob itself."""
+    from microduck_local import contract as C
+    from microduck_local.world import World, make_pitch
+    if not C.SCENE_WALK_XML.exists():
+        pytest.skip("microduck_rl checkout not found")
+
+    def params(spec: str, per_side: int):
+        os.environ["MICRODUCK_CHASE"] = spec
+        try:
+            sc = make_pitch(per_side=per_side)
+            kw = brain_kwargs(sc.ducks[0], World(sc), {})
+            return kw.get("p") or ChaseParams.from_env()
+        finally:
+            os.environ.pop("MICRODUCK_CHASE", None)
+
+    for n in (1, 2, 3):
+        assert params("aim_mode=los", n).aim_mode == "los"            # the sweep reaches every roster
+    assert params("", 2).bump_stand_s == ChaseParams().team_bump_stand_s   # …and the roster default still applies
+    assert params("", 1).bump_stand_s == 0.0                          # a lone attacker keeps the default
+    # An explicit value wins over the roster default — and it is asked for BY
+    # NAME, because the caller's 0 and the shipped 0 are the same number.
+    assert params("bump_stand_s=0", 2).bump_stand_s == 0.0
+    assert params("bump_stand_s=0.9", 2).bump_stand_s == 0.9
+    assert ChaseParams.env_names("bump_stand_s=0, aim_mode=clamp") == {"bump_stand_s", "aim_mode"}
+    assert ChaseParams.env_names("") == set()
+
+
+def test_the_aim_mode_decides_what_a_kick_does_when_the_goal_is_round_the_ball():
+    """Track 4.3.1. A duck that reached the ball from the goal side has its
+    own goal straight down the line of sight, and the shipped rule kicks
+    along that line: 30 of 53 kicks in the baseline sent the ball backwards."""
+    import math
+
+    from microduck_local.brain.tracker import Track
+    ball = Track(0, "ball", bearing=0.0, elevation=0.0, width=0.1, range=0.5, conf=1.0, born_t=0.0, last_t=0.0)
+    odom = (0.5, 0.0, math.pi)                       # at +0.5 facing -x, the ball at the origin
+    got = {}
+    for mode in ("los", "clamp", "goal"):
+        b = Chase(ChaseParams(aim_mode=mode), goal=(1.5, 0.0), duck_id="d0")
+        got[mode] = b._plan(odom, ball)[3]           # the heading the kick should fly along
+    assert abs(got["los"] - math.pi) < 1e-6                       # straight at our own goal
+    assert abs(got["clamp"]) == pytest.approx(math.pi - ChaseParams().aim_max)   # the cone's edge, goal side
+    assert abs(got["goal"]) < 1e-6                                # at the goal, whatever the walk-round costs
+    # With the goal already inside the cone every mode agrees: this changes
+    # only the case the shipped rule gives up on.
+    for mode in ("los", "clamp", "goal"):
+        b = Chase(ChaseParams(aim_mode=mode), goal=(1.5, 0.0), duck_id="d0")
+        assert abs(b._plan((-0.5, 0.0, 0.0), ball)[3]) < 1e-6
+
+
+def test_kickoff_forgets_the_plan_and_keeps_the_tally():
+    """A goal: the chase brain drops its spot and manoeuvre but keeps the
+    kicks it took (the benchmark counts them); the team board is wiped;
+    `kickoff_brains` does both for every brain, falling back to reset()."""
+    from microduck_local.brain.team import Team, kickoff_brains
+    b = Chase(ChaseParams(), goal=(1.5, 0.0), team=Team("left"), duck_id="d0")
+    b.kicks, b.pushes, b.state, b.spot = 3, 1, "retreat", (0.5, 0.0, "kick_left", 0.0, "kick")
+    b._poses = [(0.0, 0.0, 0.0, 0.0)]
+    b.team.claim("d0", 10.0, 0.4, (0.5, 0.0))
+    b.team.claim("d1", 10.0, 0.9, None)
+    assert b.team.attacker(10.0) == "d0"
+    kickoff_brains({"d0": b}, {"left": b.team})
+    assert b.kicks == 3 and b.pushes == 1 and b.goal == (1.5, 0.0)
+    assert b.state == "search" and b.spot is None and b._poses == []
+    assert b.team.claims == {} and b.team.attacker(10.0) is None
+
+    class Plain:
+        def __init__(self):
+            self.resets = 0
+
+        def reset(self):
+            self.resets += 1
+    other = Plain()
+    kickoff_brains({"x": other}, {})
+    assert other.resets == 1
+
+
+def test_a_supporter_keeps_its_spot_inside_the_boards_and_stands_beside_a_teammate():
+    """3v3 falls were supporters turning in place against a teammate or the
+    boards: the support spot is clamped inside the pitch, and a duck track
+    inside `beside_m` - stale or not - means no turn in place."""
+    from microduck_local.brain.tracker import Track
+    p = ChaseParams()
+    tm = Team("left")
+    b = Chase(p, goal=(1.5, 0.0), team=tm, duck_id="d1", bounds=(1.5, 1.25))
+    tm.claim("d0", 10.0, 0.2, (1.3, 1.1))          # d0 attacks a ball in the corner
+    tm.claim("d1", 10.0, 2.0, None)
+    b._senses = Senses(t=10.0)
+    # Sitting at the clamped spot: the raw spot (0.7 m behind the ball toward our goal) would be
+    # inside the boards' margin in y; the clamped one is not, and a supporter there just faces the ball.
+    odom = (0.6, 0.9, 0.5)
+    b.state = "support"
+    vx, wz = b._support(odom, None, False, False)
+    assert abs(vx) < 0.3                                             # not a full walk into the boards
+    # Beside a teammate (a track at 0.2 m, 90 deg off the nose, seen a second ago): no turn in place.
+    b.tracker.tracks.append(Track(id=9, cls="duck", bearing=1.5, elevation=0.0, width=0.5, range=0.2, conf=0.9, born_t=8.0, last_t=9.0))
+    b._senses = Senses(t=10.0)
+    vx, wz = b._support((0.0, 0.0, 0.0), None, False, True)         # nobody has the ball: it would turn to look
+    assert vx == 0.0 and wz == 0.0
+    b.tracker.tracks.clear()
+    vx, wz = b._support((0.0, 0.0, 0.0), None, False, True)
+    assert wz != 0.0
+
+
+def test_the_line_up_squares_up_behind_the_ball_then_walks_straight_in():
+    """Two stages: from the pre-spot (approach_back behind the kick spot on
+    the kick line) a duck off the line is sent there and squared up first -
+    a turn in place 30 cm from the ball - and only then walks straight in
+    along the line with no steering, stopping by the distance left."""
+    p = ChaseParams(two_stage=True)
+    b = Chase(p, goal=(3.0, 0.0))
+    b._senses = Senses(t=1.0)
+    b.state, b.t_state = "lineup", 0.0
+    b.spot = (0.5, 0.06, "kick_right", 0.0, "kick")            # kick spot, line along +x
+    # Well behind and beside: stage one heads for the pre-spot, not the spot.
+    it = b.step(Senses(t=1.0, odom=(0.0, 0.3, 0.0)))
+    assert not b.lined and it.twist[0] > 0
+    # At the pre-spot but facing 0.5 rad off: turn in place, not a step.
+    it = b.step(Senses(t=1.1, odom=(0.5 - p.approach_back, 0.06, 0.5)))
+    assert not b.lined and it.twist[0] <= 0.2 and it.twist[2] != 0.0
+    # At the pre-spot, facing the line: lined; the next decisions walk straight (wz 0) at approach_speed.
+    it = b.step(Senses(t=1.2, odom=(0.5 - p.approach_back, 0.06, 0.0)))
+    assert b.lined
+    it = b.step(Senses(t=1.3, odom=(0.5 - p.approach_back + 0.05, 0.06, 0.0)))
+    assert it.twist == (p.approach_speed, 0.0, 0.0) and b.state == "lineup"
+    # On the spot: stop and settle.
+    it = b.step(Senses(t=1.4, odom=(0.5, 0.06, 0.0)))
+    assert it.twist[0] == 0.0 and b.state == "settle"
+
+
+def test_after_a_kick_the_duck_looks_then_hunts_the_kick_line_then_searches():
+    """A kicked ball rolls off along the kick line: after the look finds
+    nothing the duck WALKS that line for `hunt_s` (head level, the ball in
+    view from 0.3 m out) before the standing search."""
+    p = ChaseParams(hunt_s=3.0, seek_s=20.0)
+    b = Chase(p, goal=(3.0, 0.0))
+    # A settle that fires the kick: on the spot, squared, settled.
+    b._senses = Senses(t=0.0)
+    b.state, b.t_state, b.lined = "settle", 0.0, True
+    b.spot = (0.0, 0.06, "kick_right", 0.3, "kick")
+    it = b.step(Senses(t=p.settle_s + 0.01, odom=(0.0, 0.06, 0.3)))
+    assert it.skill == "kick_right" and b._hunt_u == pytest.approx(0.3 + p.kick_exit_right)
+    # The kick window runs (skill set), then ends: look for look_s...
+    b.step(Senses(t=1.0, odom=(0.0, 0.06, 0.3), skill="kick_right"))
+    it = b.step(Senses(t=1.1, odom=(0.0, 0.06, 0.3)))
+    assert it.note == "look" and it.twist[0] == 0.0
+    # ...then hunt: walk the kick line at speed, steering onto its heading.
+    it = b.step(Senses(t=1.1 + p.look_s + 0.05, odom=(0.0, 0.06, 0.2)))
+    err = math.atan2(math.sin(b._hunt_u - 0.2), math.cos(b._hunt_u - 0.2))
+    assert it.note == "hunt" and it.twist[0] == p.hunt_speed and it.twist[2] * err > 0
+    # ...and only then the search - which first walks to where the hunted line pointed (the memory).
+    it = b.step(Senses(t=1.1 + p.look_s + p.hunt_s + 0.1, odom=(1.0, 0.3, 0.3)))
+    assert it.note == "seek" and b.memory is not None
+    b.memory = None
+    it = b.step(Senses(t=1.1 + p.look_s + p.hunt_s + 0.2, odom=(1.0, 0.3, 0.3)))
+    assert it.note == "search"
+
+
+def test_the_hunt_ends_for_the_tof_a_duck_beside_and_the_boards():
+    """The hunt (traced into the boards and into the other duck) is slow,
+    turns gently, and ends the moment the ToF has something inside
+    hunt_stop, a duck track is beside, or the boards are ahead."""
+    from microduck_local.brain.tracker import Track
+    p = ChaseParams(hunt_s=3.0)
+
+    def hunting_duck(**kw):
+        b = Chase(p, goal=(3.0, 0.0), bounds=(1.5, 1.25), **kw)
+        b._senses = Senses(t=0.0)
+        b._hunt_u, b._hunt_t0 = 0.0, 0.0
+        return b
+    # Clear ahead: hunts at hunt_speed with a capped turn toward the line.
+    b = hunting_duck()
+    it = b.step(Senses(t=0.5, odom=(0.0, 0.0, 0.6)))
+    assert it.note == "hunt" and it.twist[0] == p.hunt_speed and abs(it.twist[2]) <= p.hunt_wz
+    # Something 0.4 m ahead on the ToF: not a hunt any more.
+    depth = np.full((8, 8), 2000, np.uint16)
+    depth[2:5, 3:5] = 400
+    b = hunting_duck()
+    it = b.step(Senses(t=0.5, odom=(0.0, 0.0, 0.0), tof=TofFrame(t=0.5, depth_mm=depth, valid=np.ones((8, 8), bool)), tof_age=0.0))
+    assert it.note != "hunt" and b._hunt_u is None
+    # A duck track beside: no hunt.
+    b = hunting_duck()
+    b.tracker.tracks.append(Track(id=3, cls="duck", bearing=1.8, elevation=0.0, width=0.5, range=0.15, conf=0.9, born_t=0.0, last_t=0.4))
+    it = b.step(Senses(t=0.5, odom=(0.0, 0.0, 0.0)))
+    assert it.note != "hunt"
+    # The boards 0.3 m ahead in odometry: no hunt.
+    b = hunting_duck()
+    it = b.step(Senses(t=0.5, odom=(1.3, 0.0, 0.0)))
+    assert it.note != "hunt"
+
+
+def test_the_search_walks_to_where_the_ball_was_before_circling():
+    """A ball memory in odometry: the centre spot at a kickoff, every fresh
+    sighting, the end of a hunted line. A search with a memory further
+    than seek_min away walks there first ("seek"); arriving with nothing
+    seen forgets it, and the circle begins."""
+    p = ChaseParams(seek_s=20.0)
+    b = Chase(p, goal=(1.5, 0.0), bounds=(1.5, 1.25))
+    assert b.memory is not None and b.memory[:2] == (0.0, 0.0)        # a pitch: the centre spot
+    # Nothing seen, standing 1 m from the centre spot facing it: seek, walking.
+    it = b.step(Senses(t=0.5, odom=(-1.0, 0.0, 0.0)))
+    assert it.note == "seek" and it.twist[0] > 0
+    # Arrived (inside seek_tol), still nothing: the memory goes, the search circles.
+    it = b.step(Senses(t=1.0, odom=(-0.1, 0.0, 0.0)))
+    assert b.memory is None
+    it = b.step(Senses(t=1.1, odom=(-0.1, 0.0, 0.0)))
+    assert it.note == "search"
+    # A fresh sighting 0.5 m ahead-left is remembered where it was seen.
+    det = DetectionFrame(2.0, [Detection("ball", "ball0", 0.3, 0.0, 0.14, 0.5, 0.9)])
+    b.step(Senses(t=2.0, odom=(0.0, 0.0, 0.0), det=det, det_age=0.0))
+    assert b.memory is not None and abs(b.memory[0] - 0.5 * math.cos(0.3)) < 1e-6 and abs(b.memory[1] - 0.5 * math.sin(0.3)) < 1e-6
+    # Off a pitch there is no centre spot to remember.
+    assert Chase(p).memory is None
+    # Off by default (measured): a pitch brain with seek_s 0 keeps the memory but never seeks.
+    b0 = Chase(ChaseParams(), goal=(1.5, 0.0), bounds=(1.5, 1.25))
+    assert b0.step(Senses(t=0.5, odom=(-1.0, 0.0, 0.0))).note == "search"
+
+
+def test_a_teammate_on_the_board_counts_as_a_duck_beside_or_ahead():
+    """Teammates share their poses on the board (brain/team.py `mates`): a
+    teammate inside `mate_keepout` that no sensor can see - beside me - means
+    no turn in place, and one ahead is avoided like a seen duck."""
+    p = ChaseParams(mate_keepout=0.4)                             # measured off by default (3v3: no fewer falls)
+    tm = Team("left")
+    b = Chase(p, goal=(1.5, 0.0), team=tm, duck_id="d1", bounds=(1.5, 1.25))
+    tm.claim("d0", 10.0, 0.2, (1.3, 1.1), pos=(0.0, 0.25, 0.0))   # d0 attacks; it is 25 cm to my left
+    assert tm.mates("d1", 10.0) == [("d0", (0.0, 0.25, 0.0))] and tm.mates("d0", 10.0) == []
+    b.step(_senses(10.0, None, speed=0.0, odom=(0.0, 0.0, 0.0)))
+    assert b._beside(10.0)
+    vx, wz = b._support((0.0, 0.0, 0.0), None, False, True)          # nobody has the ball: it would turn to look
+    assert vx == 0.0 and wz == 0.0
+    tm.claim("d0", 10.5, 0.2, (1.3, 1.1), pos=(0.3, 0.0, 0.0))     # now 30 cm straight ahead, unseen
+    out = b.step(_senses(10.5, None, speed=0.0, odom=(0.0, 0.0, 0.0)))
+    assert b.state == "avoid" and out.twist[0] == 0.0             # (the note is a supporter's role)
+    tm.claim("d0", 12.5, 0.2, (1.3, 1.1), pos=(1.0, 1.0, 0.0))     # far away: nothing to avoid
+    out = b.step(_senses(12.6, None, speed=0.0, odom=(0.0, 0.0, 0.0)))
+    assert b.state != "avoid" and not b._beside(12.6)
+
+
+def test_the_look_after_a_kick_aims_by_the_kick_map_and_the_search_can_sweep_the_head():
+    """`look_aim`: the look after a kick yaws the head to the foot's exit
+    angle off the in-play kick map (`kick_exit_*`) near the horizon;
+    `search_sweep`: a searching head sweeps side to side. Both inside the
+    walker's trained +-1.4 rad."""
+    p = ChaseParams(look_aim=True, search_sweep=1.4)
+    b = Chase(p, goal=(1.5, 0.0))
+    b.step(_senses(0.0, None, speed=0.0))
+    b._last_foot, b._look_t0 = "kick_left", 5.0
+    out = b.step(_senses(5.1, None, speed=0.0))
+    assert out.note == "look" and abs(out.head[2] - 0.9 * p.kick_exit_left) < 1e-6
+    assert out.head[1] < b._gaze(0.3)                                  # near the horizon, not the 0.3 m dip
+    b._last_foot = "kick_right"
+    out = b.step(_senses(5.2, None, speed=0.0))
+    assert abs(out.head[2] - 0.9 * p.kick_exit_right) < 1e-6
+    # Searching, no track: the head sweeps; a quarter period in it is at +1.4.
+    b._look_t0 = -9.0
+    yaws = []
+    for k in range(1, 12):
+        out = b.step(_senses(6.0 + 0.1 * k, None, speed=0.0))
+        yaws.append(out.head[2])
+    assert out.note == "search" and max(yaws) > 1.0 and min(yaws) < 0.2 and max(abs(y) for y in yaws) <= 1.4 + 1e-9
+
+
+def test_a_bumped_duck_stands_instead_of_turning_in_place():
+    """Senses.bumped (the body touching another body): for `bump_stand_s`
+    after it, a standing turn becomes a stand. Off at 0."""
+    # `search` is deliberately NOT a bump-stand state (its circle walks, and
+    # freezing it stops the one behaviour that finds the ball), so drive the
+    # rule through `support`, which is.
+    p = ChaseParams(bump_stand_s=1.0, search_dip_s=0.0, search_vx=0.0)
+    lone = Chase(p, goal=(1.5, 0.0))
+    lone.step(_senses(0.0, None, speed=0.0))
+    out = lone.step(_senses(0.5, None, speed=0.0))
+    assert out.note == "search" and out.twist[2] != 0.0                # a standing search turn
+    out = lone.step(Senses(t=0.6, speed=0.0, odom=(0.0, 0.0, 0.0), bumped=True))
+    assert out.twist[2] != 0.0                                         # searching: the rule leaves it alone
+    # A real supporter: a teammate claims the ball from closer, so this duck's role is support.
+    tm = Team("left")
+    b = Chase(p, goal=(1.5, 0.0), team=tm, duck_id="d1", bounds=(1.5, 1.25))
+
+    def tick(t, bumped):
+        tm.claim("d0", t, 0.2, None)                                   # d0 is nearer: it attacks
+        return b.step(Senses(t=t, speed=0.0, odom=(0.0, 0.0, 0.0), bumped=bumped))
+
+    out = tick(0.5, False)
+    assert b.state == "support" and out.twist[2] != 0.0                # turning to look for the ball
+    assert tick(0.7, True).twist == (0.0, 0.0, 0.0)                    # supporting and touching: stand
+    assert tick(1.4, True).twist == (0.0, 0.0, 0.0)                    # still inside the window
+    # Contact that never let up must NOT extend the window: it is timed from the onset.
+    assert tick(1.75, True).twist[2] != 0.0
+    # A fresh episode (a gap longer than bump_gap_s) starts a new window.
+    assert tick(3.5, True).twist == (0.0, 0.0, 0.0)
+    off = Chase(ChaseParams(search_dip_s=0.0, search_vx=0.0), goal=(1.5, 0.0))
+    off.step(_senses(0.0, None, speed=0.0))
+    out = off.step(Senses(t=0.5, speed=0.0, odom=(0.0, 0.0, 0.0), bumped=True))
+    assert out.twist[2] != 0.0
+    # `blocked` is an escape, never a stand: 70% of the first version's firing
+    # was there, and 6 of 8 traced falls were a stand leaning on the other
+    # duck. A wall right ahead blocks the walking search; bumped or not, the
+    # turn out of it survives.
+    depth = np.full((8, 8), 2000, np.uint16)
+    depth[2:5, 3:5] = 150                                              # something 15 cm dead ahead
+    bl = Chase(ChaseParams(bump_stand_s=1.0, search_dip_s=0.0), goal=(1.5, 0.0))
+    bl.step(_senses(0.0, None, speed=0.0))
+    wall = TofFrame(t=0.5, depth_mm=depth, valid=np.ones((8, 8), bool))
+    out = bl.step(Senses(t=0.5, tof=wall, tof_age=0.0, speed=0.0, odom=(0.0, 0.0, 0.0), bumped=True))
+    assert bl.state == "blocked" and out.twist[2] != 0.0
+
+
+def test_the_kick_cone_dribbles_a_ball_that_is_too_far_out_and_shoots_from_close():
+    """`kick_cone`: the goal mouth subtends a half-angle from the ball; below
+    the threshold the plan is a push (dribble it closer), above it a kick.
+    A 0.7 m goal subtends 0.35 rad from 0.96 m out."""
+    from microduck_local.brain.tracker import Track
+    b = Chase(ChaseParams(kick_cone=0.35), goal=(1.5, 0.0), goal_w=0.7)
+    assert b.goal_cone(0.7, 0.0) > 0.35 > b.goal_cone(-0.5, 0.0)      # 0.8 m out vs 2.0
+    assert b.goal_cone(1.4, 0.0) > 1.0                                # on the line: nearly a right angle
+    off = Chase(ChaseParams(), goal=(1.5, 0.0), goal_w=0.0)
+    assert off.goal_cone(0.0, 0.0) == math.inf                        # no mouth width: never gated
+
+    def mode_at(brain, duck_xy, ball_xy):
+        odom = (duck_xy[0], duck_xy[1], 0.0)
+        rng = math.hypot(ball_xy[0] - duck_xy[0], ball_xy[1] - duck_xy[1])
+        bearing = math.atan2(ball_xy[1] - duck_xy[1], ball_xy[0] - duck_xy[0])
+        tr = Track(id=1, cls="ball", bearing=bearing, elevation=-0.3, width=0.12,
+                   range=rng, conf=0.9, born_t=0.0, last_t=0.0)
+        return brain._plan(odom, tr)[4]
+
+    assert mode_at(b, (-1.2, 0.0), (-0.9, 0.0)) == "push"             # far out: dribble
+    assert mode_at(b, (0.6, 0.0), (0.9, 0.0)) == "kick"               # close in: shoot
+    assert mode_at(off, (-1.2, 0.0), (-0.9, 0.0)) == "kick"           # gate off: shoot from anywhere
+
+
+def test_a_supporter_can_stand_ahead_of_the_ball_instead_of_behind_it():
+    """`support_mode`: "back" puts the supporter between the ball and our own
+    goal (it defends); "ahead" puts it between the ball and the goal we
+    attack (a poacher, in position to walk a loose ball in). Both keep the
+    spot inside the boards."""
+    p_back = ChaseParams()
+    p_ahead = ChaseParams(support_mode="ahead")
+    for p, nearer_attack in ((p_back, False), (p_ahead, True)):
+        tm = Team("left")
+        b = Chase(p, goal=(1.5, 0.0), team=tm, duck_id="d1", bounds=(1.5, 1.25))
+        tm.claim("d0", 10.0, 0.2, (0.0, 0.0))            # d0 attacks a ball on the centre spot
+        tm.claim("d1", 10.0, 2.0, None)
+        b._senses = Senses(t=10.0)
+        b._support((-1.0, 0.0, 0.0), None, False, False)
+        assert b.spot is None                            # a supporter's spot is not a kick spot
+        # Walk the servo target out of _support by reading where it wants to go.
+        target_ahead = b.p.support_mode == "ahead"
+        assert target_ahead == nearer_attack
+
+
+def test_chase_params_read_a_variant_off_the_environment():
+    """`MICRODUCK_CHASE` is how a battery says which variant it measured
+    (`--tag` only names the file). It applies to a brain built WITHOUT
+    params — the benchmark's and the lab's path — never over params a
+    caller passed, and a name or a value it cannot read raises rather than
+    silently measuring the default."""
+    import os
+
+    from microduck_local.brain.controllers import ChaseParams as CP
+    assert CP.from_env("") == CP() and CP.from_env("  ") == CP()
+    p = CP.from_env("two_stage=1, approach_back=0.15 ,head_yaw_when=always")
+    assert p.two_stage is True and p.approach_back == 0.15 and p.head_yaw_when == "always"
+    assert p.approach_speed == CP().approach_speed                  # untouched knobs keep the shipped value
+    assert CP.from_env("two_stage=off").two_stage is False
+    for bad in ("nope=1", "two_stage", "two_stage=maybe", "bump_stand_states=lineup"):
+        with pytest.raises(ValueError):
+            CP.from_env(bad)
+    old = os.environ.get("MICRODUCK_CHASE")
+    os.environ["MICRODUCK_CHASE"] = "two_stage=1"
+    try:
+        assert Chase().p.two_stage is True                          # no params: the environment is read
+        assert Chase(ChaseParams()).p.two_stage is False            # params given: never overridden
+    finally:
+        if old is None:
+            del os.environ["MICRODUCK_CHASE"]
+        else:
+            os.environ["MICRODUCK_CHASE"] = old
+
+
+def test_a_line_up_already_on_the_kick_line_walks_straight_in():
+    """`lineup_lat`: stage one's job is to put the duck ON the kick line,
+    squared up, short of the spot — so a duck already there starts stage two
+    where it stands. With it off (the shipped 0) the very same pose sends it
+    back to a pre-spot it has already walked past, which on this walker is a
+    turn in place with the ball at its feet, not a step backwards."""
+    p = ChaseParams(two_stage=True, lineup_lat=0.06)
+    spot = (0.5, 0.06, "kick_right", 0.0, "kick")             # kick spot, line along +x
+
+    def at(brain, odom, t=1.0):
+        # Deliberately re-poses ONE brain at a fixed `t`: each call is an
+        # independent question about the line-up decision, not a tick of a
+        # run, and the state it depends on is set explicitly just below.
+        # `t` is held constant because the state clock is reset with it and
+        # advancing it would change `t - t_state`. Clearing `_last_step_t`
+        # says that to the re-entry guard, which is otherwise right to object.
+        brain._last_step_t = None
+        brain._senses = Senses(t=t)
+        brain.state, brain.t_state, brain.lined = "lineup", 0.0, False
+        brain.spot = spot
+        return brain.step(Senses(t=t, odom=odom))
+
+    b = Chase(p, goal=(3.0, 0.0))
+    it = at(b, (0.35, 0.05, 0.0))                             # on the line, 15 cm short, squared
+    assert b.lined and it.twist[0] == p.approach_speed and abs(it.twist[2]) < 0.1
+    at(b, (0.35, 0.25, 0.0))
+    assert not b.lined                                        # 19 cm off the line: stage one takes it there
+    at(b, (0.35, 0.05, 0.5))
+    assert not b.lined                                        # squared to 0.5 rad: not squared enough
+    at(b, (0.15, 0.06, 0.0))
+    assert not b.lined                                        # further back than the pre-spot: walk to it first
+    at(b, (0.49, 0.06, 0.0))
+    assert not b.lined                                        # inside `lineup_tol` of the spot: the settle's job
+    off = Chase(ChaseParams(two_stage=True), goal=(3.0, 0.0))      # the knob off: the shipped two-stage path
+    it = at(off, (0.35, 0.05, 0.0))
+    assert not off.lined and it.twist[0] <= TURN_KICK and abs(it.twist[2]) == 1.0   # turning back to the pre-spot
+
+
+def test_a_bumped_duck_can_back_out_of_the_contact_instead_of_standing():
+    """`bump_back`: standing is what the rule does today and standing does not
+    END the contact — measured from 0.10 m of separation, 16 trials, a standing
+    duck was still at 0.099 m four seconds later and cleared 0.30 m in 0 of
+    them, where a straight reverse cleared it in a median 1.6 s. It shares the
+    stand's gate exactly, so a battery between them measures the ACTION and not
+    a second change of trigger. Untried against the stand, so it ships at 0;
+    this pins the wiring, not a result."""
+    from microduck_local.brain.gait import BACK_SPEED
+
+    spot = (0.5, 0.06, "kick_right", 0.0, "kick")
+
+    def run(p, times, odom=(0.35, 0.05, 0.6), state="lineup", touch=True):
+        """Step ONE brain along `times`, holding the contact — the window is
+        edge-triggered off the contact's onset, so a fresh brain at t = 0.9
+        would simply open a new episode."""
+        b = Chase(p, goal=(3.0, 0.0))
+        out = []
+        for t in times:
+            b._senses = Senses(t=t)
+            b.state, b.t_state, b.lined = state, 0.0, True
+            b.spot = spot
+            out.append(b.step(Senses(t=t, odom=odom, bumped=touch)).twist)
+        return out
+
+    assert ChaseParams().bump_back == 0.0                                   # ships off
+    back, stand = ChaseParams(bump_back=0.5), ChaseParams(bump_stand_s=0.5)
+    inside, outside = run(back, (0.0, 0.2, 0.9))[1:]
+    assert inside[0] == BACK_SPEED and inside[2] == 0.0                     # in the window: reverse, no turn
+    assert outside[0] != BACK_SPEED                                         # past it: the state's own command
+    assert run(stand, (0.0, 0.2))[1] == (0.0, 0.0, 0.0)                     # the arm it has to beat: stand
+    assert run(back, (0.0, 0.2), touch=False)[1][0] != BACK_SPEED           # never bumped: nothing fires
+    assert run(back, (0.0, 0.2), state="blocked")[1][0] != BACK_SPEED       # a state the rule is kept out of
+    # The same gate as the stand: only a TURN IN PLACE is replaced, never a
+    # walk-in, so the two arms differ in the command and in nothing else.
+    straight = {"odom": (0.35, 0.05, 0.0)}
+    assert run(back, (0.0, 0.2), **straight)[1][0] > 0
+    assert run(stand, (0.0, 0.2), **straight)[1][0] > 0
+
+
+def test_a_defender_striker_roster_owns_midfield_instead_of_falling_back_to_everybody():
+    """Track 4 leftover: ROLE_ZONES in thirds leave the middle unowned on a
+    2v2, and `candidates` then returns every live duck. A defender+striker
+    pair splits at halfway so a ball at midfield is inside the striker's
+    zone and only they may."""
+    from microduck_local.brain.team import ROLE_ZONES, Team, zones_for
+    assert zones_for({"d0": "defender", "d1": "midfielder", "d2": "striker"}) == ROLE_ZONES
+    z = zones_for({"d0": "defender", "d1": "striker"})
+    assert z["defender"] == (-1.0, 0.0) and z["striker"] == (0.0, 1.0)
+    tm = Team("cream")
+    tm.jobs, tm.half_x, tm.attack_sign = {"d0": "defender", "d1": "striker"}, 1.5, 1.0
+    tm.claim("d0", 1.0, 1.2, (0.0, 0.0), (-1.2, 0.0, 0.0))
+    tm.claim("d1", 1.0, 0.8, (0.0, 0.0), (0.4, 0.0, math.pi))
+    assert tm.zone_ok("d1", (0.0, 0.0)) and not tm.zone_ok("d0", (0.0, 0.0))
+    assert tm.candidates(1.0) == ["d1"]                                  # not everybody live
+    assert tm.zone_ok("d0", (-0.8, 0.0)) and not tm.zone_ok("d1", (-0.8, 0.0))
+    three = Team("cream")
+    three.jobs, three.half_x, three.attack_sign = (
+        {"d0": "defender", "d1": "midfielder", "d2": "striker"}, 1.5, 1.0)
+    three.claim("d0", 1.0, 1.0, (0.0, 0.0), (-1.0, 0.0, 0.0))
+    three.claim("d1", 1.0, 1.0, (0.0, 0.0), (0.0, 0.5, 0.0))
+    three.claim("d2", 1.0, 1.0, (0.0, 0.0), (1.0, 0.0, math.pi))
+    assert three.candidates(1.0) == ["d1"]                               # mid owns a=0 in thirds
+
+
+def test_cover_lets_a_quicker_teammate_attack_without_changing_jobs():
+    """If the zone owner is more than `give_up_s` slower, a teammate outside
+    the zone may take the ball. Both keep their static jobs."""
+    tm = Team("cream")
+    tm.jobs, tm.half_x, tm.attack_sign = {"d0": "defender", "d1": "striker"}, 1.5, 1.0
+    ball = (1.0, 0.0)                                                   # a = 1/1.5: striker's half
+    # Striker far and facing away; defender on the ball, facing it.
+    tm.claim("d1", 1.0, 2.5, ball, (-1.4, 0.0, 0.0))                    # ~4 s away, nose the wrong way
+    tm.claim("d0", 1.0, 0.12, ball, (1.05, 0.0, math.pi))                # on it
+    assert tm.job("d0") == "defender" and tm.job("d1") == "striker"
+    assert not tm.zone_ok("d0", ball) and tm.zone_ok("d1", ball)
+    assert tm.cost("d1", 1.0) - tm.cost("d0", 1.0) > tm.give_up_s
+    got = tm.candidates(1.0)
+    assert "d1" in got and "d0" in got                                  # owner + cover
+    assert tm.job("d0") == "defender" and tm.job("d1") == "striker"      # jobs did not swap
+    # A striker only a little slower is not cover — the gate holds.
+    tm.claim("d1", 1.0, 0.4, ball, (0.6, 0.0, 0.0))
+    tm.claim("d0", 1.0, 0.12, ball, (1.05, 0.0, math.pi))
+    assert tm.cost("d1", 1.0) - tm.cost("d0", 1.0) < tm.give_up_s
+    assert tm.candidates(1.0) == ["d1"]
+
+
+def test_a_kick_publishes_the_exit_line_only_at_kick_like_speed():
+    """After a kick the hunt heading is aim + the in-play foot exit, and that
+    line is the board's ball velocity when the implied speed is kick-like.
+    Below `vel_use` it is ignored, so a walking duck cannot inject a fake
+    intercept (`lead_max_s` stays 0)."""
+    p = ChaseParams(hunt_s=3.0)
+    tm = Team("cream")
+    assert tm.lead_max_s == 0.0 and p.hunt_exit is True
+    b = Chase(p, goal=(3.0, 0.0), team=tm, duck_id="d0")
+    b._senses = Senses(t=0.0)
+    b.state, b.t_state, b.lined = "settle", 0.0, True
+    b.spot = (0.0, 0.06, "kick_right", 0.3, "kick")
+    it = b.step(Senses(t=p.settle_s + 0.01, odom=(0.0, 0.06, 0.3)))
+    heading = 0.3 + p.kick_exit_right
+    assert it.skill == "kick_right" and b._hunt_u == pytest.approx(heading)
+    vx, vy = tm.ball_vel()
+    assert math.hypot(vx, vy) == pytest.approx(p.kick_speed)
+    assert math.atan2(vy, vx) == pytest.approx(heading)
+    # A coasting "kick" is ignored: velocity stays what the real kick wrote.
+    before = tm.ball_vel()
+    tm.publish_kick(2.0, (0.0, 0.0), 0.0, tm.vel_use - 0.1)
+    assert tm.ball_vel() == before
+    tm.publish_kick(2.0, (0.5, 0.0), 1.2, p.kick_speed)
+    vx, vy = tm.ball_vel()
+    assert math.hypot(vx, vy) == pytest.approx(p.kick_speed)
+    assert math.atan2(vy, vx) == pytest.approx(1.2)
+    # hunt_exit off: hunt the aim line, still publish the (unrotated) heading.
+    tm2 = Team("cream")
+    c = Chase(ChaseParams(hunt_s=3.0, hunt_exit=False), goal=(3.0, 0.0), team=tm2, duck_id="d0")
+    c._senses = Senses(t=0.0)
+    c.state, c.t_state, c.lined = "settle", 0.0, True
+    c.spot = (0.0, 0.06, "kick_right", 0.3, "kick")
+    c.step(Senses(t=c.p.settle_s + 0.01, odom=(0.0, 0.06, 0.3)))
+    assert c._hunt_u == pytest.approx(0.3)
+    vx, vy = tm2.ball_vel()
+    assert math.atan2(vy, vx) == pytest.approx(0.3)
+
+
+def test_the_brains_branch_priority_is_the_one_written_down():
+    """Roadmap F.1: `Chase.PRIORITY` names the `elif` chain of `Chase.step`
+    in the order it runs. Read the chain back out of the source - the
+    condition names that start each branch - and check the order."""
+    import inspect
+    import re
+    src = inspect.getsource(Chase.step)
+    chain = src[src.index("if senses.skill is not None:") - 8:]           # keep the first branch's indent
+    heads = re.findall(r"^\s{8}(?:if|elif) (.+?):\s*(?:#.*)?$", chain, flags=re.M)
+    key = {"senses.skill is not None": "kick", "looking": "look", "retreating": "retreat",
+           "near_duck": "avoid", "block_at is not None": "block", 'self.role == "support"': "support",
+           'yielding and self.state not in ("settle",)': "yield", 'self.state == "push"': "push",
+           'self.state in ("lineup", "settle") and self.spot is not None': "lineup", "seen": "seen",
+           "hunting": "hunt", 'seeking and self.state not in ("look",)': "seek"}
+    order = [key[h] for h in heads if h in key]
+    assert order == list(Chase.PRIORITY[:-1]), order          # every branch, in this order; search is the fall-through
+    assert Chase.PRIORITY[-1] == "search" and "search" in chain
+
+
+def test_cover_that_holds_the_role_leaves_through_the_hysteresis():
+    """A cover attacker (off its zone, `give_up_s` quicker than the owner)
+    stays a candidate once it holds the role, until the owner is quicker by
+    the same margin — so the role moves back through `attacker`'s hold, not
+    the moment the cover's cost jitters back across the line it came in on.
+    Measured in play (roadmap Track 4 item 11): without this the role
+    flipped ~300 times a 3v3 run, median spell 0.09 s."""
+    tm = Team("cream")
+    tm.jobs, tm.half_x, tm.attack_sign = {"d0": "defender", "d1": "striker"}, 1.5, 1.0
+    ball = (1.0, 0.0)                                                   # the striker's half
+    tm.claim("d1", 1.0, 2.5, ball, (-1.4, 0.0, 0.0))                    # owner, ~4 s away, nose the wrong way
+    tm.claim("d0", 1.0, 0.12, ball, (1.05, 0.0, math.pi))                # defender on it: cover
+    assert tm.attacker(1.0) == "d0"
+    # The cover is now only a LITTLE quicker than the owner: it still holds.
+    tm.claim("d1", 1.1, 0.4, ball, (0.6, 0.0, 0.0))
+    tm.claim("d0", 1.1, 0.3, ball, (1.05, 0.0, math.pi))
+    assert tm.cost("d1", 1.1) - tm.cost("d0", 1.1) < tm.give_up_s
+    assert "d0" in tm.candidates(1.1) and tm.attacker(1.1) == "d0"
+    # The owner becomes clearly quicker: the role moves back by `hold_s`, not at once.
+    for k in range(0, 15):
+        t = 1.2 + 0.1 * k
+        tm.claim("d1", t, 0.15, ball, (1.15, 0.0, math.pi))               # on it, facing it: cost 0
+        tm.claim("d0", t, 0.9, ball, (1.9, 0.0, math.pi))                 # 1.7 s away: past switch_s, short of give_up_s
+        att = tm.attacker(t)
+        if k == 0:
+            assert att == "d0"
+    assert tm.attacker(2.6) == "d1"
+    # Out of the play altogether (an owner give_up_s quicker): the cover is dropped at once.
+    tm.claim("d1", 3.0, 0.12, ball, (1.15, 0.0, 0.0))
+    tm.claim("d0", 3.0, 2.5, ball, (-1.4, 0.0, math.pi))
+    assert "d0" not in tm.candidates(3.0) and tm.attacker(3.0) == "d1"
+    # A keeper is never kept out of its box this way.
+    km = Team("cream")
+    km.jobs, km.half_x, km.attack_sign = {"d0": "keeper", "d1": "striker"}, 1.5, 1.0
+    km.claim("d0", 1.0, 0.12, (-1.3, 0.0), (-1.4, 0.0, 0.0))
+    km.claim("d1", 1.0, 2.0, (-1.3, 0.0), (0.5, 0.0, math.pi))
+    assert km.attacker(1.0) == "d0"                                     # the ball in its box
+    km.claim("d0", 1.1, 0.5, (-0.9, 0.0), (-1.4, 0.0, 0.0))             # …rolled out of it
+    km.claim("d1", 1.1, 1.6, (-0.9, 0.0), (0.5, 0.0, math.pi))
+    assert "d0" not in km.candidates(1.1)
+
+
+def test_the_striker_posts_off_the_balls_side_for_both_attack_directions():
+    """The post is `strike_side` off the kick line on the side the ball is
+    NOT on (a striker on the ball's side is a second duck on the ball). The
+    offset rides the lane's left normal, which flips with the attack
+    direction: until 2026-09-08 the team attacking -x posted its striker on
+    the SAME side as the ball, so every roles battery compared two different
+    strikers (code review)."""
+    from types import SimpleNamespace
+    p = ChaseParams()
+    for gx in (1.75, -1.75):
+        b = Chase(p, goal=(gx, 0.0), role="striker", bounds=(1.75, 1.0), goal_w=0.7)
+        b._senses = SimpleNamespace(t=0.0, odom=(0.0, 0.0, 0.0))    # `_hold_target` reads the tick's clock
+        for by in (0.3, -0.3):
+            tx, ty = b._hold_target((0.0, by), (0.0, 0.0, 0.0))
+            assert (ty > 0) != (by > 0), f"attack x={gx:+.2f}, ball y={by:+.2f}: post y={ty:+.2f} is on the ball's side"
+            assert abs(ty) > 0.1                                        # a real offset, not a rounding of zero
+            assert (tx - 0.0) * gx > 0                                # ahead of the ball, toward the goal it attacks
+
+
+def test_from_env_reads_an_int_as_an_int_and_refuses_a_choice_it_does_not_know():
+    """`kick_select_n` reached `kickselect.select` as 20.0 (a TypeError at the
+    first plan on a pitch) and `aim_mode=clmap` silently ran the `los` arm,
+    against the docstring's promise that an unreadable value raises."""
+    import pytest
+    p = ChaseParams.from_env("kick_select_n=20")
+    assert p.kick_select_n == 20 and isinstance(p.kick_select_n, int)
+    for bad in ("kick_select_n=20.0", "kick_select_n=n", "aim_mode=clmap", "head_yaw_when=serach", "support_mode=front"):
+        with pytest.raises(ValueError):
+            ChaseParams.from_env(bad)
+    assert ChaseParams.from_env("aim_mode=los").aim_mode == "los"
+    assert ChaseParams.from_env("search_dip_every=0").search_dip_every == 0.0    # 0 = never dip, not a ZeroDivisionError
+
+
+def _contest_brain(margin=0.10, use_color=True):
+    tm = Team("cream")
+    return Chase(ChaseParams(contest_margin=margin, use_color=use_color,
+                             duck_touch=0.22, duck_keepout=0.40),
+                 goal=(1.5, 0.0), bounds=(1.5, 1.25), goal_w=0.7, team=tm, duck_id="d0")
+
+
+def _inject(b, t, ball_ahead, opp_xy, colour="graphite"):
+    """Our duck at the origin facing +x, the ball `ball_ahead` in front of it,
+    another duck at `opp_xy` — as coasting tracks, so `step` sees exactly the
+    geometry under test with no detector in the loop.
+
+    The opponent goes to the SIDE, not straight through the ball, because that
+    is the contested arrival this exists for: collinear, a duck beyond the
+    ball is always nearer to it than we are and nothing could ever contest."""
+    from microduck_local.brain.tracker import Track
+    def mk(i, cls, xy):
+        r = math.hypot(*xy)
+        return Track(id=i, cls=cls, bearing=math.atan2(xy[1], xy[0]), elevation=0.0,
+                     width=0.1, range=r, conf=0.9, born_t=0.0, last_t=t, hits=8,
+                     xy=xy, xy_t=t)
+    ball, duck = mk(1, "ball", (ball_ahead, 0.0)), mk(2, "duck", opp_xy)
+    duck.color = colour
+    b.tracker.tracks = [ball, duck]
+    b.tracker._prev_yaw = 0.0
+    return Senses(t=t, odom=(0.0, 0.0, 0.0), speed=0.0)
+
+
+def test_the_contest_holds_the_line_only_for_the_duck_nearer_the_ball():
+    """The duel (bead mdl-23b). Two GEOMETRIC answers are already measured
+    null — `lineup_keepout` and `opp_keepout` — because a radius cannot break
+    a symmetry: both ducks turn away, both drop the spot, neither gets the
+    ball. `contest_margin` asks who SHOULD have it, so exactly one of the pair
+    holds its line and the deadlock breaks instead of becoming a shove.
+
+    The asymmetry IS the mechanism, so it is pinned here and not left to a
+    battery: if both sides of a contested ball contested it, this would be a
+    shoving match with a nicer name."""
+    # Ball 0.20 m ahead, opponent 0.35 m ahead: the opponent is inside
+    # `duck_keepout`, so without the contest this tick is an `avoid`.
+    # Ball 0.10 m at our feet; the opponent 0.35 m away on the flank, which
+    # is 0.26 m from the ball — inside `duck_keepout`, so without the contest
+    # this tick is an `avoid` and the spot is dropped.
+    b = _contest_brain()
+    b.step(_inject(b, 1.0, ball_ahead=0.10, opp_xy=(0.33, 0.12)))
+    assert b.contesting, "nearer the ball than the opponent: this one is ours"
+    assert b.state != "avoid", "the contest must not turn away"
+
+    # The mirror. The same pair seen from the duck that is FURTHER from the
+    # ball must still give way, or nothing is broken.
+    far = _contest_brain()
+    far.step(_inject(far, 1.0, ball_ahead=0.30, opp_xy=(0.30, 0.20)))
+    assert not far.contesting
+    assert far.state == "avoid"
+
+
+def test_the_contest_never_walks_into_anybody_and_never_shoves_a_teammate():
+    # TOUCHING still stands the duck up safely: the contest declines to turn
+    # away, it does not drive through a body.
+    b = _contest_brain()
+    b.step(_inject(b, 1.0, ball_ahead=0.10, opp_xy=(0.17, 0.06)))   # inside duck_touch
+    assert b.state == "avoid"
+
+    # A TEAMMATE is never contested — that is how two of ours shoulder.
+    mate = _contest_brain()
+    mate.step(_inject(mate, 1.0, ball_ahead=0.10, opp_xy=(0.33, 0.12), colour="cream"))
+    assert not mate.contesting and mate.state == "avoid"
+
+    # With the colour sense off it stays inert, since it would otherwise fire
+    # against teammates too.
+    blind = _contest_brain(use_color=False)
+    blind.step(_inject(blind, 1.0, ball_ahead=0.10, opp_xy=(0.33, 0.12)))
+    assert not blind.contesting and blind.state == "avoid"
+
+    # And it ships off.
+    assert ChaseParams().contest_margin == 0.0
+    off = _contest_brain(margin=0.0)
+    off.step(_inject(off, 1.0, ball_ahead=0.10, opp_xy=(0.33, 0.12)))
+    assert not off.contesting and off.state == "avoid"

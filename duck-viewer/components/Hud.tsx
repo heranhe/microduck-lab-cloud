@@ -4,6 +4,7 @@
 // so the 25 Hz stream never causes React re-renders), a system-stats strip,
 // helper spawn/remove buttons, and the command bar.
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteColabToken,
@@ -763,7 +764,17 @@ export function Hud({
             alignItems: "center",
           }}
         >
-          <span style={{ flex: 1 }}>🦆 {tr("duck lab", "鸭子实验室")}</span>
+          <span style={{ flex: 1 }}>
+            🦆 {tr("duck lab", "鸭子实验室")}{" "}
+            {/* 跳转到全新 /sim 世界仿真页面 */}
+            <Link
+              href="/sim"
+              title={tr("the world page — rooms, sensors, brains", "世界模式 — 房间、传感器、视觉大脑与足球")}
+              style={{ color: "#7db8d8", fontWeight: 500, textDecoration: "none", marginLeft: 8, fontSize: 11 }}
+            >
+              {tr("sim world →", "世界模式 →")}
+            </Link>
+          </span>
           <span style={{ color: link.color }} title={link.title}>
             {link.dot} {link.label}
           </span>

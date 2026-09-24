@@ -5,75 +5,22 @@
 // Viewer.tsx), MediaRecorder captures the WebGL canvas — DOM labels and
 // panels are not part of the canvas, so takes come out clean — then the lab
 // server converts the upload to mp4 + gif (POST /captures) and the panel
-// offers both as downloads.
+// offers both as downloads. The take itself is useTake.ts, shared with the
+// /sim page's SimRecord; this file is the lab page's layout and framing.
 
 import { useEffect, useRef, useState } from "react";
 import { LAB_HTTP, type LabClient } from "@/lib/lab";
 import { useSelectedDuck } from "@/lib/select";
 import { useHudRight } from "@/lib/ui";
 import { useI18n } from "@/lib/i18n";
-import {
-  captureDone,
-  captureError,
-  captureFraming,
-  captureProcessing,
-  captureRecording,
-  captureReset,
-  getCapture,
-  getCaptureCanvas,
-  getFramesPushed,
-  hasCaptureTrack,
-  setCaptureTrack,
-  snapshotNow,
-  useCapture,
-} from "@/lib/record";
-import { pushToast } from "./Toasts";
+import { captureReset } from "@/lib/record";
+import { slug, stamp, useTake } from "./useTake";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
 /** Camera glide before the recorder rolls (matches RecordCamera's damping —
  *  the shot has settled by then, so takes don't open with a swish). */
 const FRAMING_MS = 1200;
-/** Safety cap: a forgotten recorder must not fill the disk. */
-const MAX_TAKE_MS = 60_000;
-
-/** Duck names carry emoji/spaces — reduce to a safe filename stem (mirrors
- *  the server's capture_slug, so shots and takes sort together). */
-function slug(s: string): string {
-  return (
-    s
-      .replace(/[^A-Za-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .toLowerCase()
-      .slice(0, 40)
-      // Mirror capture_slug exactly: it strips again AFTER truncating, and
-      // strips leading _ as well (a stem starting with _ is one the server's
-      // own /captures route then refuses to serve). Without both, a 📷 shot
-      // and a 🎥 take of the same duck get different stems.
-      .replace(/-+$/, "")
-      .replace(/^[_-]+/, "") || "duck"
-  );
-}
-
-function stamp(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
-    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
-  );
-}
-
-function pickMime(): string | null {
-  if (typeof MediaRecorder === "undefined") return null;
-  const prefs = [
-    "video/webm;codecs=vp9",
-    "video/webm;codecs=vp8",
-    "video/webm",
-    "video/mp4", // Safari
-  ];
-  return prefs.find((m) => MediaRecorder.isTypeSupported(m)) ?? null;
-}
 
 // No `left` here — the component computes it per render: centered, but never
 // under the top-left HUD panel (see the layout block in RecordPanel).
@@ -118,11 +65,8 @@ export function RecordPanel({
 }) {
   const { tr } = useI18n();
   const selected = useSelectedDuck();
-  const cap = useCapture();
-  const recRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const timersRef = useRef<number[]>([]);
-  const [, bump] = useState(0); // re-render tick for the elapsed timer
+  const take = useTake({ framingMs: FRAMING_MS });
+  const { cap } = take;
 
   // Layout inputs for the HUD-dodging `left` computed at the bottom: the
   // HUD's live right edge, this panel's own width, and the window width.
@@ -146,143 +90,22 @@ export function RecordPanel({
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (cap.phase !== "recording") return;
-    const id = setInterval(() => bump((t) => t + 1), 250);
-    return () => clearInterval(id);
-  }, [cap.phase]);
+  const duckName = () =>
+    selected
+      ? clientRef.current?.frame?.ducks.find((d) => d.id === selected)?.name ?? "duck"
+      : null;
 
-  const clearTimers = () => {
-    timersRef.current.forEach((t) => clearTimeout(t));
-    timersRef.current = [];
-  };
-
-  const fail = (msg: string) => {
-    captureError(msg);
-    pushToast(`🎥 ${msg}`);
-  };
-
+  // The duck is captured by ID at start, so deselecting mid-take doesn't
+  // lose the shot (RecordCamera frames cap.duckId).
   const start = () => {
     if (!selected) return;
-    const duckName =
-      clientRef.current?.frame?.ducks.find((d) => d.id === selected)?.name ??
-      "duck";
-    captureFraming(selected);
-    timersRef.current.push(
-      window.setTimeout(() => beginRecording(duckName), FRAMING_MS)
-    );
+    take.start(duckName() ?? "duck", selected);
   };
-
-  const beginRecording = (duckName: string) => {
-    if (getCapture().phase !== "framing") return; // cancelled during the glide
-    const canvas = getCaptureCanvas();
-    const mime = pickMime();
-    if (!canvas) return fail("no canvas to record");
-    if (!mime) return fail("this browser can't record video (no MediaRecorder)");
-    // captureStream(0) + an explicit requestFrame() per rendered frame (the
-    // pump lives in RecordCamera's useFrame) — automatic capture rides the
-    // compositor and delivered near-empty webms whenever the tab was
-    // throttled. Browsers without requestFrame (Safari) fall back to auto.
-    let stream: MediaStream;
-    let pumpTrack: { requestFrame: () => void } | null = null;
-    try {
-      stream = canvas.captureStream(0);
-      const t = stream.getVideoTracks()[0] as unknown as {
-        requestFrame?: () => void;
-      };
-      if (typeof t?.requestFrame === "function") {
-        pumpTrack = t as { requestFrame: () => void };
-      } else {
-        stream = canvas.captureStream(30);
-      }
-    } catch (e) {
-      return fail(`canvas capture failed: ${e}`);
-    }
-    setCaptureTrack(pumpTrack);
-    let rec: MediaRecorder;
-    try {
-      rec = new MediaRecorder(stream, {
-        mimeType: mime,
-        videoBitsPerSecond: 12_000_000,
-      });
-    } catch (e) {
-      return fail(`recorder failed to start: ${e}`);
-    }
-    chunksRef.current = [];
-    rec.ondataavailable = (e) => {
-      if (e.data.size) chunksRef.current.push(e.data);
-    };
-    rec.onstop = () =>
-      upload(duckName, new Blob(chunksRef.current, { type: mime }));
-    rec.onerror = () => fail("recorder error mid-take");
-    recRef.current = rec;
-    rec.start(250);
-    captureRecording();
-    timersRef.current.push(window.setTimeout(stop, MAX_TAKE_MS));
-  };
-
-  const stop = () => {
-    const rec = recRef.current;
-    if (rec?.state !== "recording") return;
-    clearTimers();
-    captureProcessing(); // before .stop(): onstop checks the phase
-    rec.stop();
-  };
-
-  const upload = async (duckName: string, blob: Blob) => {
-    recRef.current = null;
-    const pushed = getFramesPushed();
-    const pumped = hasCaptureTrack();
-    setCaptureTrack(null);
-    if (getCapture().phase !== "processing") return; // cancelled
-    if (!blob.size) return fail("empty recording — nothing captured");
-    // A handful of frames means the scene never rendered during the take
-    // (hidden/throttled tab) — a 0.1 s "video" out of ffmpeg would only
-    // confuse; say what actually happened instead.
-    if (pumped && pushed < 5)
-      return fail("scene barely rendered during the take — keep the tab visible while recording");
-    try {
-      const res = await fetch(
-        `${LAB_HTTP}/captures?name=${encodeURIComponent(duckName)}`,
-        { method: "POST", body: blob }
-      );
-      if (!res.ok) {
-        const detail = (await res.json().catch(() => null))?.detail;
-        throw new Error(detail ?? `HTTP ${res.status}`);
-      }
-      const result = await res.json();
-      captureDone(result);
-      pushToast(`🎥 saved ${result.name} (mp4 + gif) in captures/`);
-    } catch (e) {
-      fail(`capture failed: ${e instanceof Error ? e.message : e}`);
-    }
-  };
-
-  const cancel = () => {
-    clearTimers();
-    const rec = recRef.current;
-    if (rec && rec.state !== "inactive") {
-      rec.onstop = null; // discard, don't upload
-      rec.stop();
-    }
-    recRef.current = null;
-    setCaptureTrack(null);
-    captureReset();
-  };
-
-  // Unmount: drop timers and a still-rolling recorder without uploading.
-  useEffect(() => () => cancel(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 📷 is instant and client-side: name the file after the selected duck (or
   // the whole lab) and capture SYNCHRONOUSLY — the download must fire inside
   // this click's user gesture (see lib/record.ts).
-  const snap = () => {
-    const duckName = selected
-      ? clientRef.current?.frame?.ducks.find((d) => d.id === selected)?.name
-      : null;
-    if (!snapshotNow(`${slug(duckName ?? "duck-lab")}-${stamp()}`))
-      pushToast("📷 scene still loading — try again in a moment");
-  };
+  const snap = () => take.snap(`${slug(duckName() ?? "duck-lab")}-${stamp()}`);
 
   let content: React.ReactNode;
   if (cap.phase === "idle") {
@@ -299,10 +122,6 @@ export function RecordPanel({
       </>
     );
   } else if (cap.phase === "framing" || cap.phase === "recording") {
-    const secs =
-      cap.recordingSince > 0
-        ? Math.floor((Date.now() - cap.recordingSince) / 1000)
-        : 0;
     content = (
       <>
         {cap.phase === "framing" ? (
@@ -310,13 +129,13 @@ export function RecordPanel({
         ) : (
           <>
             <span style={{ color: "#e07a5f" }}>●</span>
-            <span>{secs}s</span>
-            <button style={btnStyle} onClick={stop}>
+            <span>{take.secs}s</span>
+            <button style={btnStyle} onClick={take.stop}>
               ■ {tr("stop", "停止")}
             </button>
           </>
         )}
-        <button style={btnStyle} onClick={cancel} title={tr("discard the take", "丢弃本次录像")}>
+        <button style={btnStyle} onClick={take.cancel} title={tr("discard the take", "丢弃本次录像")}>
           ✕
         </button>
       </>
