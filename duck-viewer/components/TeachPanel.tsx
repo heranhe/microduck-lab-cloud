@@ -1207,6 +1207,11 @@ export function TeachPanel({
 
   useEffect(() => saveJSON("teachOpen", open), [open]);
   useEffect(() => {
+    const openPanel = () => setOpen(true);
+    window.addEventListener("microduck:open-teach", openPanel);
+    return () => window.removeEventListener("microduck:open-teach", openPanel);
+  }, []);
+  useEffect(() => {
     if (!open) return;
     let stale = false;
     fetchRobots()
@@ -1768,7 +1773,7 @@ export function TeachPanel({
               <span key={s} style={{ display: "inline-flex", alignItems: "stretch" }}>
                 <button
                   title={`teach ${robotPhrase(robot)}: ${title}`}
-                  onClick={() => submit(s)}
+                  onClick={() => setInput(s)}
                   style={best ? { ...chip, borderRadius: "12px 0 0 12px", borderRight: "none" } : chip}
                 >
                   {emoji ? `${emoji} ${s}` : s}
@@ -1923,18 +1928,34 @@ export function TeachPanel({
             e.preventDefault();
             submit(input);
           }}
+          style={{ display: "flex", gap: 6 }}
         >
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={tr(`teach ${robotPhrase(robot)} a new policy…`, `教${noun}学习新策略…`)}
             style={{
-              width: "100%", boxSizing: "border-box", background: "#12151b",
+              flex: 1, minWidth: 0, boxSizing: "border-box", background: "#12151b",
               border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6,
               color: "#e8e6e1", padding: "6px 8px", fontFamily: mono, fontSize: 12,
               outline: "none",
             }}
           />
+          <button
+            type="submit"
+            disabled={!input.trim()}
+            title={tr("review the choice, then start training", "确认所选动作后开始训练")}
+            style={{
+              border: "1px solid #d39a48", borderRadius: 6,
+              background: input.trim() ? "#694318" : "#25221d",
+              color: input.trim() ? "#ffe0a6" : "#68645d",
+              padding: "6px 10px", fontFamily: mono, fontSize: 11,
+              fontWeight: 700, cursor: input.trim() ? "pointer" : "default",
+              whiteSpace: "nowrap",
+            }}
+          >
+            ▶ {tr("start", "开始训练")}
+          </button>
         </form>
       </div>
     </div>

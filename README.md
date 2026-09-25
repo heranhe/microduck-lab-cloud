@@ -48,7 +48,7 @@ cd microduck-lab-cloud/duck-viewer
 npm run dev
 ```
 
-打开终端显示的本地地址。实验室、本地训练和模拟页面**无需 Google 登录**。在界面顶部切换「中文 / EN」，再次访问时会保留选择。更完整的命令、性能测量和原作者功能说明见 [English guide](README_EN.md)。
+打开终端显示的本地地址。实验室右上角的「☁ 云算力」统一管理 Google Colab 和 Hugging Face Jobs；旁边的「▶ 开始训练」打开本地教学训练。实验室、本地训练和模拟页面**无需 Google 登录**。在界面顶部切换「中文 / EN」，再次访问时会保留选择。更完整的命令、性能测量和原作者功能说明见 [English guide](README_EN.md)。
 
 ## 使用 Google Colab GPU
 
@@ -65,10 +65,14 @@ npm run dev
    ```
 
 2. 首次使用时，按官方 Colab CLI 给出的链接完成 Google 授权。确认命令显示的 **Current balance 大于 0**。授权凭据留在本机 CLI 中，不会提交到本仓库，也不会传给本应用。
-3. 启动 `duck-lab` 和前端，打开 `/cloud` 页面。选择任务、GPU、迭代次数和并行环境数，再启动训练。
-4. GPU 分配成功后，页面**最顶部固定栏**显示已使用时长，并提供红色的「一键断开云算力」按钮；滚动页面时仍可操作。计时从分配成功时起计算，**不等于 Google 的实际计费时长**。任务列表也可单独断开任务；成功导出后下载 `policy.onnx`。正常关闭实验室时，服务端同样会尝试释放仍由本项目管理的会话。
+3. 启动 `duck-lab` 和前端，在实验室右上角打开「☁ 云算力」，选择 Colab、任务、GPU、迭代次数和并行环境数，再点击醒目的「开始训练」。旧的 `/cloud` 地址会自动回到这个面板。
+4. GPU 分配成功后，实验室右上角常驻显示实际 GPU 名称、显存和已使用时长，并提供「一键断开」按钮。计时从分配成功时起计算，**不等于 Google 的实际计费时长**。任务列表也可单独断开任务；成功导出后下载 `policy.onnx`。正常关闭实验室时，服务端同样会尝试释放仍由本项目管理的会话。
 
 如果余额为 0，请先确认 Colab 网页和 CLI 使用的是**同一个享有权益的 Google 账号**。即便有余额，具体 GPU 型号也可能暂时不可用。Windows 用户可在 Colab 网页打开 [训练 Notebook](notebooks/microduck_train.ipynb)；它不依赖本地 Colab CLI。
+
+## 使用 Hugging Face Jobs
+
+在「☁ 云算力」中切换到 Hugging Face，粘贴具有 Jobs 和模型写入权限的细粒度 Token。Token 仅保存在本机并以 Jobs Secret 传给训练容器；浏览器再次读取时只能看到掩码。面板会从 Hugging Face 实时读取可用 GPU、显存和价格，训练结果上传到账号下的私有 `microduck-cloud-results` 模型仓库，再由本地实验室提供 ONNX 下载。顶部计时和「一键断开」同样覆盖本项目创建的 HF Jobs。
 
 ### 当前云端功能边界
 

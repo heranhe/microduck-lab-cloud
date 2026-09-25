@@ -146,6 +146,21 @@ class ColabJobs:
             job["allocated_at"] = time.time()
             if job["state"] in {"stopping", "stopped"}:
                 return
+            # Ask the allocated runtime instead of guessing from the requested
+            # tier: Colab may serve different A100 memory variants.
+            probe = cli(["exec", "-s", session], code=(
+                "import json,torch; p=torch.cuda.get_device_properties(0); "
+                "print(json.dumps({'device':p.name,'vram':"
+                "f'{p.total_memory / 1024**3:.0f} GB'}))"), timeout=30)
+            if probe.returncode == 0:
+                for line in probe.stdout.splitlines():
+                    if line.strip().startswith("{"):
+                        try:
+                            device = json.loads(line)
+                            job["device"] = device.get("device")
+                            job["vram"] = device.get("vram")
+                        except json.JSONDecodeError:
+                            pass
             job["state"] = "starting"
             runner = _remote_runner(job["task"], iterations, envs)
             # The kernel returns immediately; training runs in a separate process.

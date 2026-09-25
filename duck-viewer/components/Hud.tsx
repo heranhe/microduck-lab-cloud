@@ -28,7 +28,7 @@ const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
  *  machine, and only a mask ever comes back — this modal never holds a live
  *  token after Save resolves. Unlocks the coming real-GPU training step
  *  (microduck_rl on HF Jobs, the user's own account and billing). */
-function HfSettingsModal({ onClose }: { onClose: () => void }) {
+export function HfSettingsModal({ onClose }: { onClose: () => void }) {
   const { tr } = useI18n();
   const [settings, setSettings] = useState<HfSettings | null>(null);
   const [token, setToken] = useState("");
@@ -395,10 +395,6 @@ export function Hud({
   // bar is unaffected). Persisted like the PolicyPanel/TeachPanel toggles.
   // Hooks below run regardless of `open` so the poll keeps hook order stable.
   const [open, setOpen] = useState(() => loadJSON("hudOpen", true));
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  // Stable: this HUD re-renders ~4x/s, and an inline arrow would make the
-  // modal's keyboard-gate effect tear down and re-run on every one of them.
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   // Same treatment for the bottom-left camera-help bar — it's pure reference
   // text, so folding it away frees corner space (and the Next dev badge sits
   // right under it in dev). Starts collapsed: first sight of the scene should
@@ -482,7 +478,6 @@ export function Hud({
 
   return (
     <>
-      {settingsOpen && <HfSettingsModal onClose={closeSettings} />}
       {open ? (
       <div
         ref={hudEdgeRef}
@@ -512,10 +507,6 @@ export function Hud({
             >
               {tr("sim", "仿真")} →
             </Link>
-            <Link href="/cloud" title={tr("Google Colab training", "Google Colab 云端训练")}
-              style={{ color: "#9aa5b1", fontWeight: 400, textDecoration: "none", marginLeft: 6 }}>
-              ☁ {tr("cloud", "云端")}
-            </Link>
           </span>
           <button onClick={toggle} title={tr("Switch language", "切换语言")}
             style={{ background: "none", border: "none", color: "#9aa5b1", cursor: "pointer", fontSize: 10 }}>
@@ -542,21 +533,6 @@ export function Hud({
             }}
           >
             🏷
-          </button>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            title={tr("settings — connect Hugging Face for real GPU training", "设置：连接 Hugging Face 账号")}
-            style={{
-              background: "none",
-              border: "none",
-              color: "#8b93a3",
-              cursor: "pointer",
-              fontFamily: mono,
-              fontSize: 12,
-              padding: "0 4px",
-            }}
-          >
-            ⚙
           </button>
           <button
             onClick={() => setOpen(false)}

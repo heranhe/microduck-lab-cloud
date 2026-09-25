@@ -182,6 +182,7 @@ from pydantic import BaseModel
 # stale scorecard missing new terms (bit the user twice: head_up, head_up_pull).
 from . import behaviors as behaviors_mod
 from . import colab_jobs
+from . import hf_jobs
 from . import contract as C
 from . import motion as motion_mod
 from . import run_record
@@ -2085,6 +2086,13 @@ class ColabStartReq(BaseModel):
     envs: int = 64
 
 
+class HfStartReq(BaseModel):
+    task: str = "Mjlab-Velocity-Flat-MicroDuck"
+    flavor: str = "l4x1"
+    iterations: int = 1000
+    envs: int = 64
+
+
 class TeachReq(BaseModel):
     text: str
     # Reference motion for an imitation run — a clip saved by the viewer's
@@ -3106,6 +3114,7 @@ def make_app(ducks: list[Duck]):
     st = LabState(ducks)
     stats = StatsSampler()
     cloud = colab_jobs.ColabJobs()
+    hf_cloud = hf_jobs.HfJobs()
     st.stats = stats.sample(None)  # frames carry the full stats shape from #1
     # Ducks apply_snapshot has already refused to re-brain, so the reason is
     # said once instead of at every snapshot. Cleared when a new job starts.
@@ -3299,6 +3308,58 @@ def make_app(ducks: list[Duck]):
             return {"configured": False}
         return {"configured": True, "username": d.get("username", ""),
                 "masked": _hf_mask(d["token"])}
+
+    @app.get("/cloud/hf/account")
+    def hf_account() -> dict:
+        return hf_jobs.account_status(load_hf_token())
+
+    @app.get("/cloud/hf/jobs")
+    def hf_list_jobs() -> dict:
+        return {"jobs": hf_cloud.refresh(load_hf_token())}
+
+    @app.post("/cloud/hf/jobs")
+    def hf_start_job(req: HfStartReq, request: Request) -> dict:
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(403, "Origin not allowed")
+        try:
+            return hf_cloud.start(load_hf_token(), req.task, req.flavor,
+                                  req.iterations, req.envs)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, f"Hugging Face job request failed: {exc}") from exc
+
+    @app.post("/cloud/hf/jobs/{job_id}/stop")
+    def hf_stop_job(job_id: str, request: Request) -> dict:
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(403, "Origin not allowed")
+        try:
+            return hf_cloud.stop(load_hf_token(), job_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown Hugging Face job") from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.post("/cloud/hf/stop-all")
+    def hf_stop_all(request: Request) -> dict:
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(403, "Origin not allowed")
+        try:
+            return {"stopped": hf_cloud.stop_all(load_hf_token())}
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.get("/cloud/hf/jobs/{job_id}/policy.onnx")
+    def hf_download_policy(job_id: str) -> FileResponse:
+        if not re.fullmatch(r"[0-9a-f]{12}", job_id):
+            raise HTTPException(404, "Unknown Hugging Face job")
+        policy = hf_cloud.runs / job_id / "policy.onnx"
+        if not policy.is_file():
+            raise HTTPException(404, "ONNX export is not ready")
+        return FileResponse(policy, media_type="application/octet-stream",
+                            filename=f"microduck-{job_id}.onnx")
 
     @app.get("/cloud/colab/account")
     def colab_account() -> dict:

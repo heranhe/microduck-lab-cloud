@@ -78,6 +78,14 @@ export function useTeachHeight(): number {
   );
 }
 
+/** Ask the existing teaching panel to open without duplicating its state or
+ * training logic in the top action bar. A counter preserves repeated clicks. */
+export function requestTeachOpen() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("microduck:open-teach"));
+  }
+}
+
 // Floating duck name labels on/off. Toggled from the HUD (which owns the
 // localStorage persistence); read PER-FRAME by every Duck inside the Canvas
 // (assign.ts philosophy) — a useSyncExternalStore subscription inside the

@@ -12,16 +12,16 @@ This repository builds on [Jonathan Hawkins' original Microduck Lab](https://git
 
 | Area | This fork's addition |
 |---|---|
-| Google Colab GPU | A `/cloud` page uses the official Colab CLI with each user's own Google account. It checks the compute-unit balance before starting an allowlisted `microduck_rl` task, shows job state, can stop one or all Microduck sessions, and downloads the final checkpoint and exported ONNX policy. The app does not collect Google passwords or OAuth tokens. |
+| Cloud GPU center | The lab's top-right cloud panel switches between Google Colab and Hugging Face Jobs. It checks account state before starting an allowlisted `microduck_rl` task, shows the allocated GPU, VRAM and elapsed time beside the robots, can stop one or all Microduck sessions, and downloads the exported ONNX policy. The app does not collect Google passwords or OAuth tokens. |
 | Browser language | Chinese is the default. A Chinese/English switch persists across pages and browser visits. Navigation, the cloud workflow, training charts, and primary simulation controls are translated. Some advanced panels and server-provided text still appear in English. |
 | Colab notebook | `notebooks/microduck_train.ipynb` provides a browser-based Colab route, including for Windows users. |
 | Documentation | `README.md` is the default Chinese landing page; this file keeps the full English project guide. |
 
-**Verification status (2026-09-24):** Google Drive backup, interrupted-job resume, 30-second live ONNX preview, and a guaranteed 12–24-hour runtime are not implemented. Colab controls GPU availability and session lifetime. A live GPU training run was not verified because the account used for testing reported 0.00 compute units; the local build and automated tests passed.
+**Verification status (2026-09-25):** Google Drive backup, interrupted-job resume, 30-second live ONNX preview, and a guaranteed 12–24-hour runtime are not implemented. The providers control GPU availability and session lifetime. A paid live GPU training run was not started during automated verification; the local UI, API contract and cancellation logic passed.
 
 ## Google Colab GPU (optional)
 
-The `/cloud` page runs the official `microduck_rl` trainer on a Colab GPU under
+The lab's **☁ Cloud** panel runs the official `microduck_rl` trainer on a Colab GPU under
 **your own Google account**. Local training and the viewer work without Google.
 On macOS or Linux, `cd microduck_local && uv sync` installs the Colab CLI.
 Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
@@ -30,8 +30,9 @@ Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
    follow the CLI's Google authorization link and verify the actual balance.
    Credentials stay in the CLI's local store; the lab never accepts a Google
    password or token.
-2. Start `duck-lab` and the viewer as described below, then open `/cloud`.
-3. Choose a task and GPU. Once a job starts, a pinned top bar shows elapsed
+2. Start `duck-lab` and the viewer as described below, then open **☁ Cloud**
+   beside the policies button. Old `/cloud` bookmarks redirect to this panel.
+3. Choose a task and GPU. Once a job starts, the lab toolbar shows elapsed
    time beside a one-click control that disconnects this lab's Colab sessions.
    The timer starts when GPU allocation succeeds; it is not Google's
    billable time. The job list has individual disconnect controls and an ONNX
@@ -653,12 +654,9 @@ newest `live.onnx` snapshot, so you can pull a brain mid-run. On a staged
 trick, the chain's ⤓ gives you the **final** stage: every stage fine-tunes the
 same network, so the last one is the whole trick.
 
-**🤗 Connect Hugging Face (BYOK).** The ⚙ button in the duck-lab HUD opens
-settings, where you paste your own Hugging Face access token. Create one with
-write access at
+**🤗 Connect Hugging Face (BYOK).** Open **☁ Cloud**, switch to Hugging Face,
+and paste a fine-grained token with Jobs and model write access. Create one at
 [hf.co/settings/tokens](https://huggingface.co/settings/tokens).
-
-![The ⚙ settings pane: bring your own Hugging Face key](docs/media/settings.png)
 
 Bring your own key: your account, your billing, and the token never goes
 anywhere but huggingface.co. It gets validated with `whoami()` before anything
@@ -667,9 +665,11 @@ is written, so a bad paste is rejected rather than stored. It lands in
 sees it again: `GET /settings/hf` returns only your username and a mask like
 `hf_abcd…wxyz`. **disconnect** deletes the file.
 
-That key is for the one step a laptop can't do, retraining a behavior you
-prototyped here on real GPUs under your own account. Storing and validating the
-token is what ships today. The HF Jobs launcher isn't wired up yet.
+The same panel reads the GPU catalogue, VRAM and price from Hugging Face,
+launches the official training stack as an HF Job, and exposes its status,
+elapsed time and cancellation control beside the Colab jobs. Results are
+uploaded to a private `microduck-cloud-results` model repository in your
+account, then downloaded by the local lab for the ONNX link.
 
 ## Sim2real, honestly
 

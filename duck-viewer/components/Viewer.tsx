@@ -39,6 +39,7 @@ import { TeachPanel } from "./TeachPanel";
 import { pushToast, Toasts } from "./Toasts";
 import { AnimPanel } from "./AnimPanel";
 import { RecordPanel } from "./RecordPanel";
+import { CloudPanel } from "./CloudPanel";
 import { CaptureCanvas, Snapshotter } from "./Capture";
 import { PoseDuck } from "./PoseDuck";
 
@@ -638,6 +639,7 @@ export default function Viewer() {
       <Hud clientRef={clientRef} connected={connected} error={error} />
       <RecordPanel clientRef={clientRef} />
       <PolicyPanel clientRef={clientRef} />
+      <CloudPanel />
       <TeachPanel clientRef={clientRef} />
       <AnimPanel />
       <Toasts clientRef={clientRef} />
