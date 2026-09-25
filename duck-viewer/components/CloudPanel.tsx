@@ -2,14 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings } from "@/lib/lab";
+import type { CloudAccount as Account, CloudHardware as Hardware, HfCloudAccount as HfAccount, CloudProvider as Provider } from "@/lib/cloudCompute";
 import { useI18n, type Locale } from "@/lib/i18n";
-import { requestTeachOpen } from "@/lib/ui";
+import { requestCloudOpen, requestTeachOpen } from "@/lib/ui";
 import styles from "./CloudPanel.module.css";
 
-type Provider = "colab" | "hf";
-type Account = { installed?: boolean; connected: boolean; balance?: number | null; rate?: number | null; username?: string; message?: string };
-type Hardware = { id: string; label: string; gpu: string; quantity: string; vram: string; cost: number; unit: string };
-type HfAccount = Account & { hardware: Hardware[] };
 type Job = {
   id: string; platform: Provider; task: string; gpu: string; device?: string; vram?: string;
   flavor?: string; state: string; remote_state?: string; started?: number; allocated_at?: number | null;
@@ -17,12 +14,6 @@ type Job = {
 };
 
 const ACTIVE = new Set(["allocating", "starting", "running", "finalizing", "detached", "stopping"]);
-const COLAB_GPUS = ["T4", "L4", "A100", "H100"];
-const TASKS = [
-  ["Mjlab-Velocity-Flat-MicroDuck", "行走 · Velocity Flat"],
-  ["Mjlab-VelStand-Flat-MicroDuck", "站立 · VelStand Flat"],
-];
-
 function needsRelease(job: Job) { return ACTIVE.has(job.state) || job.released === false; }
 function clock(start: number | null | undefined, now: number) {
   if (!start) return "00:00:00";
@@ -63,11 +54,6 @@ export function CloudPanel() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const [token, setToken] = useState("");
-  const [gpu, setGpu] = useState("T4");
-  const [flavor, setFlavor] = useState("l4x1");
-  const [task, setTask] = useState(TASKS[0][0]);
-  const [iterations, setIterations] = useState(1000);
-  const [envs, setEnvs] = useState(64);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -83,9 +69,8 @@ export function CloudPanel() {
         ...(cj.jobs ?? []).map((j: Job) => ({ ...j, platform:"colab" as const })),
         ...(hj.jobs ?? []).map((j: Job) => ({ ...j, platform:"hf" as const })),
       ]);
-      if (ha.hardware?.length && !ha.hardware.some((h: Hardware) => h.id === flavor)) setFlavor(ha.hardware[0].id);
     } catch (e) { setError(errorText(e, locale)); }
-  }, [flavor, locale]);
+  }, [locale]);
 
   useEffect(() => {
     const first = window.setTimeout(() => void refresh(), 0);
@@ -94,23 +79,24 @@ export function CloudPanel() {
     return () => { clearTimeout(first); clearInterval(poll); clearInterval(tick); };
   }, [refresh]);
 
+  useEffect(() => {
+    const openPanel = () => setOpen(true);
+    const closePanel = () => setOpen(false);
+    const refreshPanel = () => void refresh();
+    window.addEventListener("microduck:open-cloud", openPanel);
+    window.addEventListener("microduck:close-cloud", closePanel);
+    window.addEventListener("microduck:cloud-refresh", refreshPanel);
+    return () => {
+      window.removeEventListener("microduck:open-cloud", openPanel);
+      window.removeEventListener("microduck:close-cloud", closePanel);
+      window.removeEventListener("microduck:cloud-refresh", refreshPanel);
+    };
+  }, [refresh]);
+
   const active = useMemo(() => jobs.filter(needsRelease), [jobs]);
   const primary = active.find((j) => j.allocated_at) ?? active[0];
   const elapsed = clock(primary?.allocated_at, now);
   const device = primary ? `${primary.platform === "hf" ? "HF" : "Colab"} · ${primary.device ?? primary.gpu}${primary.vram ? ` · ${primary.vram}` : ""}` : tr("Cloud GPU off", "云算力未开启");
-
-  const start = async () => {
-    setBusy("start"); setError(""); setNotice("");
-    try {
-      const body = provider === "colab" ? { task, gpu, iterations, envs } : { task, flavor, iterations, envs };
-      await jsonRequest(`/cloud/${provider === "hf" ? "hf" : "colab"}/jobs`, {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(body),
-      });
-      setNotice(tr("Training request sent. Billing starts when the provider allocates the GPU.", "训练请求已提交；平台分配 GPU 后开始计时和计费。"));
-      await refresh();
-    } catch (e) { setError(errorText(e, locale)); }
-    finally { setBusy(""); }
-  };
 
   const disconnectAll = async () => {
     setBusy("disconnect"); setError(""); setNotice("");
@@ -148,13 +134,11 @@ export function CloudPanel() {
 
   const account = provider === "colab" ? colab : hf;
   const providerJobs = jobs.filter((j) => j.platform === provider).sort((a,b) => (b.started ?? 0) - (a.started ?? 0));
-  const canStart = account.connected && busy !== "start" &&
-    (provider === "colab" ? typeof colab.balance === "number" && colab.balance > 0 : hf.hardware.length > 0);
 
   return <>
     <div className={styles.toolbar} data-policy-ui>
       <button className={styles.trainButton} onClick={requestTeachOpen}>▶ {tr("Train", "开始训练")}</button>
-      <button className={styles.toolButton} onClick={() => setOpen((v) => !v)}>☁ {tr("Cloud", "云算力")}</button>
+      <button className={styles.toolButton} onClick={() => open ? setOpen(false) : requestCloudOpen()}>☁ {tr("Cloud", "云算力")}</button>
     </div>
     <div className={`${styles.statusBar} ${active.length ? styles.statusBarActive : ""}`} data-policy-ui>
       <span className={styles.dot}/><span>{device}</span><span className={styles.timer}>{elapsed}</span>
@@ -185,15 +169,18 @@ export function CloudPanel() {
           <div className={styles.help}>{tr("Use a fine-grained token with Jobs and model write access.", "请使用具有 Jobs 和模型写入权限的细粒度 Token。")} <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">{tr("Create token", "创建 Token")}</a></div>
         </>}
         {provider === "colab" && !colab.connected && <div className={styles.help}>{tr("Run `uv run colab usage` once in Terminal to authorize your Google account.", "请先在终端运行 `uv run colab usage`，通过 Google 官方流程完成授权。")}</div>}
-
-        <div className={styles.formTitle}>{tr("New GPU training job", "新建 GPU 训练任务")}</div>
-        <div className={styles.grid}>
-          <label className={`${styles.field} ${styles.fieldWide}`}>{tr("Training task", "训练任务")}<select className={styles.select} value={task} onChange={(e) => setTask(e.target.value)}>{TASKS.map(([id,zh]) => <option key={id} value={id}>{locale === "zh" ? zh : id}</option>)}</select></label>
-          {provider === "colab" ? <label className={`${styles.field} ${styles.fieldWide}`}>GPU<select className={styles.select} value={gpu} onChange={(e) => setGpu(e.target.value)}>{COLAB_GPUS.map((v) => <option key={v}>{v}</option>)}</select></label> : <label className={`${styles.field} ${styles.fieldWide}`}>{tr("Hardware", "算力卡")}<select className={styles.select} value={flavor} onChange={(e) => setFlavor(e.target.value)}>{hf.hardware.map((h) => <option key={h.id} value={h.id}>{h.label} · {h.vram} · ${h.cost}/{h.unit}</option>)}</select></label>}
-          <label className={styles.field}>{tr("Iterations", "迭代次数")}<input className={styles.input} type="number" min={1} max={100000} value={iterations} onChange={(e) => setIterations(Number(e.target.value))}/></label>
-          <label className={styles.field}>{tr("Parallel envs", "并行环境")}<input className={styles.input} type="number" min={1} max={4096} value={envs} onChange={(e) => setEnvs(Number(e.target.value))}/></label>
+        <div className={styles.managerNote}>
+          <strong>{tr("Training starts in the teaching panel.", "训练统一从教学面板开始。")}</strong>
+          <span>{tr("Choose an action first, then select Local, Colab, or Hugging Face beside the Start button.", "先选择动作，再在“开始训练”按钮旁选择本地、Colab 或 Hugging Face。")}</span>
+          <button className={styles.smallButton} onClick={() => { setOpen(false); requestTeachOpen(); }}>▶ {tr("Choose action and train", "选择动作并训练")}</button>
         </div>
-        <button className={styles.start} disabled={!canStart} onClick={start}>{busy === "start" ? tr("Submitting training…", "正在提交训练…") : tr(`▶ Start training on ${provider === "hf" ? "Hugging Face" : "Colab"}`, `▶ 在 ${provider === "hf" ? "Hugging Face" : "Colab"} 开始训练`)}</button>
+
+        {provider === "hf" && hf.hardware.length > 0 && <div className={styles.resources}>
+          <div className={styles.formTitle}>{tr("Available hardware", "可用算力卡")}</div>
+          {hf.hardware.slice(0, 5).map((h: Hardware) => <div className={styles.resource} key={h.id}>
+            <span>{h.label}</span><span>{h.vram} · ${h.cost}/{h.unit}</span>
+          </div>)}
+        </div>}
         {notice && <div className={styles.notice}>{notice}</div>}{error && <div className={styles.error}>{error}</div>}
 
         <div className={styles.jobs}>

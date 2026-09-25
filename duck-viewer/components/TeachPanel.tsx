@@ -33,12 +33,24 @@ import { fetchRobots, type RobotInfo } from "@/lib/anim";
 import { trickNoun } from "@/lib/robots";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
+import {
+  cloudTaskFor,
+  type CloudAccount,
+  type ComputeSource,
+  type HfCloudAccount,
+} from "@/lib/cloudCompute";
 import { bestRunFor } from "@/lib/tricks";
 import { useSelectedDuck } from "@/lib/select";
-import { modalIsOpen, setTeachHeight, usePolicyOpen } from "@/lib/ui";
+import { modalIsOpen, requestCloudOpen, setTeachHeight, usePolicyOpen } from "@/lib/ui";
 import { pushToast } from "./Toasts";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
+const computeInputStyle: React.CSSProperties = {
+  display: "block", width: "100%", minWidth: 0, boxSizing: "border-box",
+  marginTop: 3, border: "1px solid rgba(255,255,255,0.12)", borderRadius: 5,
+  background: "#0d1117", color: "#dfe5ee", outline: "none", padding: "5px 6px",
+  fontFamily: mono, fontSize: 10,
+};
 
 // Terms arrive in recipe order, which interleaves the ones that pay points
 // with the ones that charge — a green/red zebra you have to re-read row by
@@ -80,6 +92,16 @@ function greetingFor(r: { noun?: string; title?: string; kind?: string }): strin
   return `Ask me to teach ${robotPhrase(r)} a ${trickNoun(r.kind)} — try one of the suggestions below.`;
 }
 const MSG_CAP = 50;
+const COLAB_GPUS = ["T4", "L4", "A100", "H100"];
+
+async function cloudRequest(path: string, init?: RequestInit) {
+  const response = await fetch(`${LAB_HTTP}${path}`, { cache: "no-store", ...init });
+  if (!response.ok) {
+    const detail = await response.json().then((v) => v.detail).catch(() => `HTTP ${response.status}`);
+    throw new Error(detail);
+  }
+  return response.json();
+}
 
 // What a lab too old to send per-robot suggestions (GET /robots `teach`)
 // still gets: the duck, with the chips this panel always offered.
@@ -1151,7 +1173,7 @@ export function TeachPanel({
 }: {
   clientRef: React.MutableRefObject<LabClient | null>;
 }) {
-  const { tr } = useI18n();
+  const { tr, locale } = useI18n();
   // Collapsed by default, like the PolicyPanel above it — persisted after
   // the first open.
   const [open, setOpen] = useState(() => loadJSON("teachOpen", false));
@@ -1162,6 +1184,15 @@ export function TeachPanel({
     return Array.isArray(stored) && stored.length ? stored.slice(-MSG_CAP) : [GREETING];
   });
   const [input, setInput] = useState("");
+  const [compute, setCompute] = useState<ComputeSource>(() => loadJSON("teachCompute", "local"));
+  const [colabAccount, setColabAccount] = useState<CloudAccount>({ connected: false });
+  const [hfAccount, setHfAccount] = useState<HfCloudAccount>({ connected: false, hardware: [] });
+  const [colabGpu, setColabGpu] = useState("T4");
+  const [hfFlavor, setHfFlavor] = useState("l4x1");
+  const [cloudIterations, setCloudIterations] = useState(1000);
+  const [cloudEnvs, setCloudEnvs] = useState(64);
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudError, setCloudError] = useState("");
   // WHICH BODY the next trick is for. Everything robot-specific below — the
   // greeting, the chips, the placeholder — is read off the lab's /robots, so
   // a third robot shows up here by registering recipes, not by editing this.
@@ -1174,6 +1205,14 @@ export function TeachPanel({
   const robot = resolveRobot(robots, activeRobot) ?? DUCK_ONLY[0];
   const noun = robot.noun ?? robot.title;
   const suggestions = robot.teach ?? [];
+  const selectedSuggestion = suggestions.find(
+    (s) => s.text.trim().toLocaleLowerCase() === input.trim().toLocaleLowerCase()
+  );
+  // Old servers returned the built-in text without behavior ids. Preserve the
+  // one exact, equivalent mapping instead of making all cloud options vanish.
+  const selectedBehavior = selectedSuggestion?.behavior ||
+    (input.trim().toLocaleLowerCase() === "stand still" ? "stand" : undefined);
+  const cloudTask = cloudTaskFor(robot.id, selectedBehavior);
   // Our runs, for the ▶ beside a trick that already has a MEASURED best run —
   // so watching what a trick looks like never means digging through 🧠.
   const [policies, setPolicies] = useState<Policy[]>([]);
@@ -1206,10 +1245,16 @@ export function TeachPanel({
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => saveJSON("teachOpen", open), [open]);
+  useEffect(() => saveJSON("teachCompute", compute), [compute]);
   useEffect(() => {
     const openPanel = () => setOpen(true);
+    const closePanel = () => setOpen(false);
     window.addEventListener("microduck:open-teach", openPanel);
-    return () => window.removeEventListener("microduck:open-teach", openPanel);
+    window.addEventListener("microduck:close-teach", closePanel);
+    return () => {
+      window.removeEventListener("microduck:open-teach", openPanel);
+      window.removeEventListener("microduck:close-teach", closePanel);
+    };
   }, []);
   useEffect(() => {
     if (!open) return;
@@ -1225,6 +1270,33 @@ export function TeachPanel({
       stale = true;
     };
   }, [open]);
+
+  const refreshCompute = useCallback(async () => {
+    try {
+      const [colab, hf] = await Promise.all([
+        cloudRequest("/cloud/colab/account"),
+        cloudRequest("/cloud/hf/account"),
+      ]);
+      setColabAccount(colab);
+      setHfAccount(hf);
+      if (hf.hardware?.length && !hf.hardware.some((h: { id: string }) => h.id === hfFlavor)) {
+        setHfFlavor(hf.hardware[0].id);
+      }
+      setCloudError("");
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      setCloudError(locale === "zh" && (raw.includes("Failed to fetch") || raw.includes("Lab unavailable"))
+        ? "无法连接本地 duck-lab。"
+        : raw);
+    }
+  }, [hfFlavor, locale]);
+
+  useEffect(() => {
+    if (!open) return;
+    const first = window.setTimeout(() => void refreshCompute(), 0);
+    const poll = window.setInterval(() => void refreshCompute(), 15000);
+    return () => { clearTimeout(first); clearInterval(poll); };
+  }, [open, refreshCompute]);
   // Refetched when a run finishes too: that is when a new best can appear.
   const trainingStatus = training?.status;
   useEffect(() => {
@@ -1400,6 +1472,53 @@ export function TeachPanel({
     await postTeach({ text: trimmed, ...(robots !== DUCK_ONLY ? { robot: robot.id } : {}) });
   }
 
+  async function launchSelectedTraining() {
+    const trimmed = input.trim();
+    if (!trimmed || cloudBusy) return;
+    if (compute === "local") {
+      await submit(trimmed);
+      return;
+    }
+    if (!cloudTask) {
+      setCloudError(tr(
+        "This action has no equivalent official cloud task yet. Use local training or choose Stand still.",
+        "这个动作暂时没有等价的官方云端任务，请使用本地训练或选择“保持站立”。"
+      ));
+      return;
+    }
+
+    setCloudBusy(true);
+    setCloudError("");
+    try {
+      const body = compute === "colab"
+        ? { task: cloudTask, gpu: colabGpu, iterations: cloudIterations, envs: cloudEnvs }
+        : { task: cloudTask, flavor: hfFlavor, iterations: cloudIterations, envs: cloudEnvs };
+      await cloudRequest(`/cloud/${compute}/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      setInput("");
+      setMsgs((m) => [
+        ...m,
+        { kind: "user", text: trimmed },
+        {
+          kind: "note",
+          text: tr(
+            `☁ Training was sent to ${compute === "colab" ? "Google Colab" : "Hugging Face"}. Follow elapsed time and disconnect from the top cloud status bar.`,
+            `☁ 训练已提交到 ${compute === "colab" ? "Google Colab" : "Hugging Face"}。可在顶部云算力状态栏查看时长并一键断开。`
+          ),
+        },
+      ]);
+      window.dispatchEvent(new CustomEvent("microduck:cloud-refresh"));
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      setCloudError(raw);
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
   /** Recipe buttons: resubmit the current behavior under its full effective
    *  recipe (the run's own weights with the moved sliders and added terms
    *  folded in — see RecipeEditor), fresh (retrain) or warm-started from the
@@ -1513,6 +1632,18 @@ export function TeachPanel({
   const planTotal = training ? plan.reduce((s, v) => s + v, 0) : (budgetSteps ?? 0);
   const budgetShown = budgetSteps ?? training?.chosenBudget ?? null;
   const offRecipe = training != null && (planTotal !== declaredTotal || Object.keys(pins).length > 0);
+  const cloudAccountReady = compute === "colab"
+    ? colabAccount.connected && typeof colabAccount.balance === "number" && colabAccount.balance > 0
+    : compute === "hf"
+      ? hfAccount.connected && hfAccount.hardware.length > 0 && !!hfFlavor
+      : true;
+  const canLaunch = !!input.trim() && !cloudBusy &&
+    (compute === "local" || (!!cloudTask && cloudAccountReady));
+  const startLabel = compute === "local"
+    ? tr("▶ Start local training", "▶ 开始本地训练")
+    : compute === "colab"
+      ? tr("▶ Start on Colab", "▶ 使用 Colab 开始训练")
+      : tr("▶ Start on Hugging Face", "▶ 使用 Hugging Face 开始训练");
   const resetToRecipe = () => {
     setBudgetSteps(declaredTotal);
     const cleared: Record<number, number | null> = {};
@@ -1761,6 +1892,9 @@ export function TeachPanel({
             })}
           </div>
         )}
+        <div style={{ color: "#8b93a3", fontSize: 10, marginBottom: 4 }}>
+          {tr("1. choose an action", "1. 选择训练动作")}
+        </div>
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
           {suggestions.map(({ text: s, title, emoji, behavior }) => {
             const best = bestRunFor(policies, behavior, robot.id);
@@ -1923,10 +2057,112 @@ export function TeachPanel({
             </div>
           )}
         </div>
+        <div
+          style={{
+            margin: "7px 0 8px", padding: 8, borderRadius: 8,
+            border: "1px solid rgba(255,255,255,0.09)", background: "rgba(10,13,18,0.58)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}>
+            <span style={{ color: "#8b93a3", fontSize: 10, flex: 1 }}>
+              {tr("2. choose training compute", "2. 选择训练算力")}
+            </span>
+            {compute !== "local" && (
+              <button
+                type="button"
+                onClick={requestCloudOpen}
+                style={{ border: 0, background: "none", color: "#7db8d8", padding: 0, cursor: "pointer", font: `10px ${mono}` }}
+              >
+                {tr("manage account ↗", "管理账号 ↗")}
+              </button>
+            )}
+          </div>
+          <div role="radiogroup" aria-label={tr("training compute", "训练算力")} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5 }}>
+            {([
+              ["local", tr("This Mac", "本机")],
+              ["colab", "Google Colab"],
+              ["hf", "Hugging Face"],
+            ] as [ComputeSource, string][]).map(([source, label]) => {
+              const on = compute === source;
+              return (
+                <button
+                  key={source}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => { setCompute(source); setCloudError(""); }}
+                  style={{
+                    minWidth: 0, borderRadius: 6, padding: "6px 4px",
+                    border: `1px solid ${on ? (source === "local" ? "#8794a8" : "#70b8d8") : "rgba(255,255,255,0.09)"}`,
+                    background: on ? (source === "local" ? "#242a34" : "#182c39") : "#151a22",
+                    color: on ? "#eef3f5" : "#778291", cursor: "pointer", font: `10px ${mono}`,
+                  }}
+                >
+                  {source === "local" ? "◉ " : source === "colab" ? "☁ " : "🤗 "}{label}
+                </button>
+              );
+            })}
+          </div>
+
+          {compute === "local" ? (
+            <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
+              {tr("Uses the selected local recipe and this computer's CPU.", "使用当前动作的本地训练配方和本机 CPU。")}
+            </div>
+          ) : !input.trim() ? (
+            <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
+              {tr("Choose an action above before starting cloud training.", "请先在上方选择一个动作，再启动云端训练。")}
+            </div>
+          ) : !cloudTask ? (
+            <div style={{ color: "#d8b46f", fontSize: 10, marginTop: 6 }}>
+              {tr(
+                "This action uses a local-only recipe. The official cloud stack has no equivalent task yet.",
+                "该动作目前使用本地专属配方，官方云端训练栈尚无等价任务。"
+              )}
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "1.35fr .8fr .8fr", gap: 5, marginTop: 7 }}>
+                <label style={{ color: "#7f8997", fontSize: 9 }}>
+                  {tr("GPU", "算力卡")}
+                  {compute === "colab" ? (
+                    <select value={colabGpu} onChange={(e) => setColabGpu(e.target.value)} style={computeInputStyle}>
+                      {COLAB_GPUS.map((gpu) => <option key={gpu}>{gpu}</option>)}
+                    </select>
+                  ) : (
+                    <select value={hfFlavor} onChange={(e) => setHfFlavor(e.target.value)} style={computeInputStyle}>
+                      {hfAccount.hardware.map((h) => <option key={h.id} value={h.id}>{h.label} · {h.vram}</option>)}
+                    </select>
+                  )}
+                </label>
+                <label style={{ color: "#7f8997", fontSize: 9 }}>
+                  {tr("iterations", "迭代")}
+                  <input type="number" min={1} max={100000} value={cloudIterations} onChange={(e) => setCloudIterations(Number(e.target.value))} style={computeInputStyle}/>
+                </label>
+                <label style={{ color: "#7f8997", fontSize: 9 }}>
+                  {tr("envs", "环境数")}
+                  <input type="number" min={1} max={4096} value={cloudEnvs} onChange={(e) => setCloudEnvs(Number(e.target.value))} style={computeInputStyle}/>
+                </label>
+              </div>
+              {!cloudAccountReady && (
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6, color: "#d8b46f", fontSize: 10 }}>
+                  <span style={{ flex: 1 }}>
+                    {compute === "colab"
+                      ? tr("Colab is not connected or has no available CCU.", "Colab 未连接或没有可用算力余额。")
+                      : tr("Hugging Face is not connected or has no available hardware.", "Hugging Face 未连接或没有可用算力卡。")}
+                  </span>
+                  <button type="button" onClick={requestCloudOpen} style={{ border: 0, background: "none", color: "#7db8d8", cursor: "pointer", padding: 0, font: `10px ${mono}` }}>
+                    {tr("connect", "去连接")}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          {compute !== "local" && cloudError && <div style={{ color: "#ef957d", fontSize: 10, marginTop: 6 }}>{cloudError}</div>}
+        </div>
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            submit(input);
+            void launchSelectedTraining();
           }}
           style={{ display: "flex", gap: 6 }}
         >
@@ -1943,18 +2179,18 @@ export function TeachPanel({
           />
           <button
             type="submit"
-            disabled={!input.trim()}
+            disabled={!canLaunch}
             title={tr("review the choice, then start training", "确认所选动作后开始训练")}
             style={{
               border: "1px solid #d39a48", borderRadius: 6,
-              background: input.trim() ? "#694318" : "#25221d",
-              color: input.trim() ? "#ffe0a6" : "#68645d",
+              background: canLaunch ? "#694318" : "#25221d",
+              color: canLaunch ? "#ffe0a6" : "#68645d",
               padding: "6px 10px", fontFamily: mono, fontSize: 11,
-              fontWeight: 700, cursor: input.trim() ? "pointer" : "default",
+              fontWeight: 700, cursor: canLaunch ? "pointer" : "default",
               whiteSpace: "nowrap",
             }}
           >
-            ▶ {tr("start", "开始训练")}
+            {cloudBusy ? tr("Submitting…", "提交中…") : startLabel}
           </button>
         </form>
       </div>

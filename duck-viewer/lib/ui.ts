@@ -82,7 +82,16 @@ export function useTeachHeight(): number {
  * training logic in the top action bar. A counter preserves repeated clicks. */
 export function requestTeachOpen() {
   if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("microduck:close-cloud"));
     window.dispatchEvent(new CustomEvent("microduck:open-teach"));
+  }
+}
+
+/** Open the shared cloud account/job manager from a training prerequisite. */
+export function requestCloudOpen() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("microduck:close-teach"));
+    window.dispatchEvent(new CustomEvent("microduck:open-cloud"));
   }
 }
 

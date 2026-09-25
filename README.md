@@ -16,7 +16,7 @@
 
 | 功能 | 原作者项目基础 | 本项目的升级 |
 |---|---|---|
-| 云端 GPU | 保留本地 CPU 训练和原有 Hugging Face 相关入口 | 新增 `/cloud` 页面，使用官方 Colab CLI 调用用户自己账号下的 GPU；先检查 CCU 余额，再启动允许的 `microduck_rl` 任务 |
+| 云端 GPU | 保留本地 CPU 训练和原有 Hugging Face 相关入口 | 在原教学流程中增加本机、Colab、Hugging Face 算力选择；使用官方 Colab CLI 调用用户自己账号下的 GPU，并在提交前检查 CCU 余额与任务兼容性 |
 | 任务与模型 | 原有本地训练、可视化和 ONNX 工作流 | 云端任务状态、单任务停止、一键停止本项目的 Colab 会话；训练结束后下载 Checkpoint 和导出的 ONNX |
 | 登录方式 | 无需 Google 账号即可使用本地功能 | 仅使用 Colab 官方授权流程；本应用不接收 Google 密码或 OAuth 令牌。每位用户使用自己的账号和算力余额 |
 | 语言 | 原作者界面以英文为主 | 首次打开默认中文；可切换英文，选择会在浏览器保存，并在页面间同步。导航、云端流程、训练图表和主要模拟控制已有翻译 |
@@ -48,13 +48,13 @@ cd microduck-lab-cloud/duck-viewer
 npm run dev
 ```
 
-打开终端显示的本地地址。实验室右上角的「☁ 云算力」统一管理 Google Colab 和 Hugging Face Jobs；旁边的「▶ 开始训练」打开本地教学训练。实验室、本地训练和模拟页面**无需 Google 登录**。在界面顶部切换「中文 / EN」，再次访问时会保留选择。更完整的命令、性能测量和原作者功能说明见 [English guide](README_EN.md)。
+打开终端显示的本地地址。点击实验室右上角的「▶ 开始训练」，先在原教学面板选择动作，再选择本机、Google Colab 或 Hugging Face，最后用同一个按钮提交训练。「☁ 云算力」只负责账号、可用资源、任务状态和断开操作。实验室、本地训练和模拟页面**无需 Google 登录**。在界面顶部切换「中文 / EN」，再次访问时会保留选择。更完整的命令、性能测量和原作者功能说明见 [English guide](README_EN.md)。
 
 ## 使用 Google Colab GPU
 
 云端训练运行的是 Pollen Robotics 官方 [`microduck_rl`](https://github.com/pollen-robotics/microduck_rl) GPU 训练栈，而非把本地 CPU 训练代码直接搬到 Colab。Colab 的费用、GPU 供应和账号权益由 Google 管理；本项目只管理它启动的任务。
 
-💡 Google AI Pro 的 200 CCU 是**每月权益**，不是固定小时数。选择 A100 后，先查看 `/cloud` 页面显示的余额与当前扣费率，再决定训练规模；不需要 A100 时可以选较低规格的 GPU，把算力留给更多实验。
+💡 Google AI Pro 的 200 CCU 是**每月权益**，不是固定小时数。选择 A100 前，先查看右上角「☁ 云算力」显示的余额与当前扣费率，再决定训练规模；不需要 A100 时可以选较低规格的 GPU，把算力留给更多实验。
 
 1. 在 `microduck_local` 目录安装依赖并查看账号状态：
 
@@ -65,14 +65,14 @@ npm run dev
    ```
 
 2. 首次使用时，按官方 Colab CLI 给出的链接完成 Google 授权。确认命令显示的 **Current balance 大于 0**。授权凭据留在本机 CLI 中，不会提交到本仓库，也不会传给本应用。
-3. 启动 `duck-lab` 和前端，在实验室右上角打开「☁ 云算力」，选择 Colab、任务、GPU、迭代次数和并行环境数，再点击醒目的「开始训练」。旧的 `/cloud` 地址会自动回到这个面板。
+3. 启动 `duck-lab` 和前端，点击「▶ 开始训练」，在教学面板选择一个动作，再把训练算力切换为 Colab，选择 GPU、迭代次数和并行环境数后提交。当前只有能与官方 `microduck_rl` 任务准确对应的动作会开放云端提交；其他本地动作不会被静默替换成不同任务。旧的 `/cloud` 地址会自动回到云算力管理面板。
 4. GPU 分配成功后，实验室右上角常驻显示实际 GPU 名称、显存和已使用时长，并提供「一键断开」按钮。计时从分配成功时起计算，**不等于 Google 的实际计费时长**。任务列表也可单独断开任务；成功导出后下载 `policy.onnx`。正常关闭实验室时，服务端同样会尝试释放仍由本项目管理的会话。
 
 如果余额为 0，请先确认 Colab 网页和 CLI 使用的是**同一个享有权益的 Google 账号**。即便有余额，具体 GPU 型号也可能暂时不可用。Windows 用户可在 Colab 网页打开 [训练 Notebook](notebooks/microduck_train.ipynb)；它不依赖本地 Colab CLI。
 
 ## 使用 Hugging Face Jobs
 
-在「☁ 云算力」中切换到 Hugging Face，粘贴具有 Jobs 和模型写入权限的细粒度 Token。Token 仅保存在本机并以 Jobs Secret 传给训练容器；浏览器再次读取时只能看到掩码。面板会从 Hugging Face 实时读取可用 GPU、显存和价格，训练结果上传到账号下的私有 `microduck-cloud-results` 模型仓库，再由本地实验室提供 ONNX 下载。顶部计时和「一键断开」同样覆盖本项目创建的 HF Jobs。
+在「☁ 云算力」中切换到 Hugging Face，粘贴具有 Jobs 和模型写入权限的细粒度 Token。Token 仅保存在本机并以 Jobs Secret 传给训练容器；浏览器再次读取时只能看到掩码。面板会从 Hugging Face 实时读取可用 GPU、显存和价格。连接完成后回到「▶ 开始训练」，选择动作与 Hugging Face 算力卡后统一提交。训练结果上传到账号下的私有 `microduck-cloud-results` 模型仓库，再由本地实验室提供 ONNX 下载。顶部计时和「一键断开」同样覆盖本项目创建的 HF Jobs。
 
 ### 当前云端功能边界
 

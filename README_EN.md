@@ -12,7 +12,7 @@ This repository builds on [Jonathan Hawkins' original Microduck Lab](https://git
 
 | Area | This fork's addition |
 |---|---|
-| Cloud GPU center | The lab's top-right cloud panel switches between Google Colab and Hugging Face Jobs. It checks account state before starting an allowlisted `microduck_rl` task, shows the allocated GPU, VRAM and elapsed time beside the robots, can stop one or all Microduck sessions, and downloads the exported ONNX policy. The app does not collect Google passwords or OAuth tokens. |
+| Cloud GPU workflow | The original teaching panel now follows one path: choose an action, choose This Mac, Google Colab, or Hugging Face, then press one Start button. The top-right cloud panel manages accounts, hardware, job state, disconnects, and ONNX downloads. Compatibility is checked before an allowlisted `microduck_rl` task can start. The app does not collect Google passwords or OAuth tokens. |
 | Browser language | Chinese is the default. A Chinese/English switch persists across pages and browser visits. Navigation, the cloud workflow, training charts, and primary simulation controls are translated. Some advanced panels and server-provided text still appear in English. |
 | Colab notebook | `notebooks/microduck_train.ipynb` provides a browser-based Colab route, including for Windows users. |
 | Documentation | `README.md` is the default Chinese landing page; this file keeps the full English project guide. |
@@ -21,7 +21,7 @@ This repository builds on [Jonathan Hawkins' original Microduck Lab](https://git
 
 ## Google Colab GPU (optional)
 
-The lab's **☁ Cloud** panel runs the official `microduck_rl` trainer on a Colab GPU under
+The lab can run the official `microduck_rl` trainer on a Colab GPU under
 **your own Google account**. Local training and the viewer work without Google.
 On macOS or Linux, `cd microduck_local && uv sync` installs the Colab CLI.
 Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
@@ -30,9 +30,12 @@ Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
    follow the CLI's Google authorization link and verify the actual balance.
    Credentials stay in the CLI's local store; the lab never accepts a Google
    password or token.
-2. Start `duck-lab` and the viewer as described below, then open **☁ Cloud**
-   beside the policies button. Old `/cloud` bookmarks redirect to this panel.
-3. Choose a task and GPU. Once a job starts, the lab toolbar shows elapsed
+2. Start `duck-lab` and the viewer as described below. Use **☁ Cloud** to
+   verify the account and balance. Old `/cloud` bookmarks redirect to this panel.
+3. Open **▶ Train**, choose an action in the original teaching panel, select
+   Colab as its compute source, and choose a GPU before pressing the single
+   Start button. Cloud submission is enabled only for actions with an
+   equivalent official `microduck_rl` task. Once a job starts, the lab toolbar shows elapsed
    time beside a one-click control that disconnects this lab's Colab sessions.
    The timer starts when GPU allocation succeeds; it is not Google's
    billable time. The job list has individual disconnect controls and an ONNX
