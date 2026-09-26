@@ -158,9 +158,10 @@ import traceback
 import uuid
 from collections import deque
 from collections.abc import Sequence
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 
 import numpy as np
 import psutil
@@ -181,11 +182,9 @@ from pydantic import BaseModel
 # were invisible to this long-running server — the teach panel then showed a
 # stale scorecard missing new terms (bit the user twice: head_up, head_up_pull).
 from . import behaviors as behaviors_mod
-from . import colab_jobs
-from . import hf_jobs
+from . import colab_jobs, hf_jobs, run_record
 from . import contract as C
 from . import motion as motion_mod
-from . import run_record
 from .brain.learned import brains_dir
 from .lab import robots as lab_robots
 from .pose import (  # noqa: F401 — the private names are re-exports for tests
@@ -3115,6 +3114,27 @@ def make_app(ducks: list[Duck]):
     stats = StatsSampler()
     cloud = colab_jobs.ColabJobs()
     hf_cloud = hf_jobs.HfJobs()
+    training_lock = Lock()
+
+    @contextmanager
+    def submission_slot():
+        if not training_lock.acquire(blocking=False):
+            raise HTTPException(409, "A training request is already being submitted")
+        try:
+            yield
+        finally:
+            training_lock.release()
+
+    @contextmanager
+    def training_slot():
+        # Reserve before any provider network request. Browser state can be
+        # stale or two tabs can submit at once; only the server can arbitrate.
+        with submission_slot():
+            if ((st.job and st.job.status == "training") or
+                    any(job.get("released") is not True for job in cloud.list()) or
+                    any(job.get("released") is not True for job in list(hf_cloud.jobs.values()))):
+                raise HTTPException(409, "Stop the current training job and confirm cloud release first")
+            yield
     st.stats = stats.sample(None)  # frames carry the full stats shape from #1
     # Ducks apply_snapshot has already refused to re-brain, so the reason is
     # said once instead of at every snapshot. Cleared when a new job starts.
@@ -3139,13 +3159,27 @@ def make_app(ducks: list[Duck]):
                       "sent. Restart the lab.", flush=True)
 
         task.add_done_callback(_loop_died)
-        yield
-        task.cancel()
-        world.stop()
-        if st.job:
-            st.job.stop()
-        # A stopped lab must not leave a billable Colab session behind.
-        await asyncio.to_thread(cloud.stop_all)
+        try:
+            yield
+        finally:
+            task.cancel()
+            try:
+                world.stop()
+                if st.job:
+                    st.job.stop()
+            finally:
+                # Attempt BOTH providers even if one fails. Pending releases
+                # remain recorded so the next lab session can retry them.
+                results = await asyncio.gather(
+                    asyncio.to_thread(cloud.shutdown),
+                    asyncio.to_thread(hf_cloud.stop_all, load_hf_token()),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, BaseException):
+                        print(f"[lab] Cloud shutdown failed: {result}", flush=True)
+                    elif any(job.get("released") is not True for job in result):
+                        print("[lab] Cloud release still pending; verify in the provider console.", flush=True)
 
     app = FastAPI(title="Duck lab", lifespan=lifespan)
     app.state.lab = st  # the roster/job the handlers close over, for tests
@@ -3322,8 +3356,11 @@ def make_app(ducks: list[Duck]):
         if not origin_allowed(request.headers.get("origin")):
             raise HTTPException(403, "Origin not allowed")
         try:
-            return hf_cloud.start(load_hf_token(), req.task, req.flavor,
-                                  req.iterations, req.envs)
+            with training_slot():
+                return hf_cloud.start(load_hf_token(), req.task, req.flavor,
+                                      req.iterations, req.envs)
+        except HTTPException:
+            raise
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         except RuntimeError as exc:
@@ -3374,7 +3411,8 @@ def make_app(ducks: list[Duck]):
         if not origin_allowed(request.headers.get("origin")):
             raise HTTPException(403, "Origin not allowed")
         try:
-            return cloud.start(req.task, req.gpu, req.iterations, req.envs)
+            with training_slot():
+                return cloud.start(req.task, req.gpu, req.iterations, req.envs)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         except RuntimeError as exc:
@@ -3407,9 +3445,17 @@ def make_app(ducks: list[Duck]):
 
     @app.post("/settings/hf")
     def hf_settings_save(req: HfTokenReq) -> dict:
+        with submission_slot():
+            return save_hf_settings(req)
+
+    def save_hf_settings(req: HfTokenReq) -> dict:
         tok = req.token.strip()
         if not tok:
             raise HTTPException(422, "empty token")
+        existing = load_hf_token()
+        if (any(job.get("released") is not True for job in list(hf_cloud.jobs.values()))
+                and existing and existing["token"] != tok):
+            raise HTTPException(409, "Stop and confirm all Hugging Face jobs before replacing the token")
         # Validate BEFORE persisting: whoami() is the cheapest call that
         # proves the token is real, and its username is worth keeping.
         try:
@@ -3418,6 +3464,10 @@ def make_app(ducks: list[Duck]):
         except Exception as e:
             raise HTTPException(401, f"Hugging Face rejected that token: {e}")
         username = who.get("name", "") if isinstance(who, dict) else ""
+        if any(job.get("released") is not True and
+               job.get("repo_id", "").split("/")[0] != username
+               for job in list(hf_cloud.jobs.values())):
+            raise HTTPException(409, "Reconnect the Hugging Face account that owns the active jobs")
         # 0600 FROM CREATION, not write_text()+chmod: that left the token
         # world-readable under the default umask for the window between the
         # two calls — and permanently if the process died in between. The rest
@@ -3433,6 +3483,12 @@ def make_app(ducks: list[Duck]):
 
     @app.delete("/settings/hf")
     def hf_settings_delete() -> dict:
+        with submission_slot():
+            return delete_hf_settings()
+
+    def delete_hf_settings() -> dict:
+        if any(job.get("released") is not True for job in list(hf_cloud.jobs.values())):
+            raise HTTPException(409, "Stop and confirm all Hugging Face jobs before removing the token")
         HF_TOKEN_PATH.unlink(missing_ok=True)
         # Scratch files from interrupted saves hold the same secret. Two
         # shapes exist: the current "<name>.<pid>.<hex>.tmp" and the fixed
@@ -3714,6 +3770,10 @@ def make_app(ducks: list[Duck]):
             return {"matched": False,
                     "message": f"Already teaching “{st.job.display_title()}” — stop it first.",
                     "busy": True}
+        with training_slot():
+            return await start_local_training(req)
+
+    async def start_local_training(req: TeachReq) -> dict:
         # Pick up recipe edits without a server restart: the training
         # subprocess always imports behaviors.py fresh, so reloading here keeps
         # the card/sliders in step with what the run will actually train.

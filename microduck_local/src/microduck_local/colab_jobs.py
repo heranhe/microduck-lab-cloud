@@ -60,7 +60,7 @@ def _remote_runner(task: str, iterations: int, envs: int) -> str:
     """Create a self-contained Colab script; the official stack owns training."""
     return f'''import json, os, pathlib, shutil, subprocess, time, traceback
 root = pathlib.Path("/content/microduck-cloud-job")
-root.mkdir(exist_ok=True)
+root.mkdir(parents=True, exist_ok=True)
 status = root / "status.json"
 def mark(state, message=""):
     status.write_text(json.dumps({{"state": state, "message": message, "time": time.time()}}))
@@ -102,6 +102,7 @@ class ColabJobs:
     def __init__(self, runs: Path = RUNS):
         self.runs = runs
         self.jobs: dict[str, dict] = {}
+        self.workers: dict[str, threading.Thread] = {}
         self.lock = threading.Lock()
         for path in runs.glob("*/job.json"):
             try:
@@ -134,7 +135,9 @@ class ColabJobs:
         with self.lock:
             self.jobs[job_id] = job
         (directory / "job.json").write_text(json.dumps(job, indent=2))
-        threading.Thread(target=self._run, args=(job, directory, iterations, envs), daemon=True).start()
+        worker = threading.Thread(target=self._run, args=(job, directory, iterations, envs), daemon=True)
+        self.workers[job_id] = worker
+        worker.start()
         return dict(job)
 
     def _run(self, job: dict, directory: Path, iterations: int, envs: int) -> None:
@@ -144,6 +147,7 @@ class ColabJobs:
             if result.returncode:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip())
             job["allocated_at"] = time.time()
+            (directory / "job.json").write_text(json.dumps(job, indent=2))
             if job["state"] in {"stopping", "stopped"}:
                 return
             # Ask the allocated runtime instead of guessing from the requested
@@ -161,6 +165,8 @@ class ColabJobs:
                             job["vram"] = device.get("vram")
                         except json.JSONDecodeError:
                             pass
+            if job.get("cancel_requested"):
+                return
             job["state"] = "starting"
             runner = _remote_runner(job["task"], iterations, envs)
             # The kernel returns immediately; training runs in a separate process.
@@ -172,13 +178,17 @@ class ColabJobs:
             result = cli(["exec", "-s", session], code=bootstrap, timeout=60)
             if result.returncode:
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-            if job["state"] in {"stopping", "stopped"}:
+            if job.get("cancel_requested"):
                 return
             job["state"] = "running"
             while job["state"] == "running":
                 time.sleep(15)
+                if job.get("cancel_requested"):
+                    return
                 code = "import pathlib; p=pathlib.Path('/content/microduck-cloud-job/status.json'); print(p.read_text() if p.exists() else '{}')"
                 result = cli(["exec", "-s", session], code=code, timeout=30)
+                if job.get("cancel_requested"):
+                    return
                 if result.returncode:
                     continue
                 for line in result.stdout.splitlines():
@@ -194,8 +204,12 @@ class ColabJobs:
                                 job["state"] = "finalizing"
                 if job["state"] == "finalizing":
                     for name in ("policy.onnx", "checkpoint.pt", "train.log", "error.log"):
+                        if job.get("cancel_requested"):
+                            return
                         cli(["download", "-s", session,
                              f"/content/microduck-cloud-job/{name}", str(directory / name)], timeout=120)
+                    if job.get("cancel_requested"):
+                        return
                     policy = directory / "policy.onnx"
                     if job.get("remote_state") == "done" and policy.is_file() and policy.stat().st_size > 0:
                         job["state"] = "done"
@@ -203,11 +217,11 @@ class ColabJobs:
                         job["state"] = "failed"
                         job["message"] = job["message"] or "Training or ONNX export did not complete"
         except Exception as exc:
-            if job["state"] not in {"stopping", "stopped"}:
+            if not job.get("cancel_requested"):
                 job["state"] = "failed"
                 job["message"] = str(exc)
         finally:
-            if not job.get("released"):
+            if not job.get("released") or job.get("cancel_requested"):
                 try:
                     result = cli(["stop", "-s", session], timeout=60)
                     job["released"] = result.returncode == 0
@@ -217,7 +231,9 @@ class ColabJobs:
                 except Exception as exc:
                     job["released"] = False
                     job["message"] = f"{job['message']} · Release: {exc}" if job["message"] else str(exc)
-            if job["state"] == "stopping":
+            if job.get("released"):
+                job.setdefault("released_at", time.time())
+            if job.get("cancel_requested"):
                 job["state"] = "stopped"
             (directory / "job.json").write_text(json.dumps(job, indent=2))
 
@@ -227,6 +243,7 @@ class ColabJobs:
             raise KeyError(job_id)
         if job.get("released") is True:
             return dict(job)
+        job["cancel_requested"] = True
         if job["state"] in {"allocating", "stopping"}:
             # The allocation thread must finish `new` before it can release
             # the session. Keep the pending state visible to the UI.
@@ -237,6 +254,8 @@ class ColabJobs:
         try:
             result = cli(["stop", "-s", job["session"]], timeout=60)
             job["released"] = result.returncode == 0
+            if job["released"]:
+                job.setdefault("released_at", time.time())
             if not job["released"]:
                 job["message"] = result.stderr.strip() or result.stdout.strip()
         except Exception as exc:
@@ -246,10 +265,19 @@ class ColabJobs:
         return dict(job)
 
     def list(self) -> list[dict]:
-        return [dict(job) for job in self.jobs.values()]
+        with self.lock:
+            return [dict(job) for job in self.jobs.values()]
 
     def stop_all(self) -> list[dict]:
         """Release every session started by this lab, leaving other Colab work alone."""
         return [self.stop(job_id) for job_id, job in list(self.jobs.items())
                 if job["state"] in {"allocating", "starting", "running", "finalizing", "detached", "stopping"}
                 or job.get("released") is False]
+
+    def shutdown(self) -> list[dict]:
+        """Let in-flight allocation finish and release before daemon exit."""
+        self.stop_all()
+        deadline = time.monotonic() + 250
+        for worker in list(self.workers.values()):
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+        return self.list()

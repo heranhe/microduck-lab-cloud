@@ -26,6 +26,7 @@ def test_remote_runner_uses_official_cli_flags():
     script = colab_jobs._remote_runner("Mjlab-Velocity-Flat-MicroDuck", 10, 64)
     assert '"uv", "run", "train", "Mjlab-Velocity-Flat-MicroDuck"' in script
     assert '"--checkpoint-file"' in script
+    assert 'root.mkdir(parents=True, exist_ok=True)' in script
     compile(script, "remote_runner.py", "exec")
 
 
@@ -113,3 +114,51 @@ def test_stop_during_allocation_stays_pending_until_allocation_thread_releases(t
     assert current["state"] == "stopped" and current["released"]
     assert current["allocated_at"] >= current["started"]
     assert [call[0] for call in calls] == ["new", "stop"]
+
+
+def test_stop_during_gpu_probe_never_bootstraps_training(tmp_path, monkeypatch):
+    jobs = colab_jobs.ColabJobs(tmp_path)
+    job_id = "123456abcdef"
+    directory = tmp_path / job_id
+    directory.mkdir()
+    job = {"id": job_id, "session": "test-session", "state": "allocating",
+           "gpu": "T4", "task": "Mjlab-VelStand-Flat-MicroDuck",
+           "released": False, "message": ""}
+    jobs.jobs[job_id] = job
+    calls = []
+    def fake_cli(args, **kwargs):
+        calls.append(args[0])
+        if args[0] == "exec":
+            assert "get_device_properties" in kwargs["code"], "training restarted after cancellation"
+            jobs.stop(job_id)
+        return CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    jobs._run(job, directory, 10, 8)
+    assert calls == ["new", "exec", "stop"]
+    assert job["state"] == "stopped" and job["released"]
+
+
+def test_shutdown_waits_for_allocating_session_to_be_released(tmp_path, monkeypatch):
+    import threading
+
+    entered = threading.Event()
+    finish_new = threading.Event()
+    monkeypatch.setattr(colab_jobs, "account_status", lambda: {"connected": True, "balance": 200})
+    def fake_cli(args, **kwargs):
+        if args[0] == "new":
+            entered.set()
+            assert finish_new.wait(2)
+        return CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    jobs = colab_jobs.ColabJobs(tmp_path)
+    jobs.start("Mjlab-VelStand-Flat-MicroDuck", "T4", 10, 8)
+    assert entered.wait(2)
+    original = jobs.stop_all
+    def stop_all():
+        result = original()
+        finish_new.set()
+        return result
+    monkeypatch.setattr(jobs, "stop_all", stop_all)
+    result = jobs.shutdown()
+    assert result[0]["state"] == "stopped" and result[0]["released"]
+    assert not any(worker.is_alive() for worker in jobs.workers.values())

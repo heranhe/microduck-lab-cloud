@@ -1194,6 +1194,7 @@ export function TeachPanel({
   const [cloudIterations, setCloudIterations] = useState(1000);
   const [cloudEnvs, setCloudEnvs] = useState(64);
   const [cloudBusy, setCloudBusy] = useState(false);
+  const launchPending = useRef(false);
   const [cloudError, setCloudError] = useState("");
   const [activeCloudJobs, setActiveCloudJobs] = useState(0);
   // WHICH BODY the next trick is for. Everything robot-specific below — the
@@ -1288,7 +1289,7 @@ export function TeachPanel({
         setHfFlavor(hf.hardware[0].id);
       }
       setActiveCloudJobs([...(colabJobs.jobs ?? []), ...(hfJobs.jobs ?? [])]
-        .filter((job: { state: string; released?: boolean }) => ACTIVE_CLOUD_STATES.has(job.state) || job.released === false).length);
+        .filter((job: { state: string; released?: boolean }) => job.released !== true && (ACTIVE_CLOUD_STATES.has(job.state) || job.released === false)).length);
       setCloudError("");
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
@@ -1429,6 +1430,12 @@ export function TeachPanel({
     initFrom?: string;
     robot?: string;
   }) {
+    if (launchPending.current || activeCloudJobs > 0) {
+      setCloudError(tr("Stop the current training job first.", "请先停止当前训练任务。"));
+      return;
+    }
+    launchPending.current = true;
+    setCloudBusy(true);
     try {
       const res = await fetch(`${LAB_HTTP}/teach`, {
         method: "POST",
@@ -1439,6 +1446,7 @@ export function TeachPanel({
         }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `HTTP ${res.status}`);
       if (data.matched) {
         // The sparkline history is NOT cleared here: the poll loop resets it
         // when the new job's frames actually arrive — clearing early would
@@ -1469,8 +1477,11 @@ export function TeachPanel({
           })),
         ]);
       }
-    } catch {
-      setMsgs((m) => [...m, { kind: "note", text: "⚠ can't reach the lab server on :8788" }]);
+    } catch (error) {
+      setMsgs((m) => [...m, { kind: "note", text: `⚠ ${error instanceof Error ? error.message : String(error)}` }]);
+    } finally {
+      launchPending.current = false;
+      setCloudBusy(false);
     }
   }
 
@@ -1486,7 +1497,7 @@ export function TeachPanel({
 
   async function launchSelectedTraining() {
     const trimmed = input.trim();
-    if (!trimmed || cloudBusy) return;
+    if (!trimmed || cloudBusy || launchPending.current) return;
     if (training?.status === "training" || activeCloudJobs > 0) {
       setCloudError(tr(
         "A training job is already running. Stop it from the top status bar before starting another.",
@@ -1506,6 +1517,7 @@ export function TeachPanel({
       return;
     }
 
+    launchPending.current = true;
     setCloudBusy(true);
     setCloudError("");
     try {
@@ -1535,6 +1547,7 @@ export function TeachPanel({
       const raw = e instanceof Error ? e.message : String(e);
       setCloudError(raw);
     } finally {
+      launchPending.current = false;
       setCloudBusy(false);
     }
   }
@@ -1921,6 +1934,11 @@ export function TeachPanel({
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
           {suggestions.map(({ text: s, title, emoji, behavior }) => {
             const best = bestRunFor(policies, behavior, robot.id);
+            const chinese: Record<string, string> = {
+              "stand on one leg": "单脚站立", "stand still": "保持站立",
+              "crouch down": "下蹲", "spin in place": "原地转圈", "do a headstand": "头倒立",
+            };
+            const label = tr(s, chinese[s] ?? s);
             const chip: React.CSSProperties = {
               background: "#1c2230", color: "#9fb4d8",
               border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12,
@@ -1929,11 +1947,11 @@ export function TeachPanel({
             return (
               <span key={s} style={{ display: "inline-flex", alignItems: "stretch" }}>
                 <button
-                  title={`teach ${robotPhrase(robot)}: ${title}`}
+                  title={tr(`teach ${robotPhrase(robot)}: ${title}`, `训练动作：${label}`)}
                   onClick={() => setInput(s)}
                   style={best ? { ...chip, borderRadius: "12px 0 0 12px", borderRight: "none" } : chip}
                 >
-                  {emoji ? `${emoji} ${s}` : s}
+                  {emoji ? `${emoji} ${label}` : label}
                 </button>
                 {best && (
                   <Tip

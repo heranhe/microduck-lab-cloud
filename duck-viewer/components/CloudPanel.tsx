@@ -10,11 +10,11 @@ import styles from "./CloudPanel.module.css";
 type Job = {
   id: string; platform: Provider; task: string; gpu: string; device?: string; vram?: string;
   flavor?: string; state: string; remote_state?: string; started?: number; allocated_at?: number | null;
-  released?: boolean; message?: string; url?: string;
+  released?: boolean; released_at?: number; message?: string; url?: string;
 };
 
 const ACTIVE = new Set(["allocating", "starting", "running", "finalizing", "detached", "stopping"]);
-function needsRelease(job: Job) { return ACTIVE.has(job.state) || job.released === false; }
+function needsRelease(job: Job) { return job.released !== true && (ACTIVE.has(job.state) || job.released === false); }
 function clock(start: number | null | undefined, now: number) {
   if (!start) return "00:00:00";
   const s = Math.max(0, Math.floor(now / 1000 - start));
@@ -35,6 +35,7 @@ function errorText(value: unknown, locale: Locale) {
   if (raw.includes("Connect a Hugging Face")) return "请先连接 Hugging Face 账号。";
   if (raw.includes("Connect your Google")) return "请先在终端运行 colab usage 连接 Google 账号。";
   if (raw.includes("balance")) return "没有检测到可用的 Colab 算力余额。";
+  if (raw.includes("Stop and confirm all Hugging Face")) return "请先停止全部 Hugging Face 任务，确认云算力已释放后再修改 Token。";
   if (raw.includes("Failed to fetch") || raw.includes("Lab unavailable")) return "无法连接本地 duck-lab。";
   return raw;
 }
@@ -60,20 +61,26 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [refreshError, setRefreshError] = useState("");
   const [notice, setNotice] = useState("");
 
   const refresh = useCallback(async () => {
-    try {
-      const [ca, cj, ha, hj, hs] = await Promise.all([
-        jsonRequest("/cloud/colab/account"), jsonRequest("/cloud/colab/jobs"),
-        jsonRequest("/cloud/hf/account"), jsonRequest("/cloud/hf/jobs"), fetchHfSettings(),
+    // Publish each provider immediately: account lookup must never delay
+    // showing another provider's billable jobs and emergency stop control.
+    const updateJobs = (platform: Provider) => (data: { jobs?: Job[] }) =>
+      setJobs((previous) => [
+        ...previous.filter((job) => job.platform !== platform),
+        ...(data.jobs ?? []).map((job) => ({ ...job, platform })),
       ]);
-      setColab(ca); setHf(ha); setHfSettings(hs);
-      setJobs([
-        ...(cj.jobs ?? []).map((j: Job) => ({ ...j, platform:"colab" as const })),
-        ...(hj.jobs ?? []).map((j: Job) => ({ ...j, platform:"hf" as const })),
-      ]);
-    } catch (e) { setError(errorText(e, locale)); }
+    const results = await Promise.allSettled([
+      jsonRequest("/cloud/colab/account").then(setColab),
+      jsonRequest("/cloud/colab/jobs").then(updateJobs("colab")),
+      jsonRequest("/cloud/hf/account").then(setHf),
+      jsonRequest("/cloud/hf/jobs").then(updateJobs("hf")),
+      fetchHfSettings().then(setHfSettings),
+    ]);
+    const failed = results.find((result) => result.status === "rejected");
+    setRefreshError(failed?.status === "rejected" ? errorText(failed.reason, locale) : "");
   }, [locale]);
 
   useEffect(() => {
@@ -110,7 +117,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const device = primary
     ? `${primary.platform === "hf" ? "HF" : "Colab"} · ${primary.device ?? primary.gpu}${primary.vram ? ` · ${primary.vram}` : ""}`
     : localActive
-      ? tr(`This Mac · CPU · ${local.behavior.title}`, `本机 · CPU · ${local.behavior.title}`)
+      ? tr(`This computer · CPU · ${local.behavior.title}`, `本机 · CPU · ${local.behavior.title}`)
       : tr("Training compute idle", "训练算力未开启");
 
   const stopActiveCompute = async () => {
@@ -120,13 +127,22 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
       if (localActive) requests.push(jsonRequest("/teach/stop", { method: "POST" }));
       const providers = new Set(cloudActive.map((j) => j.platform));
       requests.push(...[...providers].map((p) => jsonRequest(`/cloud/${p === "hf" ? "hf" : "colab"}/stop-all`, { method:"POST" })));
-      await Promise.all(requests);
+      const results = await Promise.allSettled(requests);
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+      const pending = results.some((result) => {
+        if (result.status !== "fulfilled") return false;
+        const data = result.value as { stopped?: Job[] };
+        return data.stopped?.some((job) => job.released !== true);
+      });
+      if (pending) requestCloudOpen();
       setNotice(primary
-        ? tr("Cloud sessions were told to disconnect.", "已请求断开本项目的云算力会话。")
+        ? pending
+          ? tr("Disconnect requested. Release is not yet confirmed; check the job status below.", "已请求断开，但尚未确认资源释放。请查看下方任务状态，必要时重试。")
+          : tr("Cloud sessions were released.", "本项目的云算力已释放。")
         : tr("Local training was stopped.", "本地训练已停止。"));
-      await refresh();
       window.dispatchEvent(new CustomEvent("microduck:cloud-refresh"));
-    } catch (e) { setError(errorText(e, locale)); }
+    } catch (e) { setError(errorText(e, locale)); requestCloudOpen(); }
     finally { setBusy(""); }
   };
 
@@ -134,7 +150,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
     setBusy(job.id); setError("");
     try {
       await jsonRequest(`/cloud/${job.platform === "hf" ? "hf" : "colab"}/jobs/${job.id}/stop`, { method:"POST" });
-      await refresh();
+      window.dispatchEvent(new CustomEvent("microduck:cloud-refresh"));
     } catch (e) { setError(errorText(e, locale)); }
     finally { setBusy(""); }
   };
@@ -215,14 +231,15 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
             <span>{h.label}</span><span>{h.vram} · ${h.cost}/{h.unit}</span>
           </div>)}
         </div>}
-        {notice && <div className={styles.notice}>{notice}</div>}{error && <div className={styles.error}>{error}</div>}
+        {notice && <div className={styles.notice}>{notice}</div>}
+        {(error || refreshError) && <div className={styles.error} role="alert">{error || refreshError}</div>}
 
         <div className={styles.jobs}>
           <div className={styles.formTitle} style={{marginTop:0}}>{tr("Recent jobs", "最近任务")}</div>
           {!providerJobs.length && <div className={styles.muted}>{tr("No cloud jobs yet.", "暂无云端任务。")}</div>}
           {providerJobs.slice(0,6).map((job) => <div className={styles.job} key={`${job.platform}-${job.id}`}>
             <div><span className={styles.jobState}>{stateText(job.state, locale)}</span> · {job.device ?? job.gpu}{job.vram ? ` · ${job.vram}` : ""}</div>
-            <div className={styles.jobMeta}>{clock(job.allocated_at, now)} · {job.id}{job.message ? ` · ${job.message}` : ""}</div>
+            <div className={styles.jobMeta}>{clock(job.allocated_at, job.released_at ? job.released_at * 1000 : now)} · {job.id}{job.message ? ` · ${job.message}` : ""}</div>
             <div className={styles.jobActions}>
               {job.url && <a className={styles.jobLink} href={job.url} target="_blank" rel="noreferrer">↗</a>}
               {job.state === "done" && <a className={styles.jobLink} href={`${LAB_HTTP}/cloud/${job.platform === "hf" ? "hf" : "colab"}/jobs/${job.id}/policy.onnx`}>↓ ONNX</a>}

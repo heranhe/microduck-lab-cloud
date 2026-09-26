@@ -2092,6 +2092,83 @@ def test_hf_token_settings_roundtrip_never_leaks_the_token(fake_popen, monkeypat
     assert delete() == {"configured": False}  # idempotent
 
 
+def test_active_cloud_job_blocks_local_training_and_token_removal(fake_popen, monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    from microduck_local import colab_jobs, hf_jobs
+
+    hf = hf_jobs.HfJobs(tmp_path / "hf")
+    hf.jobs["active"] = {"id": "active", "state": "running", "released": False,
+                         "repo_id": "testduck/results"}
+    colab = colab_jobs.ColabJobs(tmp_path / "colab")
+    monkeypatch.setattr(hf_jobs, "HfJobs", lambda: hf)
+    monkeypatch.setattr(colab_jobs, "ColabJobs", lambda: colab)
+    monkeypatch.setattr(V, "HF_TOKEN_PATH", tmp_path / "token.json")
+    V.HF_TOKEN_PATH.write_text(json.dumps({"token": "hf_original", "username": "testduck"}))
+    app = V.make_app([])
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(_endpoint(app, "/teach", "POST")(V.TeachReq(text="stand still")))
+    assert error.value.status_code == 409
+    assert not fake_popen
+    for method, args in (("DELETE", ()), ("POST", (V.HfTokenReq(token="hf_replacement"),))):
+        with pytest.raises(HTTPException) as error:
+            _endpoint(app, "/settings/hf", method)(*args)
+        assert error.value.status_code == 409
+    assert json.loads(V.HF_TOKEN_PATH.read_text())["token"] == "hf_original"
+
+
+def test_cloud_start_reserves_slot_before_provider_returns(fake_popen, monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    from microduck_local import colab_jobs, hf_jobs
+
+    hf = hf_jobs.HfJobs(tmp_path / "hf")
+    colab = colab_jobs.ColabJobs(tmp_path / "colab")
+    monkeypatch.setattr(hf_jobs, "HfJobs", lambda: hf)
+    monkeypatch.setattr(colab_jobs, "ColabJobs", lambda: colab)
+    app = V.make_app([])
+    request = types.SimpleNamespace(headers={})
+    def start(*args):
+        # Simulate another request while the provider has not returned an ID.
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(_endpoint(app, "/teach", "POST")(V.TeachReq(text="stand still")))
+        assert error.value.status_code == 409
+        raise RuntimeError("allocation failed")
+    monkeypatch.setattr(colab, "start", start)
+    with pytest.raises(HTTPException):
+        _endpoint(app, "/cloud/colab/jobs", "POST")(
+            V.ColabStartReq(task="Mjlab-VelStand-Flat-MicroDuck", gpu="T4"), request)
+    assert not fake_popen
+    # A failed allocation must release the reservation.
+    monkeypatch.setattr(colab, "start", lambda *args: {"id": "next"})
+    assert _endpoint(app, "/cloud/colab/jobs", "POST")(
+        V.ColabStartReq(task="Mjlab-VelStand-Flat-MicroDuck", gpu="T4"), request)["id"] == "next"
+
+
+def test_shutdown_attempts_hf_even_when_colab_release_fails(fake_popen, monkeypatch, tmp_path):
+    from microduck_local import colab_jobs, hf_jobs
+
+    hf = hf_jobs.HfJobs(tmp_path / "hf")
+    colab = colab_jobs.ColabJobs(tmp_path / "colab")
+    monkeypatch.setattr(hf_jobs, "HfJobs", lambda: hf)
+    monkeypatch.setattr(colab_jobs, "ColabJobs", lambda: colab)
+    attempts = []
+    def fail():
+        attempts.append("colab")
+        raise RuntimeError("network error")
+    def stop_hf(token):
+        attempts.append("hf")
+        return []
+    monkeypatch.setattr(colab, "stop_all", fail)
+    monkeypatch.setattr(hf, "stop_all", stop_hf)
+    app = V.make_app([])
+    async def run():
+        async with app.router.lifespan_context(app):
+            pass
+    asyncio.run(run())
+    assert sorted(attempts) == ["colab", "hf"]
+
+
 def test_showcase_env_kwargs_serves_an_unspotted_curriculum(fake_popen, tmp_path):
     """The ✨ whole-trick chip on a curriculum WITHOUT a spotter (the headstand
     ladder) must return real env kwargs. The non-spotter tail used to sit

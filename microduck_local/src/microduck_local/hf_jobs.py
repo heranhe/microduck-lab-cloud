@@ -149,16 +149,24 @@ class HfJobs:
         remote = json.loads(status_path.read_text()) if status_path.is_file() else {}
         job["remote_state"] = remote.get("state")
         job["message"] = remote.get("message", "")
-        job["state"] = "done" if (directory / "policy.onnx").is_file() else "failed"
-        if job["state"] == "failed" and not job["message"]:
-            job["message"] = "Training or ONNX export did not complete"
-        job["downloaded"] = True
+        policy = directory / "policy.onnx"
+        if remote.get("state") == "failed":
+            job["state"] = "failed"
+            job["message"] = job["message"] or "Training or ONNX export did not complete"
+        elif remote.get("state") == "done" and policy.is_file() and policy.stat().st_size > 0:
+            job["state"] = "done"
+        else:
+            # A Hub download outage is not a failed training run. Keep
+            # polling artifacts after compute has already been released.
+            job["state"] = "finalizing"
+            job["message"] = "GPU released; results download incomplete, will retry"
+        job["downloaded"] = job["state"] in {"done", "failed"}
 
     def refresh(self, token_data: dict | None) -> list[dict]:
         if not token_data:
             return [dict(job) for job in self.jobs.values()]
         api = _api(token_data["token"])
-        for job in self.jobs.values():
+        for job in list(self.jobs.values()):
             if job.get("released") is True and job["state"] in {"done", "failed", "stopped"}:
                 continue
             try:
@@ -170,11 +178,12 @@ class HfJobs:
                 if info.started_at:
                     job["allocated_at"] = _iso_epoch(info.started_at)
                 if stage == "SCHEDULING":
-                    job["state"] = "allocating"
+                    job["state"] = "stopping" if job.get("cancel_requested") else "allocating"
                 elif stage == "RUNNING":
-                    job["state"] = "running"
+                    job["state"] = "stopping" if job.get("cancel_requested") else "running"
                 elif stage == "COMPLETED":
                     job["released"] = True
+                    job.setdefault("released_at", time.time())
                     job["state"] = "finalizing"
                     self._download_result(api, job)
                 elif stage in {"CANCELED", "DELETED"}:
@@ -184,6 +193,8 @@ class HfJobs:
                     job["state"] = "failed"
                     job["released"] = True
                     job["message"] = info.status.message or "Hugging Face job failed"
+                if job.get("released"):
+                    job.setdefault("released_at", time.time())
                 self._save(job)
             except Exception as exc:
                 job["message"] = str(exc)
@@ -200,11 +211,22 @@ class HfJobs:
             return dict(job)
         api = _api(token_data["token"])
         api.cancel_job(job_id=job["remote_id"])
-        job["state"] = "stopped"
-        job["released"] = True
+        # Cancellation is a request, not proof that billable compute ended.
+        # Keep the emergency control visible until inspect_job confirms it.
+        job["cancel_requested"] = True
+        job["state"] = "stopping"
         self._save(job)
         return dict(job)
 
     def stop_all(self, token_data: dict | None) -> list[dict]:
-        return [self.stop(token_data, job_id) for job_id, job in list(self.jobs.items())
-                if job.get("released") is not True]
+        results = []
+        for job_id, job in list(self.jobs.items()):
+            if job.get("released") is True:
+                continue
+            try:
+                results.append(self.stop(token_data, job_id))
+            except Exception as exc:
+                job["message"] = f"Disconnect failed: {exc}"
+                self._save(job)
+                results.append(dict(job))
+        return results
