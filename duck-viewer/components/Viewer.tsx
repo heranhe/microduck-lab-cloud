@@ -639,7 +639,7 @@ export default function Viewer() {
       <Hud clientRef={clientRef} connected={connected} error={error} />
       <RecordPanel clientRef={clientRef} />
       <PolicyPanel clientRef={clientRef} />
-      <CloudPanel />
+      <CloudPanel clientRef={clientRef} />
       <TeachPanel clientRef={clientRef} />
       <AnimPanel />
       <Toasts clientRef={clientRef} />

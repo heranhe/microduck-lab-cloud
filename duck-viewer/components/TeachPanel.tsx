@@ -93,6 +93,7 @@ function greetingFor(r: { noun?: string; title?: string; kind?: string }): strin
 }
 const MSG_CAP = 50;
 const COLAB_GPUS = ["T4", "L4", "A100", "H100"];
+const ACTIVE_CLOUD_STATES = new Set(["allocating", "starting", "running", "finalizing", "detached", "stopping"]);
 
 async function cloudRequest(path: string, init?: RequestInit) {
   const response = await fetch(`${LAB_HTTP}${path}`, { cache: "no-store", ...init });
@@ -734,6 +735,7 @@ function LiveTraining({
   onStageWeights: (stageWeights: StageWeightsMap) => void;
   onStartStage: (idx: number, stageWeights: StageWeightsMap | null) => void;
 }) {
+  const { tr } = useI18n();
   const p = t.progress;
   const stage = t.stage ?? null;
   // Curriculum jobs count the WHOLE chain in the headline numbers and main
@@ -824,7 +826,7 @@ function LiveTraining({
               fontFamily: mono, fontSize: 11, cursor: "pointer",
             }}
           >
-            stop
+            ■ {tr("stop training", "停止训练")}
           </button>
         )}
       </div>
@@ -1193,6 +1195,7 @@ export function TeachPanel({
   const [cloudEnvs, setCloudEnvs] = useState(64);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [cloudError, setCloudError] = useState("");
+  const [activeCloudJobs, setActiveCloudJobs] = useState(0);
   // WHICH BODY the next trick is for. Everything robot-specific below — the
   // greeting, the chips, the placeholder — is read off the lab's /robots, so
   // a third robot shows up here by registering recipes, not by editing this.
@@ -1273,15 +1276,19 @@ export function TeachPanel({
 
   const refreshCompute = useCallback(async () => {
     try {
-      const [colab, hf] = await Promise.all([
+      const [colab, hf, colabJobs, hfJobs] = await Promise.all([
         cloudRequest("/cloud/colab/account"),
         cloudRequest("/cloud/hf/account"),
+        cloudRequest("/cloud/colab/jobs"),
+        cloudRequest("/cloud/hf/jobs"),
       ]);
       setColabAccount(colab);
       setHfAccount(hf);
       if (hf.hardware?.length && !hf.hardware.some((h: { id: string }) => h.id === hfFlavor)) {
         setHfFlavor(hf.hardware[0].id);
       }
+      setActiveCloudJobs([...(colabJobs.jobs ?? []), ...(hfJobs.jobs ?? [])]
+        .filter((job: { state: string; released?: boolean }) => ACTIVE_CLOUD_STATES.has(job.state) || job.released === false).length);
       setCloudError("");
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
@@ -1295,7 +1302,12 @@ export function TeachPanel({
     if (!open) return;
     const first = window.setTimeout(() => void refreshCompute(), 0);
     const poll = window.setInterval(() => void refreshCompute(), 15000);
-    return () => { clearTimeout(first); clearInterval(poll); };
+    const refreshNow = () => void refreshCompute();
+    window.addEventListener("microduck:cloud-refresh", refreshNow);
+    return () => {
+      clearTimeout(first); clearInterval(poll);
+      window.removeEventListener("microduck:cloud-refresh", refreshNow);
+    };
   }, [open, refreshCompute]);
   // Refetched when a run finishes too: that is when a new best can appear.
   const trainingStatus = training?.status;
@@ -1475,6 +1487,13 @@ export function TeachPanel({
   async function launchSelectedTraining() {
     const trimmed = input.trim();
     if (!trimmed || cloudBusy) return;
+    if (training?.status === "training" || activeCloudJobs > 0) {
+      setCloudError(tr(
+        "A training job is already running. Stop it from the top status bar before starting another.",
+        "已有训练任务正在运行，请先使用顶部状态栏停止训练或断开云算力。"
+      ));
+      return;
+    }
     if (compute === "local") {
       await submit(trimmed);
       return;
@@ -1498,6 +1517,7 @@ export function TeachPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      setActiveCloudJobs((count) => Math.max(1, count));
       setInput("");
       setMsgs((m) => [
         ...m,
@@ -1637,9 +1657,12 @@ export function TeachPanel({
     : compute === "hf"
       ? hfAccount.connected && hfAccount.hardware.length > 0 && !!hfFlavor
       : true;
+  const trainingInProgress = training?.status === "training" || activeCloudJobs > 0;
   const canLaunch = !!input.trim() && !cloudBusy &&
-    (compute === "local" || (!!cloudTask && cloudAccountReady));
-  const startLabel = compute === "local"
+    !trainingInProgress && (compute === "local" || (!!cloudTask && cloudAccountReady));
+  const startLabel = trainingInProgress
+    ? tr("Training in progress", "训练进行中")
+    : compute === "local"
     ? tr("▶ Start local training", "▶ 开始本地训练")
     : compute === "colab"
       ? tr("▶ Start on Colab", "▶ 使用 Colab 开始训练")
@@ -2090,12 +2113,14 @@ export function TeachPanel({
                   type="button"
                   role="radio"
                   aria-checked={on}
+                  disabled={trainingInProgress}
                   onClick={() => { setCompute(source); setCloudError(""); }}
                   style={{
                     minWidth: 0, borderRadius: 6, padding: "6px 4px",
                     border: `1px solid ${on ? (source === "local" ? "#8794a8" : "#70b8d8") : "rgba(255,255,255,0.09)"}`,
                     background: on ? (source === "local" ? "#242a34" : "#182c39") : "#151a22",
-                    color: on ? "#eef3f5" : "#778291", cursor: "pointer", font: `10px ${mono}`,
+                    color: on ? "#eef3f5" : "#778291", cursor: trainingInProgress ? "default" : "pointer", font: `10px ${mono}`,
+                    opacity: trainingInProgress && !on ? 0.42 : 1,
                   }}
                 >
                   {source === "local" ? "◉ " : source === "colab" ? "☁ " : "🤗 "}{label}
@@ -2156,6 +2181,11 @@ export function TeachPanel({
                 </div>
               )}
             </>
+          )}
+          {trainingInProgress && (
+            <div style={{ color: "#e6a28f", fontSize: 10, marginTop: 6 }}>
+              {tr("A job is running. Use the always-visible top status bar to stop or disconnect it.", "训练任务正在运行。请使用顶部常驻状态栏停止训练或一键断开云算力。")}
+            </div>
           )}
           {compute !== "local" && cloudError && <div style={{ color: "#ef957d", fontSize: 10, marginTop: 6 }}>{cloudError}</div>}
         </div>

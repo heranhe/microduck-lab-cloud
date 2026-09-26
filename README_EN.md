@@ -32,7 +32,7 @@ Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
    password or token.
 2. Start `duck-lab` and the viewer as described below. Use **☁ Cloud** to
    verify the account and balance. Old `/cloud` bookmarks redirect to this panel.
-3. Open **▶ Train**, choose an action in the original teaching panel, select
+3. Open **🎓 Training**, choose an action in the original teaching panel, select
    Colab as its compute source, and choose a GPU before pressing the single
    Start button. Cloud submission is enabled only for actions with an
    equivalent official `microduck_rl` task. Once a job starts, the lab toolbar shows elapsed
@@ -41,6 +41,16 @@ Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
    billable time. The job list has individual disconnect controls and an ONNX
    download when export succeeds. Lab shutdown also attempts to release active
    Colab sessions.
+
+The top entry is now named **🎓 Training** because it opens the setup panel; the
+only actual Start button is at the bottom of that panel. Once a job starts, the
+always-visible status bar uses the same lifecycle for both compute sources:
+local CPU jobs show **Stop training**, while cloud jobs show **Disconnect now**.
+
+A connected account with `Current balance: 0.00` is authenticated but cannot
+allocate paid compute. Check Colab **Settings → Subscription** with the same
+paid Google AI Pro family plan manager account. Trial memberships and ordinary
+family members are not eligible for this Colab grant, then return and refresh.
 
 Colab controls GPU availability, compute-unit use and runtime lifetime. The
 first version downloads the final checkpoint and ONNX after training; automatic

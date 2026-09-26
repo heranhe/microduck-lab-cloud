@@ -57,6 +57,7 @@
   cursor: pointer;
 }
 .disconnect:disabled { opacity: .35; cursor: default; }
+.statusBarActive .disconnect { border-color:rgba(239,126,96,.72); background:rgba(111,38,29,.52); color:#ffc0ae; font-weight:700; }
 
 .panel {
   position: absolute;
@@ -106,6 +107,11 @@
 .tokenRow .input { flex:1; }
 .smallButton { border:1px solid rgba(112,184,216,.38); border-radius:6px; background:#182432; color:#b8daea; padding:5px 9px; cursor:pointer; font:11px inherit; }
 .smallButton:disabled { opacity:.4; cursor:default; }
+.refreshButton { border:0; background:none; color:#7db8d8; cursor:pointer; padding:0; font:10px inherit; }
+.refreshButton:disabled { opacity:.4; cursor:default; }
+.balanceWarning { display:flex; flex-direction:column; gap:5px; margin-top:9px; padding:9px 10px; border:1px solid rgba(216,180,111,.28); border-radius:8px; background:rgba(91,66,24,.2); color:#9d8d70; }
+.balanceWarning strong { color:#e5c889; }
+.balanceWarning a { color:#7db8d8; text-decoration:none; }
 .formTitle { margin:13px 0 7px; color:#aeb7c4; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
 .managerNote { display:flex; flex-direction:column; align-items:flex-start; gap:6px; margin-top:10px; padding:10px; border:1px solid rgba(112,184,216,.18); border-radius:8px; background:rgba(24,36,50,.55); color:#8f9aa8; }
 .managerNote strong { color:#c8dbe5; }
