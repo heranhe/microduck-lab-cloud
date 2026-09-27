@@ -56,16 +56,40 @@ def test_recovered_job_can_still_release_gpu(tmp_path, monkeypatch):
     assert stopped == [["stop", "-s", "microduck-012345abcdef"]]
 
 
-def test_zero_balance_never_allocates_gpu(tmp_path, monkeypatch):
+def test_zero_balance_allows_free_t4_but_rejects_paid_gpu(tmp_path, monkeypatch):
     monkeypatch.setattr(colab_jobs, "account_status", lambda: {"connected": True, "balance": 0})
     jobs = colab_jobs.ColabJobs(tmp_path)
     try:
-        jobs.start("Mjlab-Velocity-Flat-MicroDuck", "T4", 10, 64)
+        jobs.start("Mjlab-Velocity-Flat-MicroDuck", "A100", 10, 64)
     except RuntimeError as exc:
-        assert "balance" in str(exc)
+        assert "Select T4" in str(exc)
     else:
-        raise AssertionError("zero balance was accepted")
+        raise AssertionError("paid GPU was accepted without paid compute units")
     assert not list(tmp_path.iterdir())
+
+    # Test only the local decision. Do not allocate a real Colab GPU here.
+    monkeypatch.setattr(jobs, "_run", lambda *args: None)
+    job = jobs.start("Mjlab-VelStand-Flat-MicroDuck", "T4", 10, 16)
+    assert job["gpu"] == "T4" and job["state"] == "allocating"
+    assert job["released"] is False
+
+
+def test_free_t4_quota_rejection_does_not_leave_phantom_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(colab_jobs, "account_status", lambda: {"connected": True, "balance": 0})
+    calls = []
+    def fake_cli(args, **kwargs):
+        calls.append(args[0])
+        if args[0] == "new":
+            return CompletedProcess(args, 1, "", "Free GPU quota unavailable")
+        return CompletedProcess(args, 1, "", "No such session")
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    jobs = colab_jobs.ColabJobs(tmp_path)
+    job = jobs.start("Mjlab-VelStand-Flat-MicroDuck", "T4", 10, 16)
+    jobs.workers[job["id"]].join(timeout=2)
+    failed = jobs.list()[0]
+    assert failed["state"] == "failed" and failed["released"] is True
+    assert "quota unavailable" in failed["message"]
+    assert calls == ["new", "stop"]
 
 
 def test_stop_all_includes_finalizing_and_retries_failed_release(tmp_path, monkeypatch):

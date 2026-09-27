@@ -2,7 +2,7 @@
 
 [简体中文（默认）](README.md) · **English**
 
-> 🚀 **Google Colab is this fork's headline feature.** Eligible paid **Google AI Pro members receive 200 Colab compute units (CCUs) each month**. At an illustrative rate of **about 13.3 CCUs/hour**, that is **roughly 15 cumulative hours of A100 use**—an appealing way to learn MicroDuck reinforcement learning without owning an NVIDIA GPU. 🦆 [Google AI Pro benefits](https://support.google.com/googleone/answer/14534406?hl=en) · [Colab FAQ](https://research.google.com/colaboratory/faq.html)
+> 🚀 **Google Colab is this fork's headline feature.** Free Google accounts can request a Colab T4 without paid compute units. Eligible paid **Google AI Pro members also receive 200 Colab compute units (CCUs) each month**. At an illustrative rate of **about 13.3 CCUs/hour**, that is **roughly 15 cumulative hours of A100 use**. 🦆 [Google AI Pro benefits](https://support.google.com/googleone/answer/14534406?hl=en) · [Colab FAQ](https://research.google.com/colaboratory/faq.html)
 
 **The 15-hour figure is an estimate, not a promise of A100 availability or one uninterrupted 15-hour run.** Actual compute-unit rates, GPU supply, and runtime limits vary; check the rate shown by Colab for your account.
 
@@ -27,7 +27,7 @@ On macOS or Linux, `cd microduck_local && uv sync` installs the Colab CLI.
 Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
 
 1. In a terminal, run `cd microduck_local && uv run colab usage`. On first use,
-   follow the CLI's Google authorization link and verify the actual balance.
+   follow the CLI's Google authorization link. A `0.00` paid balance still permits a free T4 request.
    Credentials stay in the CLI's local store; the lab never accepts a Google
    password or token.
 2. Start `duck-lab` and the viewer as described below. Use **☁ Cloud** to
@@ -47,10 +47,12 @@ only actual Start button is at the bottom of that panel. Once a job starts, the
 always-visible status bar uses the same lifecycle for both compute sources:
 local CPU jobs show **Stop training**, while cloud jobs show **Disconnect now**.
 
-A connected account with `Current balance: 0.00` is authenticated but cannot
-allocate paid compute. Check Colab **Settings → Subscription** with the same
-paid Google AI Pro family plan manager account. Trial memberships and ordinary
-family members are not eligible for this Colab grant, then return and refresh.
+A connected account with `Current balance: 0.00` may request a free T4; this
+balance measures paid compute units, not remaining free GPU time. Google decides
+whether a free runtime is available and may reclaim it without warning. This
+project requires a positive paid balance before requesting L4, A100 or H100.
+If you expected paid AI Pro units, check Colab **Settings → Subscription**
+under the same Google account. Free T4 has no guaranteed 3–5 hour duration.
 
 Colab controls GPU availability, compute-unit use and runtime lifetime. The
 first version downloads the final checkpoint and ONNX after training; automatic

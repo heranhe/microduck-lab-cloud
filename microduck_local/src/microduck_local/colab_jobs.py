@@ -123,9 +123,12 @@ class ColabJobs:
         account = account_status()
         if not account["connected"]:
             raise RuntimeError("Connect your Google account with `colab usage` first")
+        # Compute units describe paid access. A free account can still be
+        # assigned a standard T4 when Colab has capacity; `colab new` is the
+        # authority on current eligibility and quota, not the CCU balance.
         balance = account.get("balance")
-        if not isinstance(balance, (int, float)) or balance <= 0:
-            raise RuntimeError("No positive Colab compute-unit balance was found. Check your subscription first")
+        if gpu != "T4" and (not isinstance(balance, (int, float)) or balance <= 0):
+            raise RuntimeError("No paid Colab compute units are available. Select T4 to try the free tier")
         job_id = uuid.uuid4().hex[:12]
         session = f"microduck-{job_id}"
         directory = self.runs / job_id
@@ -145,6 +148,10 @@ class ColabJobs:
         try:
             result = cli(["new", "-s", session, "--gpu", job["gpu"]], timeout=180)
             if result.returncode:
+                # The provider rejected the assignment before a runtime was
+                # allocated. A failed best-effort `stop` below must not turn
+                # this into a phantom billable session that blocks retrying.
+                job["allocation_rejected"] = True
                 raise RuntimeError(result.stderr.strip() or result.stdout.strip())
             job["allocated_at"] = time.time()
             (directory / "job.json").write_text(json.dumps(job, indent=2))
@@ -224,13 +231,14 @@ class ColabJobs:
             if not job.get("released") or job.get("cancel_requested"):
                 try:
                     result = cli(["stop", "-s", session], timeout=60)
-                    job["released"] = result.returncode == 0
+                    job["released"] = result.returncode == 0 or job.get("allocation_rejected") is True
                     if not job["released"]:
                         reason = result.stderr.strip() or result.stdout.strip()
                         job["message"] = f"{job['message']} · Release: {reason}" if job["message"] else reason
                 except Exception as exc:
-                    job["released"] = False
-                    job["message"] = f"{job['message']} · Release: {exc}" if job["message"] else str(exc)
+                    job["released"] = job.get("allocation_rejected") is True
+                    if not job["released"]:
+                        job["message"] = f"{job['message']} · Release: {exc}" if job["message"] else str(exc)
             if job.get("released"):
                 job.setdefault("released_at", time.time())
             if job.get("cancel_requested"):

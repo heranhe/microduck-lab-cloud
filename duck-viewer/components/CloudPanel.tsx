@@ -34,7 +34,7 @@ function errorText(value: unknown, locale: Locale) {
   if (locale === "en") return raw;
   if (raw.includes("Connect a Hugging Face")) return "请先连接 Hugging Face 账号。";
   if (raw.includes("Connect your Google")) return "请先在终端运行 colab usage 连接 Google 账号。";
-  if (raw.includes("balance")) return "没有检测到可用的 Colab 算力余额。";
+  if (raw.includes("paid Colab compute units")) return "当前没有付费 Colab 计算单元。可选择 T4 尝试免费层。";
   if (raw.includes("Stop and confirm all Hugging Face")) return "请先停止全部 Hugging Face 任务，确认云算力已释放后再修改 Token。";
   if (raw.includes("Failed to fetch") || raw.includes("Lab unavailable")) return "无法连接本地 duck-lab。";
   return raw;
@@ -200,7 +200,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           <span className={`${styles.accountMark} ${account.connected ? styles.accountMarkOn : ""}`}/>
           <div style={{flex:1}}>
             <div className={account.connected ? styles.good : ""}>{account.connected ? tr("Account connected", "账号已连接") : tr("Account not connected", "账号未连接")}</div>
-            {provider === "colab" && colab.connected && <div className={styles.muted}>{tr("Balance", "余额")} {colab.balance ?? "—"} CCU{colab.rate != null ? ` · ${colab.rate} CCU/h` : ""}</div>}
+            {provider === "colab" && colab.connected && <div className={styles.muted}>{tr("Paid balance", "付费余额")} {colab.balance ?? "—"} CCU{colab.rate != null ? ` · ${colab.rate} CCU/h` : ""}</div>}
             {provider === "hf" && hfSettings?.configured && <div className={styles.muted}>{hfSettings.username} · {hfSettings.masked}</div>}
             {account.message && <div className={styles.muted}>{account.message}</div>}
           </div>
@@ -208,10 +208,10 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           {provider === "hf" && hfSettings?.configured && <button className={styles.dangerLink} disabled={busy === "token"} onClick={disconnectHf}>{tr("remove token", "移除 Token")}</button>}
         </div>
 
-        {provider === "colab" && colab.connected && colab.balance === 0 && <div className={styles.balanceWarning}>
-          <strong>{tr("Google login succeeded, but the CLI reports 0 available CCU.", "Google 登录成功，但 Colab CLI 报告可用余额为 0 CCU。")}</strong>
-          <span>{tr("Cloud training cannot start until the same account shows a positive balance. In Colab Settings → Subscription, confirm this is the paid Google AI Pro family plan manager account, not a trial or family member, then refresh here.", "在同一账号显示正数余额前无法启动云训练。请在 Colab 网页的“设置 → 订阅”确认当前账号是付费 Google AI Pro 的家庭方案管理员账号，并非试用或家庭成员，然后回到这里刷新。")}</span>
-          <a href="https://colab.research.google.com/" target="_blank" rel="noreferrer">{tr("Open Colab to check subscription ↗", "打开 Colab 检查订阅 ↗")}</a>
+        {provider === "colab" && colab.connected && !(typeof colab.balance === "number" && colab.balance > 0) && <div className={styles.balanceWarning}>
+          <strong>{tr("No paid CCU shown · Free T4 can still be requested", "无可用付费 CCU · 仍可尝试免费 T4")}</strong>
+          <span>{tr("Choose T4 in Training. Google decides whether a free GPU is available and may end the session without warning. L4, A100 and H100 require paid compute units.", "请在“训练”中选择 T4。免费 GPU 能否分配由 Google 动态决定，运行时也可能随时结束；L4、A100 和 H100 需要付费计算单元。")}</span>
+          <a href="https://research.google.com/colaboratory/faq.html" target="_blank" rel="noreferrer">{tr("Colab free-tier limits ↗", "查看 Colab 免费层限制 ↗")}</a>
         </div>}
 
         {provider === "hf" && !hfSettings?.configured && <>

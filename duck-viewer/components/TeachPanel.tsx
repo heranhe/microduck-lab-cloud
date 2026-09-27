@@ -1276,27 +1276,33 @@ export function TeachPanel({
   }, [open]);
 
   const refreshCompute = useCallback(async () => {
-    try {
-      const [colab, hf, colabJobs, hfJobs] = await Promise.all([
+    const [colab, hf, colabJobs, hfJobs] = await Promise.allSettled([
         cloudRequest("/cloud/colab/account"),
         cloudRequest("/cloud/hf/account"),
         cloudRequest("/cloud/colab/jobs"),
         cloudRequest("/cloud/hf/jobs"),
       ]);
-      setColabAccount(colab);
-      setHfAccount(hf);
-      if (hf.hardware?.length && !hf.hardware.some((h: { id: string }) => h.id === hfFlavor)) {
-        setHfFlavor(hf.hardware[0].id);
+    if (colab.status === "fulfilled") {
+      setColabAccount(colab.value);
+      if (!(typeof colab.value.balance === "number" && colab.value.balance > 0)) setColabGpu("T4");
+    }
+    if (hf.status === "fulfilled") {
+      setHfAccount(hf.value);
+      if (hf.value.hardware?.length && !hf.value.hardware.some((h: { id: string }) => h.id === hfFlavor)) {
+        setHfFlavor(hf.value.hardware[0].id);
       }
-      setActiveCloudJobs([...(colabJobs.jobs ?? []), ...(hfJobs.jobs ?? [])]
+    }
+    if (colabJobs.status === "fulfilled" && hfJobs.status === "fulfilled") {
+      setActiveCloudJobs([...(colabJobs.value.jobs ?? []), ...(hfJobs.value.jobs ?? [])]
         .filter((job: { state: string; released?: boolean }) => job.released !== true && (ACTIVE_CLOUD_STATES.has(job.state) || job.released === false)).length);
-      setCloudError("");
-    } catch (e) {
-      const raw = e instanceof Error ? e.message : String(e);
+    }
+    const failed = [colab, hf, colabJobs, hfJobs].find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") {
+      const raw = failed.reason instanceof Error ? failed.reason.message : String(failed.reason);
       setCloudError(locale === "zh" && (raw.includes("Failed to fetch") || raw.includes("Lab unavailable"))
         ? "无法连接本地 duck-lab。"
         : raw);
-    }
+    } else setCloudError("");
   }, [hfFlavor, locale]);
 
   useEffect(() => {
@@ -1666,7 +1672,7 @@ export function TeachPanel({
   const budgetShown = budgetSteps ?? training?.chosenBudget ?? null;
   const offRecipe = training != null && (planTotal !== declaredTotal || Object.keys(pins).length > 0);
   const cloudAccountReady = compute === "colab"
-    ? colabAccount.connected && typeof colabAccount.balance === "number" && colabAccount.balance > 0
+    ? colabAccount.connected && (colabGpu === "T4" || (typeof colabAccount.balance === "number" && colabAccount.balance > 0))
     : compute === "hf"
       ? hfAccount.connected && hfAccount.hardware.length > 0 && !!hfFlavor
       : true;
@@ -2169,7 +2175,9 @@ export function TeachPanel({
                   {tr("GPU", "算力卡")}
                   {compute === "colab" ? (
                     <select value={colabGpu} onChange={(e) => setColabGpu(e.target.value)} style={computeInputStyle}>
-                      {COLAB_GPUS.map((gpu) => <option key={gpu}>{gpu}</option>)}
+                      {COLAB_GPUS.map((gpu) => <option key={gpu} value={gpu} disabled={gpu !== "T4" && !(typeof colabAccount.balance === "number" && colabAccount.balance > 0)}>
+                        {gpu === "T4" ? tr("T4 · free tier", "T4 · 可尝试免费层") : gpu}
+                      </option>)}
                     </select>
                   ) : (
                     <select value={hfFlavor} onChange={(e) => setHfFlavor(e.target.value)} style={computeInputStyle}>
@@ -2186,11 +2194,16 @@ export function TeachPanel({
                   <input type="number" min={1} max={4096} value={cloudEnvs} onChange={(e) => setCloudEnvs(Number(e.target.value))} style={computeInputStyle}/>
                 </label>
               </div>
+              {compute === "colab" && colabAccount.connected && !(typeof colabAccount.balance === "number" && colabAccount.balance > 0) && (
+                <div style={{ color: "#9fb4d8", fontSize: 10, marginTop: 6 }}>
+                  {tr("0 paid CCU does not block a free T4 request. Google decides availability and may end the session at any time.", "0 付费 CCU 不影响尝试免费 T4；能否分配及会话时长由 Google 动态决定。")}
+                </div>
+              )}
               {!cloudAccountReady && (
                 <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6, color: "#d8b46f", fontSize: 10 }}>
                   <span style={{ flex: 1 }}>
                     {compute === "colab"
-                      ? tr("Colab is not connected or has no available CCU.", "Colab 未连接或没有可用算力余额。")
+                      ? tr("Connect Colab first; higher GPU tiers need paid compute units.", "请先连接 Colab；更高规格 GPU 需要付费计算单元。")
                       : tr("Hugging Face is not connected or has no available hardware.", "Hugging Face 未连接或没有可用算力卡。")}
                   </span>
                   <button type="button" onClick={requestCloudOpen} style={{ border: 0, background: "none", color: "#7db8d8", cursor: "pointer", padding: 0, font: `10px ${mono}` }}>
