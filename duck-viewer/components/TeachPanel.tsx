@@ -1186,6 +1186,11 @@ export function TeachPanel({
     return Array.isArray(stored) && stored.length ? stored.slice(-MSG_CAP) : [GREETING];
   });
   const [input, setInput] = useState("");
+  // A submitted recipe remains the selected action even after the draft is
+  // cleared. Cloud training must use that choice, not an empty text field.
+  const [chosenAction, setChosenAction] = useState<{ text: string; behavior: string; robotId: string } | null>(
+    () => loadJSON("teachChosenAction", null)
+  );
   const [compute, setCompute] = useState<ComputeSource>(() => loadJSON("teachCompute", "local"));
   const [colabAccount, setColabAccount] = useState<CloudAccount>({ connected: false });
   const [hfAccount, setHfAccount] = useState<HfCloudAccount>({ connected: false, hardware: [] });
@@ -1215,7 +1220,9 @@ export function TeachPanel({
   // Old servers returned the built-in text without behavior ids. Preserve the
   // one exact, equivalent mapping instead of making all cloud options vanish.
   const selectedBehavior = selectedSuggestion?.behavior ||
-    (input.trim().toLocaleLowerCase() === "stand still" ? "stand" : undefined);
+    (input.trim().toLocaleLowerCase() === "stand still" ? "stand" : undefined) ||
+    (!input.trim() && chosenAction?.robotId === robot.id ? chosenAction.behavior : undefined);
+  const actionText = input.trim() || (chosenAction?.robotId === robot.id ? chosenAction.text : "");
   const cloudTask = cloudTaskFor(robot.id, selectedBehavior);
   // Our runs, for the ▶ beside a trick that already has a MEASURED best run —
   // so watching what a trick looks like never means digging through 🧠.
@@ -1250,6 +1257,7 @@ export function TeachPanel({
 
   useEffect(() => saveJSON("teachOpen", open), [open]);
   useEffect(() => saveJSON("teachCompute", compute), [compute]);
+  useEffect(() => saveJSON("teachChosenAction", chosenAction), [chosenAction]);
   useEffect(() => {
     const openPanel = () => setOpen(true);
     const closePanel = () => setOpen(false);
@@ -1460,6 +1468,7 @@ export function TeachPanel({
         // The job's own numbers are the truth from here on; the pending
         // edits have been spent.
         setTraining(data.job);
+        setChosenAction({ text: body.text, behavior: data.job.behavior.id, robotId: body.robot ?? robot.id });
         behaviorRef.current = data.job.behavior.id;
         setBudgetSteps(null);
         setStagePins({});
@@ -1502,7 +1511,7 @@ export function TeachPanel({
   }
 
   async function launchSelectedTraining() {
-    const trimmed = input.trim();
+    const trimmed = actionText;
     if (!trimmed || cloudBusy || launchPending.current) return;
     if (training?.status === "training" || activeCloudJobs > 0) {
       setCloudError(tr(
@@ -1677,7 +1686,7 @@ export function TeachPanel({
       ? hfAccount.connected && hfAccount.hardware.length > 0 && !!hfFlavor
       : true;
   const trainingInProgress = training?.status === "training" || activeCloudJobs > 0;
-  const canLaunch = !!input.trim() && !cloudBusy &&
+  const canLaunch = !!actionText && !cloudBusy &&
     !trainingInProgress && (compute === "local" || (!!cloudTask && cloudAccountReady));
   const startLabel = trainingInProgress
     ? tr("Training in progress", "训练进行中")
@@ -1776,6 +1785,8 @@ export function TeachPanel({
         <button
           onClick={() => {
             setMsgs([GREETING]);
+            setChosenAction(null);
+            setInput("");
             // Also dismiss a FINISHED training card — the farm keeps
             // broadcasting the job payload until told to let go (a running
             // job is protected server-side; stop it first).
@@ -1946,15 +1957,21 @@ export function TeachPanel({
             };
             const label = tr(s, chinese[s] ?? s);
             const chip: React.CSSProperties = {
-              background: "#1c2230", color: "#9fb4d8",
-              border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12,
+              background: actionText.toLocaleLowerCase() === s.toLocaleLowerCase() ? "#263c4d" : "#1c2230",
+              color: actionText.toLocaleLowerCase() === s.toLocaleLowerCase() ? "#e8f2fb" : "#9fb4d8",
+              border: `1px solid ${actionText.toLocaleLowerCase() === s.toLocaleLowerCase() ? "#70b8d8" : "rgba(255,255,255,0.08)"}`,
+              borderRadius: 12,
               padding: "2px 8px", fontFamily: mono, fontSize: 10, cursor: "pointer",
             };
             return (
               <span key={s} style={{ display: "inline-flex", alignItems: "stretch" }}>
                 <button
                   title={tr(`teach ${robotPhrase(robot)}: ${title}`, `训练动作：${label}`)}
-                  onClick={() => setInput(s)}
+                  onClick={() => {
+                    setInput(s);
+                    setChosenAction({ text: s, behavior, robotId: robot.id });
+                    setCloudError("");
+                  }}
                   style={best ? { ...chip, borderRadius: "12px 0 0 12px", borderRight: "none" } : chip}
                 >
                   {emoji ? `${emoji} ${label}` : label}
@@ -2157,15 +2174,15 @@ export function TeachPanel({
             <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
               {tr("Uses the selected local recipe and this computer's CPU.", "使用当前动作的本地训练配方和本机 CPU。")}
             </div>
-          ) : !input.trim() ? (
+          ) : !actionText ? (
             <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
               {tr("Choose an action above before starting cloud training.", "请先在上方选择一个动作，再启动云端训练。")}
             </div>
           ) : !cloudTask ? (
             <div style={{ color: "#d8b46f", fontSize: 10, marginTop: 6 }}>
               {tr(
-                "This action uses a local-only recipe. The official cloud stack has no equivalent task yet.",
-                "该动作目前使用本地专属配方，官方云端训练栈尚无等价任务。"
+                "This action only supports local training. Cloud training currently supports Stand still for Microduck. Choose Stand still above or switch to This Mac.",
+                "当前动作只能使用本机训练。云端目前仅支持 Microduck 的“保持站立”；请点选上方“保持站立”，或切换为“本机”。"
               )}
             </div>
           ) : (
@@ -2229,7 +2246,7 @@ export function TeachPanel({
         >
           <input
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => { setInput(e.target.value); setChosenAction(null); setCloudError(""); }}
             placeholder={tr(`teach ${robotPhrase(robot)} a new policy…`, `教${noun}学习新策略…`)}
             style={{
               flex: 1, minWidth: 0, boxSizing: "border-box", background: "#12151b",
