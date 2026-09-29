@@ -7,6 +7,7 @@ import { useI18n, type Locale } from "@/lib/i18n";
 import { localizeBehavior } from "@/lib/teachLocalization";
 import { requestCloudOpen, requestPolicyToggle, requestTeachOpen, usePolicyOpen } from "@/lib/ui";
 import styles from "./CloudPanel.module.css";
+import { usePanelDrag } from "./usePanelDrag";
 
 type Job = {
   id: string; platform: Provider; task: string; gpu: string; device?: string; vram?: string;
@@ -54,6 +55,7 @@ async function jsonRequest(path: string, init?: RequestInit) {
 }
 
 export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClient | null> }) {
+  const panelDrag = usePanelDrag("cloud");
   const { tr, locale } = useI18n();
   const policyOpen = usePolicyOpen();
   const [open, setOpen] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("cloud") === "1");
@@ -118,7 +120,15 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const cloudActive = useMemo(() => jobs.filter(needsRelease), [jobs]);
   const primary = cloudActive.find((j) => j.allocated_at) ?? cloudActive[0];
   const local = clientRef.current?.frame?.training ?? null;
-  const localActive = local?.status === "training";
+  const localActive = local?.status === "training" || local?.status === "stopping";
+  const saving = local?.status === "stopping";
+  const progress = local?.progress;
+  const steps = progress?.overallSteps ?? progress?.steps ?? 0;
+  const total = progress?.overallTotal ?? progress?.total ?? 0;
+  const percent = total > 0 ? Math.min(100, 100 * steps / total) : 0;
+  const sps = progress?.sps;
+  const nextSnap = progress?.nextSnapStep;
+  const snapEta = nextSnap != null && sps && sps > 0 ? Math.max(0, nextSnap - (progress?.steps ?? 0)) / sps : null;
   const hasActiveCompute = localActive || cloudActive.length > 0;
   const elapsed = primary
     ? clock(primary.allocated_at, now)
@@ -135,7 +145,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
     setBusy("disconnect"); setError(""); setNotice("");
     try {
       const requests: Promise<unknown>[] = [];
-      if (localActive) requests.push(jsonRequest("/teach/stop", { method: "POST" }));
+      if (localActive && !saving) requests.push(jsonRequest("/teach/stop", { method: "POST" }));
       const providers = new Set(cloudActive.map((j) => j.platform));
       requests.push(...[...providers].map((p) => jsonRequest(`/cloud/${p === "hf" ? "hf" : "colab"}/stop-all`, { method:"POST" })));
       const results = await Promise.allSettled(requests);
@@ -151,7 +161,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
         ? pending
           ? tr("Disconnect requested. Release is not yet confirmed; check the job status below.", "已请求断开，但尚未确认资源释放。请查看下方任务状态，必要时重试。")
           : tr("Cloud sessions were released.", "本项目的云算力已释放。")
-        : tr("Local training was stopped.", "本地训练已停止。"));
+        : tr("Saving the checkpoint before stopping…", "正在保存检查点，完成后停止训练…"));
       window.dispatchEvent(new CustomEvent("microduck:cloud-refresh"));
     } catch (e) { setError(errorText(e, locale)); requestCloudOpen(); }
     finally { setBusy(""); }
@@ -189,20 +199,48 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
       <button className={`${styles.toolButton} ${open ? styles.toolButtonActive : ""}`} onClick={() => open ? setOpen(false) : requestCloudOpen()}>☁ {tr("Cloud", "云算力")}</button>
       <button className={`${styles.toolButton} ${policyOpen ? styles.toolButtonActive : ""}`} onClick={requestPolicyToggle}>🧠 {tr("Policies", "策略")}</button>
     </div>
-    <div className={`${styles.statusBar} ${hasActiveCompute ? styles.statusBarActive : ""}`} data-policy-ui>
-      <span className={styles.dot}/><span>{device}</span><span className={styles.timer}>{elapsed}</span>
-      <button className={styles.disconnect} disabled={!hasActiveCompute || busy === "disconnect"} onClick={stopActiveCompute} title={tr("Safety stop for the active local or cloud training job", "停止当前本地训练或断开云端算力，防止继续运行或计费") }>
-        {busy === "disconnect"
-          ? tr("Stopping…", "停止中…")
-          : primary
-            ? tr("■ Disconnect now", "■ 一键断开")
-            : localActive
-              ? tr("■ Stop training", "■ 停止训练")
-              : tr("Stop / disconnect", "停止 / 断开")}
-      </button>
+    <div className={`${styles.statusBar} ${hasActiveCompute ? styles.statusBarActive : ""} ${localActive ? styles.trainingBar : ""}`} data-policy-ui>
+      <div className={styles.statusHeading}>
+        <span className={styles.dot}/>
+        <button className={styles.monitorLink} onClick={requestTeachOpen} title={local?.runName}>{device}</button>
+        {hasActiveCompute && <span className={styles.timer}>{elapsed}</span>}
+        {!hasActiveCompute && <button className={styles.monitorLink} onClick={requestTeachOpen}>{tr("New training", "新建训练")}</button>}
+        {hasActiveCompute && <button className={styles.disconnect} disabled={saving || busy === "disconnect"} onClick={stopActiveCompute}>
+          {saving ? tr("Saving…", "保存中…") : busy === "disconnect" ? tr("Stopping…", "停止中…") : primary ? tr("■ Disconnect", "■ 断开云算力") : tr("⏸ Save and stop", "⏸ 保存并停止")}
+        </button>}
+        {localActive && <details className={styles.more}>
+          <summary aria-label={tr("Training actions", "训练操作")}>⋯</summary>
+          <div className={styles.moreMenu}>
+            <button onClick={requestTeachOpen}>{tr("Open monitor", "查看训练监控")}</button>
+            <button onClick={async () => {
+              if (!window.confirm(tr("Force terminate? Progress since the last saved checkpoint will be lost.", "强制终止训练？最近检查点之后的进度会丢失。"))) return;
+              try { await jsonRequest("/teach/stop?force=true", { method: "POST" }); }
+              catch (e) { setError(errorText(e, locale)); }
+            }}>{tr("Force terminate", "强制终止")}</button>
+          </div>
+        </details>}
+      </div>
+      {localActive && progress && <>
+        <div className={styles.progressLine}>
+          <strong>{percent.toFixed(1)}%</strong>
+          <span>{steps.toLocaleString()} / {total.toLocaleString()} {tr("steps", "步")}</span>
+          <span>{sps && sps > 0 ? `${Math.round(sps).toLocaleString()} ${tr("steps/s", "步/秒")}` : tr("Measuring speed…", "正在测量速度…")}</span>
+          <span>{saving ? tr("Saving checkpoint", "正在保存检查点") : progress.etaSeconds != null ? `${tr("Remaining ≈", "剩余约")}${duration(progress.etaSeconds)}` : tr("Estimating time…", "正在估算剩余时间…")}</span>
+        </div>
+        <div className={styles.progressTrack} role="progressbar" aria-label={tr("Training progress", "训练进度")} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${percent}%` }}/>
+        </div>
+        <div className={styles.snapshotLine}>
+          <span>{tr("Latest checkpoint", "最近检查点")}：{progress.lastCheckpointStep != null ? `@${progress.lastCheckpointStep.toLocaleString()}` : tr("None · trainee is untrained", "暂无 · 学员尚未训练")}</span>
+          {!saving && nextSnap != null && <span>{tr("Next snapshot", "下次快照")} @{nextSnap.toLocaleString()}{snapEta != null ? ` · ≈${duration(snapEta)}` : ""}</span>}
+          {local?.stage && <span>{tr("Stage", "阶段")} {local.stage.idx}/{local.stage.count}</span>}
+        </div>
+      </>}
+      {primary && <div className={styles.snapshotLine}>{tr("Cloud progress is not available yet ·", "云端进度暂不可用 ·")} {stateText(primary.state, locale)}</div>}
+      {error && <div className={styles.error} role="alert">{error}</div>}
     </div>
-    {open && <section className={styles.panel} data-policy-ui>
-      <header className={styles.header}><span className={styles.title}>☁ {tr("Cloud compute", "云算力中心")}</span><button className={styles.close} onClick={() => setOpen(false)}>✕</button></header>
+    {open && <section {...panelDrag.panelProps} className={styles.panel} data-policy-ui style={{ ...(panelDrag.point ? { left: panelDrag.point.x, top: panelDrag.point.y, right: "auto" } : {}), ...panelDrag.resizeStyle }}>
+      <header className={styles.header} {...panelDrag.dragHandle} style={{ cursor: "inherit", touchAction: "none", userSelect: "none" }}><span className={styles.title}>☁ {tr("Cloud compute", "云算力中心")}</span><button className={styles.close} onClick={() => setOpen(false)}>✕</button></header>
       <div className={styles.tabs}>
         <button className={`${styles.tab} ${provider === "colab" ? styles.tabActive : ""}`} onClick={() => setProvider("colab")}>Google Colab</button>
         <button className={`${styles.tab} ${provider === "hf" ? styles.tabActive : ""}`} onClick={() => setProvider("hf")}>🤗 Hugging Face</button>

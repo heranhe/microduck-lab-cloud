@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -99,7 +100,11 @@ def linear_decay(start: float, end: float):
     return f
 
 
-SNAP_STEPS = 150_000  # export a live snapshot roughly every ~15 s of wall time
+SNAP_STEPS = 150_000  # steady-state preview interval, measured in training steps
+# The first few minutes are when someone is staring at a motionless trainee.
+# Snap often until the policy has something to show, then settle to SNAP_STEPS.
+EARLY_SNAP = 50_000
+EARLY_UNTIL = 300_000
 # Hard cap on the policy's per-dim action log_std (std <= ~0.6). Past ~std 1
 # the clipped Gaussian degenerates into bang-bang sampling that the entropy
 # bonus loves and the DETERMINISTIC export can't reproduce — see the clamp
@@ -166,8 +171,10 @@ def _progress_callback_cls(BaseCallback):
             self.ep_lens: list[int] = []
             # Anchor to the warm-start step so a resumed run doesn't burn its first
             # rollouts re-snapshotting to catch a counter it inherited.
-            self.next_snap = start_steps + snap_steps
+            self.next_snap = start_steps + self._snap_interval(start_steps)
             self.snapshots = 0
+            self.user_stopped = False
+            self._stop_check = 0.0
             self.t0 = time.time()
             self._prev_steps = start_steps
             self._prev_t = self.t0
@@ -189,7 +196,20 @@ def _progress_callback_cls(BaseCallback):
             # path: _snapshot, the ONNX export, the "done" line. Costs one
             # extra step of collection, which is why the flag is read here
             # rather than mid-rollout.
+            # STOP is how the lab asks for a save-then-exit without SIGTERM,
+            # which would skip this path and leave no checkpoint.
+            now = time.time()
+            if now - self._stop_check > 0.5:
+                self._stop_check = now
+                if (self.out / "STOP").exists():
+                    self.user_stopped = True
+                    self._stop = True
             return not self._stop
+
+        def _snap_interval(self, at: int) -> int:
+            if self.snap_steps == SNAP_STEPS and at < EARLY_UNTIL:
+                return EARLY_SNAP
+            return self.snap_steps
 
         def _snapshot(self) -> None:
             import torch
@@ -213,6 +233,12 @@ def _progress_callback_cls(BaseCallback):
             os.replace(self.out / "vecnormalize.pkl.tmp",
                        self.out / "vecnormalize.pkl")
             self.snapshots += 1
+            self.next_snap = int(self.num_timesteps) + self._snap_interval(int(self.num_timesteps))
+            meta = {"steps": int(self.num_timesteps), "next_snap": self.next_snap,
+                    "saved_at": time.time()}
+            tmp_meta = self.out / "snapshot.json.tmp"
+            tmp_meta.write_text(json.dumps(meta))
+            os.replace(tmp_meta, self.out / "snapshot.json")
 
         def _on_rollout_end(self) -> None:
             # Re-assert the action-std cap every rollout: the entropy bonus
@@ -252,6 +278,21 @@ def _progress_callback_cls(BaseCallback):
             sps = (ds / dt) if dt > 0 else 0.0
             self._prev_steps = int(self.num_timesteps)
             self._prev_t = now
+            snap_due = self.num_timesteps >= self.next_snap
+            if self.num_timesteps >= self.next_snap:
+                self._snapshot()
+            if self.checkpoint_every > 0 and self.num_timesteps >= self.next_ckpt:
+                d = self.out / "checkpoints"
+                d.mkdir(exist_ok=True)
+                tag = f"{int(self.num_timesteps):09d}"
+                if not snap_due:
+                    self._snapshot()
+                self.model.save(str(d / f"model_{tag}"))
+                self.venv.save(str(d / f"vecnormalize_{tag}.pkl"))
+                live = self.out / "live.onnx"
+                if live.is_file():
+                    shutil.copy2(live, d / f"policy_{tag}.onnx")
+                self.next_ckpt += self.checkpoint_every
             line = {
                 "steps": int(self.num_timesteps),
                 "total": self.total_steps,
@@ -261,20 +302,12 @@ def _progress_callback_cls(BaseCallback):
                 "snapshots": self.snapshots,
                 "elapsed_s": round(now - self.t0, 1),
                 "sps": round(sps),
+                "next_snap": int(self.next_snap),
+                "done": False,
             }
             with open(self.out / "progress.jsonl", "a") as f:
                 f.write(json.dumps(line) + "\n")
             self.term_sums, self.term_steps, self.ep_lens = {}, 0, []
-            if self.num_timesteps >= self.next_snap:
-                self._snapshot()
-                self.next_snap += self.snap_steps
-            if self.checkpoint_every > 0 and self.num_timesteps >= self.next_ckpt:
-                d = self.out / "checkpoints"
-                d.mkdir(exist_ok=True)
-                tag = f"{int(self.num_timesteps):09d}"
-                self.model.save(str(d / f"model_{tag}"))
-                self.venv.save(str(d / f"vecnormalize_{tag}.pkl"))
-                self.next_ckpt += self.checkpoint_every
             # Same ep_rew series that just went into progress.jsonl. Disabled
             # unless --plateau-patience (or $MICRODUCK_PLATEAU_PATIENCE) is
             # positive; `steps` is the ABSOLUTE counter, so a warm restart's
@@ -746,9 +779,17 @@ def main() -> None:
     # they are (the lab reads them as 100%, and the per-rollout lines already
     # carry the real counter). What gets added is why the curve is short —
     # without it a later reader cannot tell an early stop from a crash.
-    final = {"steps": steps, "total": steps, "done": True}
-    if plateau.fired:
-        final.update(plateau.record(int(model.num_timesteps)))
+    # A user STOP is not complete: keep the real counter so the bar does not
+    # jump to 100%, and so resume knows there is budget left. The snapshot
+    # and policy.onnx above still happened — this is a saved, unassessed export.
+    user_stopped = bool(getattr(cb, "user_stopped", False)) if remaining > 0 else False
+    if user_stopped:
+        final = {"steps": int(model.num_timesteps), "total": steps,
+                 "stopped": "user", "done": False}
+    else:
+        final = {"steps": steps, "total": steps, "done": True}
+        if plateau.fired:
+            final.update(plateau.record(int(model.num_timesteps)))
     with open(out / "progress.jsonl", "a") as f:
         f.write(json.dumps(final) + "\n")
     print(f"done: {out}")

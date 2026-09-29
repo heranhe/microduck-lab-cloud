@@ -130,7 +130,7 @@ def test_stop_sweeps_the_worker_tree(fake_popen, monkeypatch):
     job = V.TrainingJob("run")
     monkeypatch.setattr(job.proc, "terminate",
                         lambda: order.append(("parent", None)))
-    job.stop()
+    job.stop(force=True)
 
     assert job.status == "stopped"
     assert killed == list(range(10)), "workers were not swept"
@@ -150,7 +150,88 @@ def test_stop_does_not_block_the_event_loop(fake_popen, monkeypatch):
 
     monkeypatch.setattr(job.proc, "wait", boom)
     job.stop()
-    assert job.status == "stopped"
+    assert job.status == "stopping"
+    assert job.proc.poll() is None
+    assert (job.dir / "STOP").is_file()
+
+
+def test_save_stop_is_idempotent_and_waits_for_trainer(fake_popen):
+    job = V.TrainingJob("spin", steps=200_000)
+    job.stop()
+    deadline = job._stop_at
+    job.stop()
+    assert job._stop_at == deadline
+    assert job.status == "stopping" and job.proc.poll() is None
+    job.proc.returncode = 0
+    job.poll()
+    assert job.status == "stopped" and len(fake_popen) == 1
+
+
+def test_save_timeout_forces_stop_and_reports_checkpoint_risk(fake_popen):
+    job = V.TrainingJob("spin")
+    job.stop()
+    job._stop_at -= V.STOP_GRACE_S + 1
+    job.poll()
+    assert job.status == "stopped" and job.proc.returncode == -15
+    assert job.payload()["stopWarning"]
+
+
+def test_resume_uses_same_directory_budget_and_checkpoint(fake_popen):
+    job = V.TrainingJob("spin", steps=200_000)
+    for name in ("model.zip", "vecnormalize.pkl"):
+        (job.dir / name).touch()
+    (job.dir / "snapshot.json").write_text(json.dumps({"steps": 60_000, "next_snap": 110_000}))
+    job.stop()
+    job.proc.returncode = 0
+    job.poll()
+    assert job.payload()["canResume"]
+    assert job.resume() is None
+    assert not (job.dir / "STOP").exists()
+    assert _flag(fake_popen[-1].cmd, "--init-from") == str(job.dir)
+    assert _flag(fake_popen[-1].cmd, "--steps") == "200000"
+    assert job.progress["steps"] == 60_000 and not job.progress["done"]
+    assert job.status == "training"
+
+
+def test_resume_refuses_without_checkpoint_or_after_budget(fake_popen):
+    job = V.TrainingJob("spin", steps=1000)
+    job.stop(force=True)
+    assert job.resume() is not None
+    for name in ("model.zip", "vecnormalize.pkl"):
+        (job.dir / name).touch()
+    job.progress["lastCheckpointStep"] = 1000
+    assert not job.payload()["canResume"]
+    assert len(fake_popen) == 1
+
+
+def test_snapshot_progress_and_eta_match_saved_checkpoint(fake_popen):
+    job = V.TrainingJob("spin", steps=200_000)
+    (job.dir / "snapshot.json").write_text(json.dumps({"steps": 55_000, "next_snap": 105_000}))
+    job.progress.update(steps=60_000, sps=1000)
+    job.poll()
+    progress = job.payload()["progress"]
+    assert progress["lastCheckpointStep"] == 55_000
+    assert progress["nextSnapStep"] == 105_000
+    assert progress["etaSeconds"] == 140
+    job.stop()
+    assert job.payload()["progress"]["etaSeconds"] is None
+
+
+def test_saving_job_keeps_directory_and_compute_slot(fake_popen):
+    from fastapi import HTTPException
+    app = V.make_app([])
+    st = app.state.lab
+    st.job = V.TrainingJob("spin")
+    st.job.stop()
+    assert st.job.run_name in V.training_run_names(st)
+    clear = _endpoint(app, "/teach/clear", "POST")
+    assert not asyncio.run(clear())["cleared"]
+    status = _endpoint(app, "/teach/status", "GET")()
+    assert status["running"] and status["status"] == "stopping"
+    resume = _endpoint(app, "/teach/resume", "POST")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(resume(V.ResumeReq(runName=st.job.run_name)))
+    assert e.value.status_code == 409
 
 
 class FakeWorker:
@@ -219,7 +300,7 @@ def test_sweep_survives_an_unreadable_worker(fake_popen, monkeypatch):
                FakeWorker(2, killed)]
     _fake_worker_tree(monkeypatch, lambda: job.proc, lambda _p: workers)
 
-    job.stop()
+    job.stop(force=True)
     assert killed == [0, 2]
 
 
@@ -243,7 +324,7 @@ def test_stage_handoff_sweeps_only_the_finished_stage(fake_popen, monkeypatch):
     assert killed == [0, 1, 2], "stage 1's fleet was not the one swept"
 
     job.poll()                       # stage 2 alive: snapshot moves with it
-    job.stop()
+    job.stop(force=True)
     assert killed == [0, 1, 2, 10, 11, 12]
 
 
@@ -535,7 +616,7 @@ def test_curriculum_scale_keeps_stage_warm_start(fake_popen):
 
 def test_teach_stop_mid_chain_prevents_next_stage(fake_popen):
     job = V.TrainingJob("backflip", steps=1000)
-    job.stop()
+    job.stop(force=True)
     job.poll()
     assert job.status == "stopped"
     assert len(fake_popen) == 1  # no stage 2
@@ -543,7 +624,7 @@ def test_teach_stop_mid_chain_prevents_next_stage(fake_popen):
     # Even a stage that finished cleanly right as stop landed stays stopped.
     job2 = V.TrainingJob("backflip", steps=1000)
     _finish_stage(job2, 1000)
-    job2.stop()
+    job2.stop(force=True)
     job2.poll()
     assert job2.status == "stopped"
     assert len(fake_popen) == 2
@@ -1108,6 +1189,41 @@ def test_discover_policies_timestamps_sort_and_chains(fake_popen):
     json.dumps(runs)
 
 
+def test_policy_palette_marks_interrupted_and_unfinished_runs(fake_popen):
+    stopped = _mkrun("teach-spin-stopped", 1000)
+    unfinished = _mkrun("teach-spin-unfinished", 1000)
+    _mkrun("teach-spin-legacy", 1000)
+    (stopped / "progress.jsonl").write_text(
+        '{"steps": 50, "done": false, "stopped": "user"}\n')
+    (unfinished / "progress.jsonl").write_text(
+        '{"steps": 50, "done": false}\n')
+    by = {p["label"]: p for p in V.discover_policies() if p["group"] == "runs"}
+    assert by["teach-spin-stopped"]["runStatus"] == "stopped"
+    assert by["teach-spin-unfinished"]["runStatus"] == "unfinished"
+    assert by["teach-spin-legacy"]["runStatus"] == "done"
+
+
+def test_teach_checkpoint_onnx_appears_in_palette(fake_popen, monkeypatch):
+    run = _mkrun("teach-spin-history", 1000)
+    (run / "behavior.json").write_text('{"behavior": "spin"}')
+    ckpt = run / "checkpoints"
+    ckpt.mkdir()
+    for name in ("model_000500000.zip", "vecnormalize_000500000.pkl",
+                 "policy_000500000.onnx"):
+        (ckpt / name).touch()
+    entries = [p for p in V.discover_policies()
+               if p["id"] == "ckpt:teach-spin-history@500k"]
+    assert len(entries) == 1
+    assert entries[0]["path"] == str(ckpt / "policy_000500000.onnx")
+    sentinel = object()
+    monkeypatch.setattr(V, "_onnx_infer", lambda path: sentinel)
+    V._infer_cache.clear()
+    assert V.load_policy_infer(entries[0]["id"]) is sentinel
+    assert V.env_kwargs_for_policy_path(entries[0]["path"])["behavior_id"] == "spin"
+    assert V.is_trick_duck(types.SimpleNamespace(
+        id="d9", policy_id=entries[0]["id"]))
+
+
 def test_run_mtime_fallbacks(fake_popen):
     """policy.onnx first, then live.onnx, then progress.jsonl — a run still
     training (or stopped before export) must still get a timestamp."""
@@ -1380,13 +1496,13 @@ def test_teach_endpoint_makes_the_budget_sticky(fake_popen, monkeypatch):
     assert out["job"]["stepBudget"] == 3_500_000
     assert V.load_teach_weights()["backflip"]["steps"] == 3_500_000
 
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
     again = asyncio.run(teach(V.TeachReq(text="do a backflip")))
     assert again["job"]["stepBudget"] == 3_500_000
     assert again["job"]["stageSteps"] == out["job"]["stageSteps"]
 
     # A per-stage pin sticks too, and a new total re-splits around it.
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
     pinned = asyncio.run(teach(V.TeachReq(text="do a backflip",
                                           stageSteps={"1": 400_000})))
     assert pinned["job"]["stageBudgets"] == {"1": 400_000}
@@ -1429,7 +1545,7 @@ def test_teach_text_is_the_behavior_id(fake_popen, monkeypatch, tmp_path):
     assert out["job"]["behavior"]["clip"] == "backflip"
     assert out["job"]["behavior"]["title"] == "Perform “backflip”"
     assert _launch_env(fake_popen[-1])["MICRODUCK_CLIP"] == "backflip"
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
 
     # The lab's own display title still reaches the imitation recipe with
     # that clip (an older panel echoes it back verbatim) — it must never
@@ -1438,7 +1554,7 @@ def test_teach_text_is_the_behavior_id(fake_popen, monkeypatch, tmp_path):
     assert out["matched"], out
     assert out["job"]["behavior"]["id"] == "imitate"
     assert _launch_env(fake_popen[-1])["MICRODUCK_CLIP"] == "backflip"
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
 
     # ...and a title naming a clip that was never saved is refused, not
     # silently trained against the recipe's default clip.
@@ -1452,7 +1568,7 @@ def test_teach_text_is_the_behavior_id(fake_popen, monkeypatch, tmp_path):
     for b in B.for_robot("microduck"):
         out = asyncio.run(teach(V.TeachReq(text=b.id)))
         assert out["matched"] and out["job"]["behavior"]["id"] == b.id, b.id
-        asyncio.run(stop())
+        asyncio.run(stop(force=True))
 
 
 def test_adopted_imitation_run_keeps_its_clip(fake_popen, monkeypatch, tmp_path):
@@ -1485,7 +1601,7 @@ def test_adopted_imitation_run_keeps_its_clip(fake_popen, monkeypatch, tmp_path)
     assert out["matched"], out
     assert _launch_env(fake_popen[-1])["MICRODUCK_CLIP"] == "hop"
     assert _flag(fake_popen[-1].cmd, "--init-from") == str(run)
-    asyncio.run(_endpoint(app, "/teach/stop", "POST")())
+    asyncio.run(_endpoint(app, "/teach/stop", "POST")(force=True))
 
     # An older panel sends no clip at all: the run's own clip still wins over
     # the recipe default ("backflip").
@@ -1493,7 +1609,7 @@ def test_adopted_imitation_run_keeps_its_clip(fake_popen, monkeypatch, tmp_path)
                                        initFrom="teach-imitate-hop-abc123")))
     assert out["matched"], out
     assert _launch_env(fake_popen[-1])["MICRODUCK_CLIP"] == "hop"
-    asyncio.run(_endpoint(app, "/teach/stop", "POST")())
+    asyncio.run(_endpoint(app, "/teach/stop", "POST")(force=True))
 
     # A run that predates the record seats clip-less, like before.
     old = _seed_finished_run("teach-imitate-old111", behavior="imitate")
@@ -1528,6 +1644,24 @@ def _seed_finished_run(name, behavior="spin", weights=None, steps=2000):
     return run
 
 
+def test_adopt_interrupted_export_is_resumable_not_finished(fake_popen):
+    run = _seed_finished_run("teach-spin-interrupted", steps=100_000)
+    for name in ("model.zip", "vecnormalize.pkl", "policy.onnx"):
+        (run / name).touch()
+    (run / "progress.jsonl").write_text(json.dumps({
+        "steps": 50_000, "total": 100_000, "done": False,
+        "stopped": "user"}) + "\n")
+    job = V.TrainingJob.adopt(run.name)
+    assert job.status == "stopped" and job.payload()["canResume"]
+
+    # A crash after a checkpoint can leave an older export in the directory.
+    # A terminal done:false record must not reclassify it as completed.
+    (run / "progress.jsonl").write_text(json.dumps({
+        "steps": 50_000, "total": 100_000, "done": False}) + "\n")
+    job = V.TrainingJob.adopt(run.name)
+    assert job.status == "failed" and job.payload()["canResume"]
+
+
 def test_teach_load_seats_finished_run(fake_popen, monkeypatch):
     """POST /teach/load pulls a finished run into the panel: its payload
     streams in "done" state (sliders unlocked, fine-tune targeting that run)
@@ -1560,7 +1694,7 @@ def test_teach_load_seats_finished_run(fake_popen, monkeypatch):
     assert asyncio.run(teach(V.TeachReq(text="spin in place")))["matched"]
     refused = asyncio.run(load(V.LoadRunReq(policy="run:teach-spin-adopt1")))
     assert not refused["ok"] and "stop it first" in refused["message"]
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
 
 
 def test_fine_tune_merges_over_the_seated_runs_weights(fake_popen, monkeypatch):
@@ -1602,7 +1736,7 @@ def test_fine_tune_merges_over_the_seated_runs_weights(fake_popen, monkeypatch):
     # …and the merged set is what sticks for this behavior.
     assert V.load_teach_weights()["spin"]["weights"] == {"spin_fast": 6.05,
                                                          "head_up": 1.0}
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
 
     # An explicit value for a key the run trained under still wins (that is
     # the user dragging the slider), and no weights at all means "exactly
@@ -1612,12 +1746,12 @@ def test_fine_tune_merges_over_the_seated_runs_weights(fake_popen, monkeypatch):
                                        weights={"spin_fast": 3.0})))
     assert json.loads(_flag(fake_popen[1].cmd, "--weights-json")) == {
         "spin_fast": 3.0}
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
     out = asyncio.run(teach(V.TeachReq(text="spin in place",
                                        initFrom="teach-spin-seat7")))
     assert json.loads(_flag(fake_popen[2].cmd, "--weights-json")) == {
         "spin_fast": 6.05}
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
 
     # A run predating behavior.json fine-tunes under the request alone.
     bare = V.RUNS_DIR / "teach-spin-bare7"
@@ -1630,7 +1764,7 @@ def test_fine_tune_merges_over_the_seated_runs_weights(fake_popen, monkeypatch):
     assert out["matched"]
     assert json.loads(_flag(fake_popen[3].cmd, "--weights-json")) == {
         "head_up": 1.0}
-    asyncio.run(stop())
+    asyncio.run(stop(force=True))
 
 
 def test_adopted_job_survives_the_lab_poll_cycle(fake_popen):
@@ -1645,7 +1779,7 @@ def test_adopted_job_survives_the_lab_poll_cycle(fake_popen):
     assert job.train_fps() is None
     stats = V.StatsSampler().sample(job)
     assert stats["trainer"] is None and stats["trainFps"] is None
-    job.stop()  # lifespan shutdown stops whatever job is seated
+    job.stop(force=True)  # lifespan shutdown stops whatever job is seated
     assert fake_popen == []
 
 
@@ -1833,7 +1967,7 @@ def test_scale_after_a_stop_does_not_strand_a_trainer(fake_popen, monkeypatch):
     job = V.TrainingJob("run")
     before = len(fake_popen)
 
-    job.stop()                      # the stop lands...
+    job.stop(force=True)                      # the stop lands...
     job.scale(helpers=2)            # ...and the in-flight rescale must yield
 
     assert job.status == "stopped"
@@ -2303,10 +2437,10 @@ def test_teach_refuses_an_unknown_or_unsafe_clip(fake_popen):
         assert res["matched"] is False
 
 
-def test_download_route_serves_the_baked_onnx_with_live_fallback(fake_popen):
+def test_download_route_never_serves_a_live_preview(fake_popen):
     """GET /runs/{name}/policy.onnx hands out the DEPLOYABLE artifact: the
-    baked policy.onnx when the run finished, the live.onnx snapshot while it
-    is still training, and never a raw checkpoint. Same name guard as
+    baked policy.onnx when available, and never a live preview or raw
+    checkpoint. Same name guard as
     DELETE — the string picks a directory."""
     from fastapi import HTTPException
     app = V.make_app([])
@@ -2331,10 +2465,22 @@ def test_download_route_serves_the_baked_onnx_with_live_fallback(fake_popen):
     assert str(res.path).endswith("teach-spin-done/policy.onnx")
     assert "teach-spin-done.onnx" in res.headers["content-disposition"]
 
-    # Mid-training run: fall back to the newest live snapshot.
+    # An interrupted run may retain an export for preview and resumption,
+    # but that artifact is not a finished policy for deployment.
+    stopped = _run_with_files(V.RUNS_DIR, "teach-spin-stopped",
+                              sizes=(("policy.onnx", 100),))
+    (stopped / "progress.jsonl").write_text(
+        '{"steps": 50000, "total": 100000, "done": false, "stopped": "user"}\n')
+    with pytest.raises(HTTPException) as e:
+        download("teach-spin-stopped")
+    assert e.value.status_code == 409
+
+    # Mid-training preview is never silently downloaded as a final policy.
     _run_with_files(V.RUNS_DIR, "teach-spin-live",
                     sizes=(("live.onnx", 50),))
-    assert str(download("teach-spin-live").path).endswith("teach-spin-live/live.onnx")
+    with pytest.raises(HTTPException) as e:
+        download("teach-spin-live")
+    assert e.value.status_code == 404
 
 
 def test_delete_route_maps_guards_to_status_codes_and_toasts(fake_popen):

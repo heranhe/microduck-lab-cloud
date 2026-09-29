@@ -79,6 +79,7 @@ import {
   type RigVector,
 } from "@/lib/rig";
 import { pushToast } from "./Toasts";
+import { usePanelDrag } from "./usePanelDrag";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
 const TRACK_PAD = 10; // px inset of the timeline track inside its box
@@ -142,6 +143,7 @@ const field: React.CSSProperties = {
 export function AnimPanel() {
   const { tr } = useI18n();
   const [open, setOpen] = useState(() => loadJSON("animOpen", false));
+  const panelDrag = usePanelDrag("anim");
   // Which body is being posed. Persisted; a loaded clip can switch it.
   const [robot, setRobot] = useState<RobotId>(() => loadJSON<RobotId>("animRobot", "microduck"));
   const [robots, setRobots] = useState<RobotInfo[]>([]);
@@ -678,6 +680,7 @@ export function AnimPanel() {
 
   return (
     <div
+      {...panelDrag.panelProps}
       ref={(el) => {
         // ◎ focus frames the robot above this panel — it needs the real rect.
         animStore.panelEl = el;
@@ -688,9 +691,7 @@ export function AnimPanel() {
       data-policy-ui
       style={{
         position: "absolute",
-        bottom: 14,
-        left: "50%",
-        transform: "translateX(-50%)",
+        ...(panelDrag.point ? { left: panelDrag.point.x, top: panelDrag.point.y } : { bottom: 14, left: "50%", transform: "translateX(-50%)" }),
         // Bottom-centre, capped so the right edge stays clear of the teach
         // panel (right: 14, width 320 → its left edge is 100vw - 334): a
         // centred panel of width W reaches 50vw + W/2, hence the 688px term.
@@ -713,11 +714,13 @@ export function AnimPanel() {
         backdropFilter: "blur(6px)",
         zIndex: 20,
         overflow: "hidden",
+        ...panelDrag.resizeStyle,
       }}
     >
       {/* ---- header ---- */}
       <div
-        style={{
+        {...panelDrag.dragHandle}
+        style={{ cursor: "inherit", touchAction: "none", userSelect: "none",
           padding: "7px 12px",
           fontWeight: 700,
           fontSize: 13,

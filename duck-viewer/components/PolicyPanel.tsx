@@ -38,10 +38,11 @@ import {
 // lives (lib/robots.robotEmoji) — one definition of one label.
 import { robotChipLabel, setActiveRobot, useActiveRobot } from "@/lib/activeRobot";
 import { runRows, splitTail, trickGroups, type RunRow } from "@/lib/tricks";
+import { usePanelDrag } from "./usePanelDrag";
 import { assignDrag, clearAssignDrag, isCanvasAt, nearestDuck } from "@/lib/assign";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
-import { modalIsOpen, setPolicyOpen, useTeachHeight } from "@/lib/ui";
+import { modalIsOpen, setPolicyOpen } from "@/lib/ui";
 import { Tip } from "./TeachPanel";
 import { pushToast } from "./Toasts";
 
@@ -94,6 +95,19 @@ function TailText({ text, tail }: { text: string; tail?: number }) {
       {end && <span style={{ flexShrink: 0, whiteSpace: "pre" }}>{end}</span>}
     </>
   );
+}
+
+function RunBadge({ status }: { status?: Policy["runStatus"] }) {
+  const { tr } = useI18n();
+  if (!status) return null;
+  const stopped = status === "stopped";
+  const unfinished = status === "unfinished";
+  return <span
+    title={stopped ? tr("Interrupted · resumable from a saved checkpoint", "已中断 · 可从检查点续训")
+      : unfinished ? tr("Unfinished · check the run before exporting", "未完成 · 导出前请检查运行")
+      : tr("Completed", "已完成")}
+    style={{ color: stopped ? "#e9ba79" : unfinished ? "#e99883" : "#83caa7", fontSize: 10, flexShrink: 0 }}
+  >{stopped ? "■" : unfinished ? "◌" : "✔"}</span>;
 }
 
 /** Whether chips prefix their robot ("g1 · "). Only needed when the list
@@ -251,11 +265,9 @@ function DeleteBtn({
   );
 }
 
-/** Hover-revealed ⤓ next to a run: downloads the trained brain as .onnx.
- *  Serves the run's baked export (policy.onnx, obs normalizer included —
- *  the deployable artifact; raw checkpoints are never handed out), falling
- *  back to the live snapshot while a run is still training. A plain anchor,
- *  not fetch: the browser streams the file straight from the lab. */
+/** Hover-revealed ⤓ next to a run: downloads a completed export only.
+ *  The server rejects interrupted and in-progress runs; show that response
+ *  here instead of navigating the browser to a JSON error page. */
 function DownloadBtn({
   show,
   run,
@@ -270,12 +282,38 @@ function DownloadBtn({
   onBlur: () => void;
 }) {
   const [hover, setHover] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const download = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`${LAB_HTTP}/runs/${encodeURIComponent(run)}/policy.onnx`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        pushToast(`⚠ ${body.detail ?? `Download failed (${response.status})`}`);
+        return;
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${run}.onnx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      pushToast(`⚠ ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <a
+    <button
+      type="button"
       aria-label={`download ${label}`}
-      title={`download ${label} — the trained .onnx brain, ready to run`}
-      href={`${LAB_HTTP}/runs/${encodeURIComponent(run)}/policy.onnx`}
-      download
+      title={`download ${label} — completed .onnx export only`}
+      disabled={busy}
+      onClick={download}
       onFocus={onFocus}
       onBlur={onBlur}
       onMouseEnter={() => setHover(true)}
@@ -293,11 +331,10 @@ function DownloadBtn({
         fontSize: 11,
         lineHeight: 1,
         padding: "2px 3px",
-        textDecoration: "none",
       }}
     >
-      ⤓
-    </a>
+      {busy ? "…" : "⤓"}
+    </button>
   );
 }
 
@@ -473,6 +510,7 @@ export function PolicyPanel({
 }: {
   clientRef: React.MutableRefObject<LabClient | null>;
 }) {
+  const panelDrag = usePanelDrag("policy");
   const { tr } = useI18n();
   // Starts collapsed to its pill: the scene, not the roster, is the first
   // thing to see. The choice is persisted, so a user who opens it keeps it.
@@ -492,7 +530,7 @@ export function PolicyPanel({
     });
   // Measured height of the teach panel below (0 until it reports in) — this
   // panel's list grows into whatever teach leaves free.
-  const teachHeight = useTeachHeight();
+
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [robots, setRobots] = useState<LabRobot[]>(DEFAULT_ROBOTS);
   // The palette's shipped sections, as the lab names them. The viewer held
@@ -938,6 +976,7 @@ export function PolicyPanel({
             onUp={chipUp(row.p)}
             onDouble={chipDouble(row.p)}
           />
+          <RunBadge status={row.p.runStatus} />
           {row.p.mtime != null && (
             <span style={{ color: "#8b93a3", fontSize: 9, flexShrink: 0 }}>
               {relTime(row.p.mtime)}
@@ -1026,6 +1065,7 @@ export function PolicyPanel({
           <span style={{ color: "#8b93a3", fontSize: 9, flexShrink: 0 }}>
             {row.stages.length} stages · {relTime(row.newest)}
           </span>
+          <RunBadge status={picked.runStatus} />
           <span style={{ flex: 1 }} />
           {/* ⤓ downloads the stage the ▶ chip assigns — the
               picked one when something measured a stage best,
@@ -1245,21 +1285,16 @@ export function PolicyPanel({
   return (
     <>
       <div
+        {...panelDrag.panelProps}
         data-policy-ui
         style={{
           position: "absolute",
           // Above the ducks' floating DOM labels (drei Html, zIndexRange
           // [10, 0]) — labels must never scribble over the chip list.
           zIndex: 20,
-          right: 14,
-          top: 96,
+          ...(panelDrag.point ? { left: panelDrag.point.x, top: panelDrag.point.y } : { right: 14, top: 96 }),
           width: 230,
-          // Sits below the toolbar + status bar (top: 96px).
-          // Chrome to subtract = 96px top inset + 14px gap +
-          // teach's 14px bottom inset + 2px border = 126px.
-          maxHeight: teachHeight
-            ? `calc(100vh - ${Math.round(teachHeight) + 126}px)`
-            : "calc(100vh - 150px)",
+          maxHeight: "calc(100vh - 110px)",
           display: "flex",
           flexDirection: "column",
           background: "rgba(14, 16, 20, 0.82)",
@@ -1271,10 +1306,12 @@ export function PolicyPanel({
           lineHeight: 1.55,
           backdropFilter: "blur(6px)",
           overflow: "hidden",
+          ...panelDrag.resizeStyle,
         }}
       >
         <div
-          style={{
+          {...panelDrag.dragHandle}
+          style={{ cursor: "inherit", touchAction: "none", userSelect: "none",
             padding: "8px 12px",
             fontWeight: 700,
             fontSize: 13,

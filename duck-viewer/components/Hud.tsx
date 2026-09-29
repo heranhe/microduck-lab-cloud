@@ -4,7 +4,6 @@
 // so the 25 Hz stream never causes React re-renders), a system-stats strip,
 // helper spawn/remove buttons, and the command bar.
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteHfToken,
@@ -264,9 +263,10 @@ function trainFpsLabel(fps: number | null): string {
 }
 
 /** Finished-run badge for the stats strip's "train …" cell. */
-const TRAIN_STATE_BADGE: Record<"done" | "stopped" | "failed", string> = {
+const TRAIN_STATE_BADGE: Record<"done" | "stopping" | "stopped" | "failed", string> = {
   done: "✔ done",
   stopped: "■ stopped",
+  stopping: "saving…",
   failed: "✗ failed",
 };
 
@@ -499,15 +499,7 @@ export function Hud({
           }}
         >
           <span style={{ flex: 1 }}>
-            🦆 {tr("duck lab", "鸭子实验室")}{" "}
-            {/* The world page's only other way in is typing the URL. */}
-            <Link
-              href="/sim"
-              title={tr("the world page — rooms, sensors, brains", "世界页面：房间、传感器与智能体")}
-              style={{ color: "#9aa5b1", fontWeight: 400, textDecoration: "none", marginLeft: 6 }}
-            >
-              {tr("sim", "仿真")} →
-            </Link>
+            🦆 {tr("Ducks in the scene", "场景里的鸭子")}
           </span>
           <button onClick={toggle} title={tr("Switch language", "切换语言")}
             style={{ background: "none", border: "none", color: "#9aa5b1", cursor: "pointer", fontSize: 10 }}>
@@ -753,7 +745,7 @@ export function Hud({
             backdropFilter: "blur(6px)",
           }}
         >
-          🦆 {tr("duck lab", "鸭子实验室")}{" "}
+          🦆 {tr("Ducks in the scene", "场景里的鸭子")}{" "}
           <span style={{ color: link.color }} title={link.title}>
             {link.dot}
           </span>

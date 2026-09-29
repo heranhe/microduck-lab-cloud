@@ -115,12 +115,30 @@ function Ducks({
     }[]
   >([]);
   const rosterSig = useRef("");
+  const focusedTraining = useRef("");
   const duckRefs = useRef(new Map<string, React.MutableRefObject<DuckFrame | null>>());
 
   // Fan the single frame out into per-duck refs (no React re-render per frame).
-  useFrame(() => {
+  useFrame(({ camera, controls }) => {
     const f = client.frame;
     if (!f) return;
+    const job = f.training;
+    const jobKey = job?.runName.replace(/-s\d+$/, "");
+    if (job?.status === "training" && jobKey && jobKey !== focusedTraining.current) {
+      const idx = f.ducks.findIndex((d) => d.id === "trainee");
+      const trunk = f.ducks[idx]?.bodies[1];
+      const orbit = controls as unknown as ControlsLike | null;
+      const capture = getCapture();
+      if (trunk && orbit && capture.phase !== "framing" && capture.phase !== "recording") {
+        const off = frameOffsets(f.ducks)[idx];
+        const target = new THREE.Vector3(trunk[0] + off[0], trunk[2], -(trunk[1] + off[1]));
+        camera.position.add(target.clone().sub(orbit.target));
+        orbit.target.copy(target);
+        orbit.update?.();
+        setSelectedDuck("trainee");
+        focusedTraining.current = jobKey;
+      }
+    }
     // The robot is part of the signature: a slot that changes body must
     // re-render with the other mesh set, and the name alone need not change.
     const sig = f.ducks.map((d) => `${d.id}\t${d.name}\t${d.robot ?? ""}`).join("\n");
@@ -496,7 +514,7 @@ export default function Viewer() {
         const training = clientRef.current?.frame?.training;
         // Mirror the HUD-row rules: the server refuses these anyway, but a
         // keypress that silently does nothing reads as broken.
-        if (sel === "trainee" && (training?.status === "training" || training?.restarting)) {
+        if (sel === "trainee" && (training?.status === "training" || training?.status === "stopping" || training?.restarting)) {
           pushToast("🎓 the trainee can't be removed while training");
           return;
         }

@@ -269,6 +269,13 @@ def load_hf_token() -> dict | None:
 # cannot quietly grow --envs if a helper spawn ever calls it again.
 BASE_ENVS = 32          # train_behavior's own --envs default
 ENVS_PER_HELPER = 0
+# Numbered checkpoints a teach run keeps, so a stop is not "only the last
+# overwrite". train.py has its own CheckpointCallback; this flag is for
+# train_behavior, which otherwise keeps a single model.zip.
+CHECKPOINT_EVERY = 500_000
+# How long a "save and stop" waits for the trainer to notice STOP and exit
+# before the lab kills it. Long enough for one PPO rollout plus the ONNX export.
+STOP_GRACE_S = 90.0
 RECOMMENDED_ENVS = BASE_ENVS
 MAX_HELPERS = int(os.environ.get("DUCK_MAX_HELPERS", "6"))
 RECOMMENDED_HELPERS = MAX_HELPERS
@@ -313,6 +320,56 @@ def split_step_budget(declared: list[int], total: int) -> list[int]:
         out[j] -= 1
         short += 1
     return out
+
+
+# Cloud jobs run THIS repo's trainer, not a different upstream task. The
+# remote tree uses the same run directory the lab would, so a checkpoint
+# saved there can be resumed by the same code.
+CLOUD_REMOTE_RUNS = "/content/microduck-cloud-job/runs"
+CLOUD_SNAP = 50_000
+
+
+def cloud_train_argv(behavior, run_name: str, steps: int, envs: int,
+                     weights: dict | None, init_from: str | None) -> list[str]:
+    """The argv `python` runs on the cloud machine. Same flags as a local job."""
+    if behavior.trainer:
+        cmd = [*behavior.trainer, "--run-name", run_name, "--envs", str(envs),
+               "--steps", str(int(steps)), "--snap-steps", str(CLOUD_SNAP)]
+    else:
+        cmd = ["-m", "microduck_local.train_behavior", behavior.id,
+               "--run-name", run_name, "--envs", str(envs),
+               "--steps", str(int(steps)), "--snap-steps", str(CLOUD_SNAP),
+               "--checkpoint-every", str(CHECKPOINT_EVERY)]
+        if weights:
+            cmd += ["--weights-json", json.dumps(weights)]
+    if init_from:
+        cmd += ["--init-from", init_from]
+    return cmd
+
+
+def cloud_stage_plan(behavior, steps: int, envs: int,
+                     weights: dict | None) -> list[dict]:
+    """One entry per process the cloud job should run, in order.
+
+    A curriculum is the same chain the local lab runs: each stage warm-starts
+    from the previous stage's directory. A single-run behavior is one entry.
+    """
+    curriculum = tuple(getattr(behavior, "curriculum", ()) or ())
+    if behavior.trainer or not curriculum:
+        env = dict(curriculum[-1].env) if curriculum and not behavior.trainer else {}
+        return [{"argv": cloud_train_argv(behavior, "cloud", steps, envs, weights, None),
+                 "env": env, "runName": "cloud"}]
+    budgets = split_step_budget([s.steps for s in curriculum], steps)
+    stages = []
+    for i, stage in enumerate(curriculum):
+        name = f"cloud-s{i + 1}"
+        init = f"{CLOUD_REMOTE_RUNS}/cloud-s{i}" if i else None
+        stages.append({
+            "argv": cloud_train_argv(behavior, name, budgets[i], envs, weights, init),
+            "env": dict(stage.env),
+            "runName": name,
+        })
+    return stages
 
 
 # Auto demo script: (seconds, [vx, vy, wz]) — loops.
@@ -879,6 +936,28 @@ def _run_mtime(run: Path) -> float | None:
     return None
 
 
+def _last_progress_record(run: Path) -> dict:
+    """Read just the tail of a run log for palette and download status."""
+    path = run / "progress.jsonl"
+    try:
+        with path.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            lines = f.read().splitlines()
+    except OSError:
+        return {}
+    # A trainer may currently be appending the last line. Ignore a partial
+    # JSON record and use the last complete one instead.
+    for line in reversed(lines):
+        try:
+            value = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
 def _run_size(run: Path) -> int:
     """Bytes a run dir occupies, checkpoints included — what deleting it
     frees. The delete confirmation shows this, so a user can tell a 4 MB
@@ -965,11 +1044,16 @@ def discover_policies() -> list[dict]:
         runs.sort(key=lambda r: (-(_run_mtime(r) or 0.0), r.name))
         for run in runs:
             if (run / "policy.onnx").exists():
+                latest = _last_progress_record(run)
                 entry = {"id": f"run:{run.name}", "label": run.name,
                          "group": "runs", "path": str(run / "policy.onnx"),
                          "robot": policy_robot(run),
                          "mtime": _run_mtime(run),
-                         "sizeBytes": _run_size(run)}
+                         "sizeBytes": _run_size(run),
+                         "runStatus": ("stopped" if latest.get("stopped") else
+                                       "done" if latest.get("done") is True else
+                                       "unfinished" if latest.get("done") is False else
+                                       "done")}
                 # What a PERSON reads (run_record.py): the chip's title, the
                 # measured sentence behind it, and the ★ on the stage of a
                 # chain worth using. Absent for a run nobody has described —
@@ -991,14 +1075,31 @@ def discover_policies() -> list[dict]:
                     entry["chain"] = m.group(1)
                     entry["stage"] = int(m.group(2))
                 run_entries.append(entry)
-            for z in sorted(run.glob("checkpoints/model_*_steps.zip"),
-                            key=lambda p: int(p.stem.split("_")[1])):
-                steps = z.stem.split("_")[1]
-                vn = z.parent / f"model_vecnormalize_{steps}_steps.pkl"
-                if vn.exists():
+            checkpoint_zips = [
+                (int(match.group(1)), z)
+                for z in run.glob("checkpoints/model_*.zip")
+                if (match := re.fullmatch(r"model_(\d+)(?:_steps)?", z.stem))
+            ]
+            for _, z in sorted(checkpoint_zips):
+                parts = z.stem.split("_")
+                steps = parts[1]
+                if len(parts) == 3 and parts[2] == "steps":
+                    # Original walk trainer: zip + vecnormalizer, loaded by
+                    # _checkpoint_infer when a chip is assigned.
+                    vn = z.parent / f"model_vecnormalize_{steps}_steps.pkl"
+                    artifact = z
+                elif len(parts) == 2:
+                    # Teach trainer: each retained checkpoint has its own
+                    # deployable ONNX. Use that for preview rather than
+                    # reloading a raw SB3 zip on every assignment.
+                    vn = z.parent / f"vecnormalize_{steps}.pkl"
+                    artifact = z.parent / f"policy_{steps}.onnx"
+                else:
+                    continue
+                if vn.is_file() and artifact.is_file():
                     label = f"{run.name}@{int(steps) // 1000}k"
                     ckpt_entries.append({"id": f"ckpt:{label}", "label": label,
-                                         "group": "checkpoints", "path": str(z),
+                                         "group": "checkpoints", "path": str(artifact),
                                          "robot": policy_robot(run)})
     return out + run_entries + ckpt_entries
 
@@ -1051,7 +1152,7 @@ def training_run_names(st: "LabState") -> set[str]:
     the launch of the next one; the whole chain is off limits until the job
     stops."""
     job = getattr(st, "job", None)
-    if job is None or job.status != "training":
+    if job is None or job.status not in ("training", "stopping"):
         return set()
     base = job._base_name
     return {job.run_name, base} | {
@@ -1392,6 +1493,34 @@ class TrainingJob:
         self._elapsed_final = None
         self.status = "done"
         self.proc = None
+        self.poll()
+        if self.progress.get("stopped"):
+            self.status = "stopped"
+        elif self.progress.get("done") is False or (
+            not self.progress.get("done") and not (run / "policy.onnx").is_file()
+        ):
+            self.status = "failed"
+        if self.status in ("stopped", "failed"):
+            try:
+                saved = json.loads((run / "teach-job.json").read_text())
+            except (OSError, ValueError):
+                saved = {}
+            self._stage_env = dict(saved.get("stageEnv", self._stage_env))
+            self.extra_env = dict(saved.get("extraEnv", self.extra_env))
+            self.snap_steps = saved.get("snapSteps")
+            self.envs = int(saved.get("envs", BASE_ENVS))
+            if saved.get("staged") and curriculum:
+                self.stages = curriculum
+                self.stage_idx = int(saved["stageIdx"])
+                self._start_idx = int(saved.get("startIdx", 0))
+                self._base_name = saved["base"]
+                self.stage_steps = list(saved["stageSteps"])
+                self.total_steps = self.stage_steps[self.stage_idx]
+                self.weights = self._clamp_weights(saved.get("weights"))
+                self.stage_weights = self._clamp_stage_weights(saved.get("stageWeights"))
+                self.budget = saved.get("budget")
+                self.stage_budgets = self._clamp_stage_budgets(saved.get("stageBudgets"))
+                self._refresh_extra_keys()
         return self
 
     def _clamp_stage_budgets(self, stage_budgets: dict | None) -> dict[int, int]:
@@ -1506,6 +1635,14 @@ class TrainingJob:
         return {**self.extra_env, **self._stage_env}
 
     def _launch(self, init_from: Path | None) -> subprocess.Popen:
+        record = {"base": self._base_name, "stageIdx": self.stage_idx,
+                  "startIdx": self._start_idx, "stageSteps": self.stage_steps,
+                  "staged": bool(self.stages), "stageEnv": self._stage_env,
+                  "extraEnv": self.extra_env, "weights": self.weights,
+                  "stageWeights": self.stage_weights, "envs": self.envs,
+                  "snapSteps": self.snap_steps, "budget": self.budget,
+                  "stageBudgets": self.stage_budgets}
+        _atomic_write_json(self.dir / "teach-job.json", record)
         if self.behavior.trainer:
             # Another body's task: its own trainer, same artifacts. train.py
             # writes progress.jsonl + live.onnx exactly as train_behavior
@@ -1540,6 +1677,7 @@ class TrainingJob:
         weights = self.stage_launch_weights()
         if weights:
             cmd += ["--weights-json", json.dumps(weights)]
+        cmd += ["--checkpoint-every", str(CHECKPOINT_EVERY)]
         if init_from is not None:
             cmd += ["--init-from", str(init_from)]
         log = open(self.dir / "train.log", "a")
@@ -1596,7 +1734,7 @@ class TrainingJob:
         recycled raises NoSuchProcess instead of signalling whatever process
         now owns that number.
         """
-        if self.proc.poll() is None:
+        if self.proc is not None and self.proc.poll() is None:
             try:
                 self._workers = psutil.Process(self.proc.pid).children(
                     recursive=True)
@@ -1710,10 +1848,27 @@ class TrainingJob:
             if m > self._live_mtime + 0.5:
                 self._live_mtime = m
                 snap = True
+        try:
+            snapshot = json.loads((self.dir / "snapshot.json").read_text())
+            self.progress["lastCheckpointStep"] = int(snapshot["steps"])
+            self.progress["next_snap"] = int(snapshot["next_snap"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         if self.proc is None:  # adopted run: nothing running, nothing to reap
             return changed, snap
         # During scale() the old proc is dead on purpose — not a failure.
-        if (self.proc.poll() is not None and self.status == "training"
+        # A save-and-stop that the trainer never noticed (hung before the
+        # first step) must not leave the fleet running. Past the grace window,
+        # kill it the old way and sweep the workers we already snapshotted.
+        if (self.status == "stopping" and self.proc is not None
+                and self.proc.poll() is None
+                and time.time() - getattr(self, "_stop_at", time.time()) > STOP_GRACE_S):
+            self._terminate_tree(wait_s=0)
+            self.status = "stopped"
+            self.stop_warning = "保存超时，已强制终止；只能从最近成功保存的检查点继续。"
+            self._freeze_elapsed()
+            return True, snap
+        if (self.proc.poll() is not None and self.status in ("training", "stopping")
                 and not self.restarting):
             # A trainer the lab did not kill itself (OOM, a stray kill -9, a
             # crash by signal) never runs multiprocessing's atexit hook, so it
@@ -1723,7 +1878,15 @@ class TrainingJob:
             # no-op, and a stage handoff sweeps the finished stage's fleet
             # before _advance_stage() rebinds self.proc to the next one.
             self._sweep_workers()
-            if (self.proc.returncode == 0
+            if self.stop_requested:
+                # User asked to stop. A clean exit here already wrote the
+                # checkpoint; do not chain the next curriculum stage.
+                self.status = "stopped"
+                self.finished_clean = False
+                if self.proc.returncode != 0:
+                    self.stop_warning = "保存期间训练异常退出；只能使用最近成功保存的检查点。"
+                self._freeze_elapsed()
+            elif (self.proc.returncode == 0
                     and self.stage_idx < len(self.stages) - 1):
                 # Stage complete → chain the next one. Advancing on process
                 # EXIT (not the progress "done" line) guarantees the finished
@@ -1754,23 +1917,85 @@ class TrainingJob:
             return None
         return (s1 - s0) / (e1 - e0)
 
-    def stop(self) -> None:
-        """Stop the whole job: kill the current stage's subprocess, and the
-        "stopped" status keeps poll() from ever chaining the next stage."""
-        # Non-blocking: this runs on the event loop, so the trainer is not
-        # reaped here (poll() collects it later) — but its workers are swept,
-        # which is the leak that mattered.
-        #
-        # stop_requested is checked by scale(), which runs on a worker thread:
-        # without it, a stop landing MID-RESCALE killed the old (already dead)
-        # process, set status="stopped", and then scale() went on to launch a
-        # brand-new trainer and rebind self.proc. poll() is gated on
-        # status == "training", so that trainer — plus its 16-32 fork workers —
-        # ran unreachable until the lab exited.
+    def stop(self, force: bool = False) -> None:
+        """Stop the whole job.
+
+        The default asks the trainer to save (it watches a STOP file and then
+        exits through its normal snapshot + ONNX export) and does not block
+        the event loop. `force=True` is the old immediate SIGTERM, used when
+        the lab itself is exiting or the trainer ignored STOP. Either way
+        "stopped" keeps poll() from chaining the next stage.
+
+        stop_requested is checked by scale(), which runs on a worker thread:
+        without it, a stop landing MID-RESCALE killed the old (already dead)
+        process, set status="stopped", and then scale() went on to launch a
+        brand-new trainer and rebind self.proc.
+        """
+        if self.status == "stopping" and not force:
+            return
         self.stop_requested = True
-        self._terminate_tree(wait_s=0)
-        self.status = "stopped"
-        self._freeze_elapsed()
+        self._stop_at = time.time()
+        if self.proc is None or self.proc.poll() is not None:
+            if self.proc is not None:
+                self._sweep_workers()
+            self.status = "stopped"
+            self._freeze_elapsed()
+            return
+        if force:
+            # Immediate: snapshot the fleet first, then SIGTERM. Non-blocking
+            # (wait_s=0) because this runs on the event loop.
+            self._terminate_tree(wait_s=0)
+            self.status = "stopped"
+            self._freeze_elapsed()
+            return
+        self._snapshot_workers()
+        try:
+            (self.dir / "STOP").write_text("user\n")
+        except OSError:
+            self._terminate_tree(wait_s=0)
+            self.status = "stopped"
+            self._freeze_elapsed()
+            return
+        self.status = "stopping"
+
+    def resume(self) -> str | None:
+        """Continue this run from its own checkpoint. None on success, else
+        a message the panel can show. Same directory, so the step counter
+        keeps going and `--steps` stays the original target."""
+        reason = self.resume_reason()
+        if reason:
+            return reason
+        try:
+            (self.dir / "STOP").unlink(missing_ok=True)
+            proc = self._launch(init_from=self.dir)
+        except OSError as e:
+            return f"无法启动续训进程：{e}"
+        self.proc = proc
+        self.stop_requested = False
+        self.stop_warning = None
+        self.status = "training"
+        frozen = self._elapsed_final or 0.0
+        self._elapsed_final = None
+        self._t0 = time.time() - frozen
+        self._fps_points.clear()
+        # Terminal flags from the old tail must not leak into the resumed run.
+        self.progress.pop("stopped", None)
+        self.progress["done"] = False
+        self.progress["sps"] = 0
+        self.progress["steps"] = self.progress.get("lastCheckpointStep", self.progress.get("steps", 0))
+        return None
+
+    def resume_reason(self) -> str | None:
+        if self.status not in ("stopped", "failed"):
+            return "只有已中断或失败的训练可以继续。"
+        if self.proc is not None and self.proc.poll() is None:
+            return "训练进程还在运行，请等待保存完成。"
+        if not (self.dir / "model.zip").is_file() or not (self.dir / "vecnormalize.pkl").is_file():
+            return "暂无完整检查点，请重新训练。"
+        step = self.progress.get("lastCheckpointStep", self.progress.get("steps", 0)) or 0
+        if step >= self.total_steps and self.stage_idx >= len(self.stages) - 1:
+            return "已达到原训练预算，请微调或新建训练。"
+        return None
 
     def stage_payload(self) -> dict | None:
         """The frame's `training.stage` field — null for single-run jobs.
@@ -1809,15 +2034,33 @@ class TrainingJob:
 
     def payload(self) -> dict:
         overall_steps, overall_total = self.overall_progress()
+        sps = self.train_fps()
+        if sps is None and self.status == "training":
+            sps = self.progress.get("sps") or None
+        next_snap = self.progress.get("next_snap")
+        if next_snap is None and self.status == "training":
+            from .train_behavior import EARLY_SNAP
+            next_snap = self.snap_steps or (25_000 if self.behavior.trainer else EARLY_SNAP)
+        if self.status not in ("training", "stopping"):
+            next_snap = None
+        reason = self.resume_reason()
         return {
             "runName": self.run_name,
             "status": self.status,
+            "canResume": reason is None,
+            "resumeReason": reason,
+            "stopWarning": getattr(self, "stop_warning", None),
             "behavior": self._behavior_card(),
             "weights": self.effective_weights(),
             # Per-stage fields stay exactly as streamed (existing consumers);
             # overall* are cumulative across the stage chain (== steps/total
             # for single-run jobs).
             "progress": {**self.progress, "overallSteps": overall_steps,
+                         "sps": sps,
+                         "lastCheckpointStep": self.progress.get("lastCheckpointStep"),
+                         "nextSnapStep": next_snap,
+                         "etaSeconds": (round(max(0, overall_total - overall_steps) / sps)
+                                        if sps and sps > 0 else None),
                          "overallTotal": overall_total,
                          "overallElapsed": (
                              None if (el := self.overall_elapsed()) is None
@@ -2092,6 +2335,10 @@ class HfStartReq(BaseModel):
     envs: int = 64
 
 
+class ResumeReq(BaseModel):
+    runName: str
+
+
 class TeachReq(BaseModel):
     text: str
     # Reference motion for an imitation run — a clip saved by the viewer's
@@ -2276,7 +2523,7 @@ def next_helper_slot(ducks: list[Duck]) -> int:
 
 def spawn_helper_error(st: LabState) -> str | None:
     """Why {"spawn_helper": true} can't be honored right now (None = go)."""
-    if st.job is None or st.job.status != "training":
+    if st.job is None or st.job.status not in ("training", "stopping"):
         return "no active training for a helper to join"
     if st.scaling:
         return "trainer is mid-restart — try again in a moment"
@@ -2297,7 +2544,7 @@ def remove_duck_error(st: LabState, duck_id: str) -> str | None:
     window. Helpers additionally wait out an in-flight trainer restart."""
     if st.duck(duck_id) is None:
         return f"no duck {duck_id}"
-    if duck_id == "trainee" and st.job and st.job.status == "training":
+    if duck_id == "trainee" and st.job and st.job.status in ("training", "stopping"):
         return "can't remove the trainee while it's training — stop the run first"
     if duck_id.startswith("helper") and st.scaling:
         return "trainer is mid-restart — try again in a moment"
@@ -2478,13 +2725,18 @@ def env_kwargs_for_task_run(run: Path) -> dict:
     return kw
 
 
+def _artifact_run_dir(path: str) -> Path:
+    parent = Path(path).parent
+    return parent.parent if parent.name == "checkpoints" else parent
+
+
 def env_kwargs_for_policy_path(path: str | None) -> dict:
     """Same, derived from a run artifact's sibling behavior.json (assigned or
     restored teach-run policies) — or, for another body's walk/task run,
     from its run.json (`env_kwargs_for_task_run`)."""
     if not path:
         return {}
-    run = Path(path).parent
+    run = _artifact_run_dir(path)
     try:
         behavior_id = json.loads((run / "behavior.json").read_text()).get("behavior")
         return env_kwargs_for_behavior(behaviors_mod.BEHAVIORS[behavior_id])
@@ -2502,7 +2754,7 @@ def showcase_env_kwargs(path: str | None) -> dict | None:
     this policy; callers then treat the flag as a plain assign."""
     if not path:
         return None
-    bj = Path(path).parent / "behavior.json"
+    bj = _artifact_run_dir(path) / "behavior.json"
     try:
         b = behaviors_mod.BEHAVIORS[json.loads(bj.read_text()).get("behavior")]
     except (OSError, KeyError, json.JSONDecodeError):
@@ -2554,7 +2806,7 @@ def handoff_for(path: str | None):
     pose and holds. Returns (infer, label) or None."""
     if not path:
         return None
-    bj = Path(path).parent / "behavior.json"
+    bj = _artifact_run_dir(path) / "behavior.json"
     try:
         b = behaviors_mod.BEHAVIORS[json.loads(bj.read_text()).get("behavior")]
     except (OSError, KeyError, json.JSONDecodeError):
@@ -2607,14 +2859,14 @@ def is_trick_duck(d: Duck) -> bool:
         # commands to locomotion behaviors via the env.behavior check.
         return True
     pid = d.policy_id or ""
-    if not pid.startswith("run:"):
+    if not (pid.startswith("run:") or pid.startswith("ckpt:")):
         return False
     # Name-based classification called every teach-run a trick — including
     # LOCOMOTION runs, so a dragged-in run policy stood still at cmd (0,0,0)
     # and the user rightly asked why it didn't move. The run dir records what
     # it trained: behavior.json {"behavior": "run", ...}. Zero commands only
     # for behaviors that actually trained on zero twist (forward_cmd == 0).
-    name = pid.split(":", 1)[1]
+    name = pid.split(":", 1)[1].split("@", 1)[0]
     # MEMOIZED: this is called once per duck per 50 Hz tick and twice more per
     # broadcast frame, and it used to read+parse behavior.json from disk every
     # time — ~100 synchronous file reads/second per assigned run duck, on the
@@ -3130,7 +3382,7 @@ def make_app(ducks: list[Duck]):
         # Reserve before any provider network request. Browser state can be
         # stale or two tabs can submit at once; only the server can arbitrate.
         with submission_slot():
-            if ((st.job and st.job.status == "training") or
+            if ((st.job and st.job.status in ("training", "stopping")) or
                     any(job.get("released") is not True for job in cloud.list()) or
                     any(job.get("released") is not True for job in list(hf_cloud.jobs.values()))):
                 raise HTTPException(409, "Stop the current training job and confirm cloud release first")
@@ -3166,7 +3418,7 @@ def make_app(ducks: list[Duck]):
             try:
                 world.stop()
                 if st.job:
-                    st.job.stop()
+                    st.job.stop(force=True)
             finally:
                 # Attempt BOTH providers even if one fails. Pending releases
                 # remain recorded so the next lab session can retry them.
@@ -3311,23 +3563,19 @@ def make_app(ducks: list[Duck]):
 
     @app.get("/runs/{name}/policy.onnx")
     def download_policy(name: str) -> FileResponse:
-        """The deployable brain for a run, one click from the policies panel.
-
-        Serves policy.onnx (the export with the obs normalizer baked in \u2014
-        the only artifact worth handing anyone; the playbook forbids raw
-        checkpoints), falling back to the newest live.onnx snapshot while
-        the run is still training. Same restrictive name rule as DELETE:
-        the string picks a directory, so it must not be able to climb."""
+        """Download an explicit saved export; live.onnx is preview-only."""
         try:
             d = run_dir(name)
         except ValueError as e:
             raise HTTPException(422, str(e))
-        for fname in ("policy.onnx", "live.onnx"):
-            p = d / fname
-            if p.exists():
-                return FileResponse(p, media_type="application/octet-stream",
-                                    filename=f"{name}.onnx")
-        raise HTTPException(404, f"no exported policy in \u201c{name}\u201d yet")
+        p = d / "policy.onnx"
+        if p.is_file():
+            record = _last_progress_record(d)
+            if record.get("stopped") or record.get("done") is False:
+                raise HTTPException(409, "该训练尚未完成；请先评估检查点或继续训练。")
+            return FileResponse(p, media_type="application/octet-stream",
+                                filename=f"{name}.onnx")
+        raise HTTPException(404, "该训练尚无可下载的正式策略；live.onnx 仅供场景预览。")
 
     # ---- \u2699 settings: BYOK Hugging Face token -----------------------------
     # The browser never sees the token again after POSTing it: GET returns a
@@ -3766,7 +4014,7 @@ def make_app(ducks: list[Duck]):
 
     @app.post("/teach")
     async def teach(req: TeachReq) -> dict:
-        if st.job and st.job.status == "training":
+        if st.job and st.job.status in ("training", "stopping"):
             return {"matched": False,
                     "message": f"Already teaching “{st.job.display_title()}” — stop it first.",
                     "busy": True}
@@ -3978,7 +4226,7 @@ def make_app(ducks: list[Duck]):
             sticky[b.id] = entry
             save_teach_weights(sticky)
         live = str(st.job.dir / "live.onnx")
-        label = f"🎓 {st.job.display_title()} (untrained)"
+        label = f"🎓 学员 · {st.job.display_title()} · 快照 @0（未训练）"
         # The trainee previews what training practices: the behavior env with
         # the ACTIVE stage's spawn knobs (see requirement A / _spawn_knob).
         ekw = trainee_env_kwargs(b, st.job.stage_env())
@@ -4039,7 +4287,7 @@ def make_app(ducks: list[Duck]):
             return {"running": False, "status": "idle", "job": None}
         prog = j.progress or {}
         return {
-            "running": j.status == "training",
+            "running": j.status in ("training", "stopping"),
             "status": j.status,          # training | done | stopped | failed
             "job": {
                 "behavior": j.behavior.id,
@@ -4049,6 +4297,8 @@ def make_app(ducks: list[Duck]):
                 "stages": len(j.stages) or None,
                 "steps": prog.get("steps"),
                 "total": prog.get("total"),
+                **{key: j.payload()["progress"].get(key) for key in
+                   ("lastCheckpointStep", "nextSnapStep", "etaSeconds", "sps")},
             },
         }
 
@@ -4058,11 +4308,29 @@ def make_app(ducks: list[Duck]):
         return {"ok": True, "service": "duck-lab", "port": 8788}
 
     @app.post("/teach/stop")
-    async def teach_stop() -> dict:
-        if st.job:
-            st.job.stop()
-            st.events.append("Training stopped")
-        return {"ok": True}
+    async def teach_stop(force: bool = False) -> dict:
+        if st.job and st.job.status in ("training", "stopping"):
+            st.job.stop(force=force)
+            st.events.append("Training force terminated" if force else "Training saving checkpoint")
+        return {"ok": True, "status": st.job.status if st.job else "idle"}
+
+    @app.post("/teach/resume")
+    async def teach_resume(req: ResumeReq) -> dict:
+        with training_slot():
+            if st.job is None or st.job.run_name != req.runName:
+                try:
+                    run_dir(req.runName)
+                    job = TrainingJob.adopt(req.runName)
+                except (ValueError, OSError) as e:
+                    raise HTTPException(422, str(e))
+            else:
+                job = st.job
+            reason = job.resume()
+            if reason:
+                raise HTTPException(409, reason)
+            st.job = job
+            st.events.append(f"Training resumed from checkpoint — {job.run_name}")
+            return {"ok": True, "job": job.payload()}
 
     @app.post("/teach/clear")
     async def teach_clear() -> dict:
@@ -4081,7 +4349,7 @@ def make_app(ducks: list[Duck]):
             # genuine orphan case (DELETE /runs clearing a seated card) is
             # handled where it happens, in the delete route.
             return {"ok": True, "cleared": False}
-        if st.job.status in ("training", "restarting"):
+        if st.job.status in ("training", "stopping", "restarting"):
             return {"ok": False, "cleared": False,
                     "message": "still training — stop it first"}
         owned = st.job.owns_preview_ducks
@@ -4102,7 +4370,7 @@ def make_app(ducks: list[Duck]):
         """Pull a finished run's recipe up in the teach panel (see LoadRunReq).
         The viewer calls this when a duck running a teach-run policy is
         selected, or a policy chip is dropped on the teach panel."""
-        if st.job and st.job.status == "training":
+        if st.job and st.job.status in ("training", "stopping"):
             return {"ok": False,
                     "message": f"Already teaching “{st.job.display_title()}” — "
                                "stop it first."}
@@ -4387,7 +4655,7 @@ def make_app(ducks: list[Duck]):
             return
         st.ducks.remove(st.duck(duck_id))
         save_lab_state(st.ducks)
-        if st.job and st.job.status == "training":
+        if st.job and st.job.status in ("training", "stopping"):
             st.job.helpers = len(helper_ducks(st.ducks))
         st.events.append(f"{duck_id} left the lab")
 
@@ -4514,8 +4782,9 @@ def make_app(ducks: list[Duck]):
             # SPECIFIC authored clip, and the launch label already says so —
             # rebuilding from the generic recipe name here quietly renamed the
             # duck back to "Copy the animation" at the first snapshot.
-            label = (f"🎓 {job.display_title()} @{steps // 1000}k"
-                     if d.id == "trainee" else d.label)
+            label = (f"🎓 学员 · {job.display_title()} · 快照 @{job.progress.get('lastCheckpointStep', steps):,}"
+                     if d.id == "trainee" and job.status in ("training", "stopping")
+                     else d.label)
             d.swap_policy(label, infer, onnx_path=live)
         st.events.append(f"Trainee updated to {steps // 1000}k steps")
 
@@ -4553,7 +4822,7 @@ def make_app(ducks: list[Duck]):
                 st.script_t = 0.0
                 for d in st.ducks:
                     d.reset()
-            training = bool(st.job and st.job.status == "training")
+            training = bool(st.job and st.job.status in ("training", "stopping"))
             doomed: list[Duck] = []
             for d in st.ducks:
                 # Trick policies (trainee/helpers, and anything assigned from a
@@ -4620,7 +4889,9 @@ def make_app(ducks: list[Duck]):
                             short = st.job.run_name.removeprefix("teach-")
                             mark = {"done": "✔", "stopped": "■", "failed": "✗"}[
                                 st.job.status]
-                            t.label = f"{st.job.behavior.emoji} {short} {mark}"
+                            checkpoint = st.job.progress.get("lastCheckpointStep")
+                            suffix = f" @{checkpoint:,}" if checkpoint is not None else ""
+                            t.label = f"{st.job.behavior.emoji} {short}{suffix} {mark}"
                             # Preview goes back to ordinary standing spawns
                             # once the run ends — mid-trick drops mirror
                             # TRAINING; a finished trick shows off from its

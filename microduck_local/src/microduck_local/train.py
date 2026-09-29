@@ -115,7 +115,7 @@ def _watch_callback_cls(BaseCallback):
 
     class WatchCallback(BaseCallback):
         def __init__(self, out, total_steps: int, snap_steps: int, obs_dim: int,
-                     start_steps: int = 0):
+                     start_steps: int = 0, report_start: int | None = None):
             super().__init__()
             self.out = Path(out)
             self.total_steps = int(total_steps)
@@ -129,6 +129,7 @@ def _watch_callback_cls(BaseCallback):
             # onnx export + model.save + venv.save until the counter catches
             # up, and the lab's card reads 700000/500000 from line one.
             self.start_steps = int(start_steps)
+            self.report_start = self.start_steps if report_start is None else report_start
             self.next_snap = self.start_steps + self.snap_steps
             self.snapshots = 0
             self.ep_lens: list[int] = []
@@ -138,6 +139,7 @@ def _watch_callback_cls(BaseCallback):
             self.t0 = self._prev_t = time.time()
             self._prev_steps = self.start_steps
             self._last_terms: dict[str, float] = {}
+            self._stop_check = 0.0
 
         def _on_step(self) -> bool:
             for info in self.locals.get("infos", []):
@@ -150,6 +152,12 @@ def _watch_callback_cls(BaseCallback):
                     for k, v in sums.items():
                         self.term_sums[k] = self.term_sums.get(k, 0.0) + float(v)
                     self.term_eps += 1
+            # Same STOP file as train_behavior: a save-then-exit, not a kill.
+            now = time.time()
+            if now - self._stop_check > 0.5:
+                self._stop_check = now
+                if (self.out / "STOP").exists():
+                    return False
             return True
 
         def _on_rollout_end(self) -> None:
@@ -161,7 +169,7 @@ def _watch_callback_cls(BaseCallback):
             dt, ds = now - self._prev_t, int(self.num_timesteps) - self._prev_steps
             self._prev_t, self._prev_steps = now, int(self.num_timesteps)
             line = {
-                "steps": int(self.num_timesteps) - self.start_steps,
+                "steps": int(self.num_timesteps) - self.report_start,
                 "total": self.total_steps,
                 "ep_rew": round(sum(self.ep_rews) / len(self.ep_rews), 2) if self.ep_rews else 0.0,
                 "ep_len": round(sum(self.ep_lens) / len(self.ep_lens), 1) if self.ep_lens else 0.0,
@@ -169,6 +177,8 @@ def _watch_callback_cls(BaseCallback):
                 "snapshots": self.snapshots,
                 "elapsed_s": round(now - self.t0, 1),
                 "sps": round(ds / dt) if dt > 0 else 0,
+                "next_snap": self.next_snap - self.report_start,
+                "done": False,
             }
             with open(self.out / "progress.jsonl", "a") as f:
                 f.write(json.dumps(line) + "\n")
@@ -176,7 +186,6 @@ def _watch_callback_cls(BaseCallback):
             self.term_sums, self.term_eps = {}, 0
             if self.num_timesteps >= self.next_snap:
                 self._snapshot()
-                self.next_snap += self.snap_steps
 
         def _snapshot(self) -> None:
             """live.onnx + model.zip + vecnormalize.pkl, all atomic — the lab
@@ -198,6 +207,12 @@ def _watch_callback_cls(BaseCallback):
             venv.save(str(self.out / "vecnormalize.pkl.tmp"))
             os.replace(self.out / "vecnormalize.pkl.tmp", self.out / "vecnormalize.pkl")
             self.snapshots += 1
+            self.next_snap = int(self.num_timesteps) + self.snap_steps
+            meta = {"steps": int(self.num_timesteps) - self.report_start,
+                    "next_snap": self.next_snap - self.report_start, "saved_at": time.time()}
+            tmp_meta = self.out / "snapshot.json.tmp"
+            tmp_meta.write_text(json.dumps(meta))
+            os.replace(tmp_meta, self.out / "snapshot.json")
 
     return WatchCallback
 
@@ -425,8 +440,10 @@ def main() -> None:
 
     from .symmetry import FastActorCriticPolicy
 
+    resume = False
     if args.init_from:
         prev = Path(args.init_from)
+        resume = prev.resolve() == out.resolve()
         venv = VecNormalize.load(str(prev / "vecnormalize.pkl"), venv)
         if args.freeze_obs_norm:
             # FREEZE the observation statistics of a warm start.
@@ -466,9 +483,12 @@ def main() -> None:
         model.batch_size = batch
         # A warm start polishes; it does not explore from nothing. The flat
         # 1e-3 that trains a policy from scratch wrecks a cloned one.
-        lr = args.lr if args.lr is not None else 1e-4
-        model.learning_rate = lr
-        model.lr_schedule = lambda _progress: lr
+        if not resume or args.lr is not None:
+            lr = args.lr if args.lr is not None else 1e-4
+            model.learning_rate = lr
+            model.lr_schedule = lambda _progress: lr
+        else:
+            lr = model.lr_schedule(1.0)
         print(f"warm-started from {prev} (lr {lr:g})")
     else:
         venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=100.0)
@@ -540,34 +560,37 @@ def main() -> None:
     from .robots import spec as _spec
     callbacks = [checkpoints, _penalty_sign_callback_cls(BaseCallback)(),
                  _log_std_cap_callback_cls(BaseCallback)()]
+    start = int(model.num_timesteps) if resume else 0
+    remaining = max(0, args.steps - start)
+    watch = None
+    report_start = 0
     if args.snap_steps > 0:
-        # Makes the run WATCHABLE: the lab tails progress.jsonl for the card
-        # and loads live.onnx onto the 🎓 trainee as it improves.
-        callbacks.append(_watch_callback_cls(BaseCallback)(
-            out, args.steps, args.snap_steps,
-            _spec.get(args.robot).obs_dim,
-            # SB3 keeps the loaded count when reset_num_timesteps is False.
-            start_steps=int(model.num_timesteps) if args.init_from else 0))
-    model.learn(
-        total_timesteps=args.steps,
-        callback=with_phase_callbacks(callbacks, BaseCallback),
-        progress_bar=False,
-        reset_num_timesteps=args.init_from is None,
-    )
-
+        watch = _watch_callback_cls(BaseCallback)(
+            out, args.steps, args.snap_steps, _spec.get(args.robot).obs_dim,
+            start_steps=start, report_start=report_start)
+        callbacks.append(watch)
+    if remaining > 0:
+        model.learn(
+            total_timesteps=remaining,
+            callback=with_phase_callbacks(callbacks, BaseCallback),
+            progress_bar=False,
+            reset_num_timesteps=not resume,
+        )
+        if watch is not None:
+            watch._snapshot()
     model.save(str(out / "model"))
     venv.save(str(out / "vecnormalize.pkl"))
-    # A TERMINAL RECORD, written last and only on a clean finish. Without it
-    # "has this run finished?" had no answer in the artifact, and the only way
-    # to ask was to grep the process table — which is how a `pgrep -f
-    # "microduck_local.train "` ended up matching the very shell that was
-    # doing the grepping, and a wait loop that could never end. train_behavior
-    # has written this line since the teach panel existed; train.py did not.
     if args.snap_steps > 0:
+        from .export_onnx import export
+        export(out, out / "policy.onnx")
+        stopped = (out / "STOP").exists()
+        line = {"steps": int(model.num_timesteps) - report_start,
+                "total": int(args.steps), "done": True}
+        if stopped:
+            line["done"] = False
+            line["stopped"] = "user"
         with open(out / "progress.jsonl", "a") as f:
-            f.write(json.dumps({"steps": int(model.num_timesteps),
-                                "total": int(model.num_timesteps),
-                                "done": True}) + "\n")
+            f.write(json.dumps(line) + "\n")
     print(f"saved {out}/model.zip + vecnormalize.pkl")
     print(f"export with: uv run export-walk {out}")
 

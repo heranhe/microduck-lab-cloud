@@ -24,6 +24,7 @@ import { assignDrag, nearestDuck, type AssignTarget } from "@/lib/assign";
 import { getSelectedDuck, setSelectedDuck } from "@/lib/select";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
+import { simBrainLabel, simText } from "@/lib/simLocalization";
 import { Voices } from "@/lib/quack";
 import { duckAudio } from "@/lib/quackaudio";
 import { duckMouths } from "@/lib/mouth";
@@ -1082,12 +1083,14 @@ function ScenePicker({
   onPick,
   onDelete,
   busy,
+  locale,
 }: {
   scenarios: ScenarioListing[];
   pick: string;
   onPick: (name: string) => void;
   onDelete: (name: string) => void | Promise<void>;
   busy: boolean;
+  locale: "en" | "zh";
 }) {
   const [open, setOpen] = useState(false);
   const [hover, setHover] = useState<string | null>(null);
@@ -1124,8 +1127,8 @@ function ScenePicker({
     return `${s.name} (${who}, ${s.objects} obj)`;
   };
   const groups: [string, ScenarioListing[]][] = [
-    ["built in", scenarios.filter((s) => s.builtin)],
-    ["saved by you", scenarios.filter((s) => !s.builtin)],
+    [simText(locale, "built in", "内置场景"), scenarios.filter((s) => s.builtin)],
+    [simText(locale, "saved by you", "你保存的场景"), scenarios.filter((s) => !s.builtin)],
   ];
 
   const row = (s: ScenarioListing) => (
@@ -1167,7 +1170,7 @@ function ScenePicker({
             onDelete(s.name);
           }}
           disabled={busy}
-          title={`delete "${s.name}" — removes its saved file`}
+          title={simText(locale, `delete "${s.name}" — removes its saved file`, `删除“${s.name}”及其保存文件`)}
           style={{
             background: "transparent",
             border: "none",
@@ -1829,6 +1832,7 @@ export default function SimViewer() {
           onPick={setPick}
           onDelete={doDelete}
           busy={loading}
+          locale={locale}
         />
         <button style={BTN} disabled={loading} onClick={() => doLoad(pick)}>
           {loading ? tr("loading…", "加载中…") : tr("load", "加载")}
@@ -1893,7 +1897,7 @@ export default function SimViewer() {
           </select>
         )}
         <button style={{ ...BTN, borderColor: showMap ? "#43c2b8" : BTN_BORDER }} onClick={() => setShowMap((v) => !v)} title="M: the selected duck's occupancy map, in its own odometry frame">
-          map
+          {tr("map", "地图")}
         </button>
         {/* One toggle, whatever the selected body's range sensor is: the
             duck's ToF cone, or a MARS's 360° scan (lib/lidar.sensorOverlayLabel). */}
@@ -1901,10 +1905,10 @@ export default function SimViewer() {
           {sensorOverlayLabel(overlayChan)}
         </button>
         <button style={{ ...BTN, borderColor: showCam ? "#43c2b8" : BTN_BORDER }} onClick={() => setShowCam((v) => !v)} title="V: the selected duck's head camera, with the detector's boxes">
-          cam
+          {tr("cam", "相机")}
         </button>
         <button style={{ ...BTN, borderColor: showLabels ? "#43c2b8" : BTN_BORDER }} onClick={() => setShowLabels((v) => !v)} title="L: the floating d0 · policy labels over the ducks">
-          🏷 labels
+          🏷 {tr("labels", "标签")}
         </button>
         <button
           style={{ ...BTN, borderColor: sound ? "#43c2b8" : BTN_BORDER, color: sound ? undefined : "#7c8796" }}

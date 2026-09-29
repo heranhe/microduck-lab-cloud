@@ -8,6 +8,7 @@
 // offers both as downloads. The take itself is useTake.ts, shared with the
 // /sim page's SimRecord; this file is the lab page's layout and framing.
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { LAB_HTTP, type LabClient } from "@/lib/lab";
 import { useSelectedDuck } from "@/lib/select";
@@ -58,6 +59,13 @@ const linkStyle: React.CSSProperties = {
   color: "#7db8d8",
 };
 
+const worldStyle: React.CSSProperties = {
+  ...panelStyle,
+  padding: "6px 10px",
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+
 export function RecordPanel({
   clientRef,
 }: {
@@ -72,7 +80,9 @@ export function RecordPanel({
   // HUD's live right edge, this panel's own width, and the window width.
   const hudRight = useHudRight();
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const worldRef = useRef<HTMLAnchorElement | null>(null);
   const [panelW, setPanelW] = useState(220);
+  const [worldW, setWorldW] = useState(82);
   const [winW, setWinW] = useState(() =>
     typeof window === "undefined" ? 1200 : window.innerWidth
   );
@@ -86,6 +96,14 @@ export function RecordPanel({
     if (!el) return;
     setPanelW(el.offsetWidth);
     const ro = new ResizeObserver(() => setPanelW(el.offsetWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    const el = worldRef.current;
+    if (!el) return;
+    setWorldW(el.offsetWidth);
+    const ro = new ResizeObserver(() => setWorldW(el.offsetWidth));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -170,17 +188,32 @@ export function RecordPanel({
     );
   }
 
-  // Centered at the top — but never UNDER the HUD: a wide duck-lab panel
-  // (long duck names) used to reach right beneath these buttons. The HUD
-  // publishes its right edge (useHudRight); slide right of it when centering
-  // would collide, and keep a margin from the right edge as a backstop.
+  // Keep the capture panel centered, with the standalone world-page button
+  // immediately to its left. Treat both controls as one collision group when
+  // dodging the HUD, while preserving separate pill backgrounds.
+  const worldGap = 10;
   const centered = (winW - panelW) / 2;
   const left = Math.round(
-    Math.min(Math.max(centered, hudRight + 12), Math.max(12, winW - panelW - 12))
+    Math.min(
+      Math.max(centered, hudRight + 12 + worldW + worldGap),
+      Math.max(12 + worldW + worldGap, winW - panelW - 12)
+    )
   );
+  const worldLeft = left - worldW - worldGap;
   return (
-    <div ref={wrapRef} data-policy-ui style={{ ...panelStyle, left }}>
-      {content}
-    </div>
+    <>
+      <Link
+        ref={worldRef}
+        href="/sim"
+        data-policy-ui
+        title={tr("the world page — rooms, sensors, brains", "世界页面：房间、传感器与智能体")}
+        style={{ ...worldStyle, left: worldLeft }}
+      >
+        🌍 {tr("world", "世界")}
+      </Link>
+      <div ref={wrapRef} data-policy-ui style={{ ...panelStyle, left }}>
+        {content}
+      </div>
+    </>
   );
 }

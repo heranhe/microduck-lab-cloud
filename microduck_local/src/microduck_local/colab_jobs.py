@@ -175,6 +175,7 @@ class ColabJobs:
         self.jobs: dict[str, dict] = {}
         self.workers: dict[str, threading.Thread] = {}
         self.lock = threading.Lock()
+        self.release_lock = threading.Lock()
         for path in runs.glob("*/job.json"):
             try:
                 job = json.loads(path.read_text())
@@ -322,22 +323,38 @@ class ColabJobs:
                 job["state"] = "failed"
                 job["message"] = str(exc)
         finally:
-            if not job.get("released") or job.get("cancel_requested"):
-                try:
-                    result = cli(["stop", "-s", session], timeout=60)
-                    job["released"] = result.returncode == 0 or job.get("allocation_rejected") is True
-                    if not job["released"]:
-                        reason = result.stderr.strip() or result.stdout.strip()
-                        job["message"] = f"{job['message']} · Release: {reason}" if job["message"] else reason
-                except Exception as exc:
-                    job["released"] = job.get("allocation_rejected") is True
-                    if not job["released"]:
-                        job["message"] = f"{job['message']} · Release: {exc}" if job["message"] else str(exc)
-            if job.get("released"):
-                job.setdefault("released_at", time.time())
+            self._release(job)
             if job.get("cancel_requested"):
                 job["state"] = "stopped"
             (directory / "job.json").write_text(json.dumps(job, indent=2))
+
+    def _release(self, job: dict) -> None:
+        # HTTP cancellation and worker cleanup can arrive together. Check the
+        # success flag inside the lock so a second caller cannot undo success.
+        with self.release_lock:
+            if job.get("released") is True:
+                return
+            reason = ""
+            try:
+                result = cli(["stop", "-s", job["session"]], timeout=60)
+                released = result.returncode == 0
+                if not released:
+                    reason = result.stderr.strip() or result.stdout.strip()
+                    if "/unassign/" in reason and "Not Found" in reason:
+                        status = cli(["status", "-s", job["session"]], timeout=30)
+                        missing = f"[colab] Session '{job['session']}' not found."
+                        released = status.returncode == 0 and missing in status.stdout.splitlines()
+            except Exception as exc:
+                released = False
+                reason = str(exc)
+            job["released"] = released or job.get("allocation_rejected") is True
+            if job["released"]:
+                job.setdefault("released_at", time.time())
+                # A cancelled job should not keep a stale release traceback.
+                if job.get("cancel_requested"):
+                    job["message"] = ""
+            else:
+                job["message"] = reason or "Colab resource release could not be confirmed."
 
     def stop(self, job_id: str) -> dict:
         job = self.jobs.get(job_id)
@@ -353,16 +370,7 @@ class ColabJobs:
             (self.runs / job_id / "job.json").write_text(json.dumps(job, indent=2))
             return dict(job)
         job["state"] = "stopped" if job["state"] not in {"done", "failed"} else job["state"]
-        try:
-            result = cli(["stop", "-s", job["session"]], timeout=60)
-            job["released"] = result.returncode == 0
-            if job["released"]:
-                job.setdefault("released_at", time.time())
-            if not job["released"]:
-                job["message"] = result.stderr.strip() or result.stdout.strip()
-        except Exception as exc:
-            job["released"] = False
-            job["message"] = str(exc)
+        self._release(job)
         (self.runs / job_id / "job.json").write_text(json.dumps(job, indent=2))
         return dict(job)
 

@@ -146,6 +146,10 @@ export interface TrainingProgress {
   ep_len?: number;
   terms?: Record<string, number>;
   snapshots?: number;
+  sps?: number;
+  lastCheckpointStep?: number | null;
+  nextSnapStep?: number | null;
+  etaSeconds?: number | null;
   elapsed_s?: number;
   done?: boolean;
   /** Cumulative across a staged curriculum (== steps/total for single-run
@@ -170,8 +174,11 @@ export interface TrainingStage {
   start?: number;
 }
 export interface TrainingPayload {
+  canResume?: boolean;
+  resumeReason?: string | null;
+  stopWarning?: string | null;
   runName: string;
-  status: "training" | "done" | "stopped" | "failed";
+  status: "training" | "stopping" | "done" | "stopped" | "failed";
   behavior: BehaviorCard;
   progress: TrainingProgress;
   /** null/absent = single-run job; set while a curriculum chain trains. */
@@ -231,6 +238,8 @@ export interface Policy {
   /** Bytes the run dir occupies (run policies only) — shown in the delete
    *  confirmation so the user can see what a delete actually frees. */
   sizeBytes?: number;
+  /** Terminal state from the run's progress log. Legacy exports are done. */
+  runStatus?: "done" | "stopped" | "unfinished";
   /** Which body this brain drives (server: run.json). Absent on servers that
    *  predate robot selection — everything there is a duck. */
   robot?: RobotId;

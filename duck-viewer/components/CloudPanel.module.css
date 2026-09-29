@@ -36,10 +36,13 @@
   top: 58px;
   right: 14px;
   display: flex;
-  align-items: center;
-  gap: 9px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   min-height: 29px;
-  padding: 0 8px 0 10px;
+  padding: 8px 10px;
+  max-width: min(600px, calc(100vw - 28px));
+  box-sizing: border-box;
   border: 1px solid rgba(255,255,255,.09);
   border-radius: 8px;
   background: rgba(14,16,20,.84);
@@ -67,10 +70,10 @@
 .panel {
   position: absolute;
   z-index: 35;
-  top: 96px;
+  top: 210px;
   right: 14px;
   width: min(430px, calc(100vw - 28px));
-  max-height: calc(100vh - 110px);
+  max-height: calc(100vh - 224px);
   overflow: auto;
   box-sizing: border-box;
   border: 1px solid rgba(255,255,255,.11);
@@ -139,5 +142,20 @@
   .toolButton, .trainButton { padding:0 9px; }
   .statusBar { left:14px; right:14px; justify-content:flex-end; }
   .statusBar > :nth-child(2) { margin-right:auto; }
-  .panel { top:96px; }
+  .panel { top:210px; }
 }
+
+.statusHeading { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.monitorLink { border:0; background:none; color:inherit; font:inherit; text-align:left; padding:0; cursor:pointer; }
+.trainingBar { width:min(600px, calc(100vw - 28px)); }
+.progressLine, .snapshotLine { display:flex; flex-wrap:wrap; gap:5px 12px; font-variant-numeric:tabular-nums; }
+.progressLine { color:#c5d9e4; }
+.progressLine strong { color:#8cdbbb; }
+.snapshotLine { color:#929ead; font-size:10px; }
+.progressTrack { height:7px; background:#293440; border-radius:4px; overflow:hidden; }
+.progressTrack span { display:block; height:100%; min-width:2px; background:#75cfaa; }
+.more { position:relative; margin-left:auto; }
+.more summary { cursor:pointer; list-style:none; font-size:18px; line-height:20px; }
+.moreMenu { position:absolute; right:0; top:26px; width:145px; padding:6px; background:#18212a; border:1px solid #405161; border-radius:7px; z-index:40; }
+.moreMenu button { display:block; width:100%; text-align:left; border:0; background:none; color:#c5d9e4; font:inherit; padding:7px; cursor:pointer; }
+.moreMenu button:last-child { color:#ef957d; }

@@ -2,9 +2,102 @@
 
 from subprocess import CompletedProcess
 import subprocess
+import threading
 import pytest
 
 from microduck_local import colab_jobs
+
+
+def test_cancelled_worker_does_not_release_twice(tmp_path, monkeypatch):
+    jobs = colab_jobs.ColabJobs(tmp_path)
+    job_id = "123456abcdef"
+    directory = tmp_path / job_id
+    directory.mkdir()
+    job = {"id": job_id, "session": "test", "state": "allocating",
+           "gpu": "T4", "task": "Mjlab-Velocity-Flat-MicroDuck",
+           "released": False, "message": ""}
+    jobs.jobs[job_id] = job
+    stops = []
+
+    def fake_cli(args, **kwargs):
+        if args[0] == "stop":
+            stops.append(args)
+            return CompletedProcess(args, 0 if len(stops) == 1 else 1, "", "Not Found")
+        return CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    monkeypatch.setattr(colab_jobs.time, "sleep", lambda _: jobs.stop(job_id))
+    jobs._run(job, directory, 1, 16)
+    assert len(stops) == 1
+    assert job["released"] and job["state"] == "stopped"
+    assert job["message"] == ""
+
+
+def test_concurrent_cleanup_preserves_success(tmp_path, monkeypatch):
+    jobs = colab_jobs.ColabJobs(tmp_path)
+    job = {"session": "test", "released": False, "cancel_requested": True}
+    entered = threading.Event()
+    finish = threading.Event()
+    calls = []
+
+    def fake_cli(args, **kwargs):
+        calls.append(args)
+        entered.set()
+        assert finish.wait(2)
+        return CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    workers = [threading.Thread(target=jobs._release, args=(job,)) for _ in range(2)]
+    workers[0].start()
+    assert entered.wait(2)
+    workers[1].start()
+    finish.set()
+    for worker in workers:
+        worker.join(2)
+        assert not worker.is_alive()
+    assert calls == [["stop", "-s", "test"]]
+    assert job["released"] and job["released_at"] > 0
+
+
+@pytest.mark.parametrize("status_code,output,expected", [
+    (0, "[colab] Session 'test' not found.\n", True),
+    (0, "test | BUSY", False),
+    (1, "[colab] Session 'test' not found.\n", False),
+])
+def test_unassign_not_found_requires_confirmed_absence(tmp_path, monkeypatch, status_code, output, expected):
+    jobs = colab_jobs.ColabJobs(tmp_path)
+    job = {"session": "test", "released": False, "cancel_requested": True, "message": "old error"}
+    calls = []
+
+    def fake_cli(args, **kwargs):
+        calls.append(args)
+        if args[0] == "stop":
+            return CompletedProcess(args, 1, "", "GET https://colab.research.google.com/tun/m/unassign/endpoint: Not Found")
+        return CompletedProcess(args, status_code, output, "")
+
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    jobs._release(job)
+    assert job["released"] is expected
+    assert calls == [["stop", "-s", "test"], ["status", "-s", "test"]]
+    if expected:
+        assert job["message"] == ""
+    else:
+        assert "released_at" not in job
+
+
+def test_release_timeout_remains_retryable(tmp_path, monkeypatch):
+    jobs = colab_jobs.ColabJobs(tmp_path)
+    job = {"session": "test", "released": False, "cancel_requested": True}
+
+    def timeout(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(colab_jobs, "cli", timeout)
+    jobs._release(job)
+    assert not job["released"]
+    monkeypatch.setattr(colab_jobs, "cli", lambda args, **kwargs: CompletedProcess(args, 0, "", ""))
+    jobs._release(job)
+    assert job["released"] and job["message"] == ""
 
 
 @pytest.fixture(autouse=True)

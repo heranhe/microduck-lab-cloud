@@ -761,7 +761,7 @@ def test_teach_status_reports_whether_a_job_is_running(fake_popen, monkeypatch, 
     assert live["job"]["runName"].startswith("teach-")
     assert live["job"]["total"]
 
-    asyncio.run(_endpoint(app, "/teach/stop", "POST")())
+    asyncio.run(_endpoint(app, "/teach/stop", "POST")(force=True))
     assert status()["running"] is False
 
 

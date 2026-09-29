@@ -10,6 +10,7 @@
 // frame via clientRef (same polling pattern as Hud).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePanelDrag } from "./usePanelDrag";
 import { createPortal } from "react-dom";
 import {
   LAB_HTTP,
@@ -42,7 +43,7 @@ import {
 } from "@/lib/cloudCompute";
 import { bestRunFor } from "@/lib/tricks";
 import { useSelectedDuck } from "@/lib/select";
-import { modalIsOpen, requestCloudOpen, setTeachHeight, usePolicyOpen } from "@/lib/ui";
+import { modalIsOpen, requestCloudOpen } from "@/lib/ui";
 import { pushToast } from "./Toasts";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -402,7 +403,7 @@ function RecipeEditor({
     return () => window.removeEventListener("keydown", onKey);
   }, [pickerOpen]);
 
-  const live = t.status === "training";
+  const live = t.status === "training" || t.status === "stopping";
   const effective = (key: string, fallback: number) => t.weights[key] ?? fallback;
   // What the next run trains under: every recipe term at its effective
   // weight (the stream's t.weights is what the seated run actually used),
@@ -713,7 +714,7 @@ function LiveTraining({
   plan,
   pinned,
   onPinStage,
-  onStop,
+  onResume,
   onRecipeSubmit,
   onStageWeights,
   onStartStage,
@@ -732,7 +733,7 @@ function LiveTraining({
    *  everything else takes its proportional share. */
   pinned: Record<string, number>;
   onPinStage: (stage: number, steps: number | null) => void;
-  onStop: () => void;
+  onResume: () => Promise<void>;
   onRecipeSubmit: (
     weights: Record<string, number>,
     fineTune: boolean,
@@ -784,7 +785,9 @@ function LiveTraining({
   const curriculum = t.behavior.curriculum ?? [];
   const stageStart = stage?.start ?? 1;
   const selStage = stageSel ?? stage?.idx ?? 1;
-  const live = t.status === "training";
+  const live = t.status === "training" || t.status === "stopping";
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState("");
   /** Behavior-level weight for a key (what a stage inherits sans override). */
   const baseWeight = (key: string) =>
     t.weights[key] ?? t.behavior.terms.find((term) => term.key === key)?.weight ?? 0;
@@ -816,6 +819,7 @@ function LiveTraining({
   const statusLine = {
     training: tr(`training… ${overallSteps.toLocaleString()} / ${overallTotal.toLocaleString()} practice steps`,
       `训练中… 已完成 ${overallSteps.toLocaleString()} / ${overallTotal.toLocaleString()} 步`),
+    stopping: tr("Saving checkpoint before stopping…", "正在保存检查点，完成后停止…"),
     done: tr("✔ finished — the trainee duck runs the final result", "✔ 训练完成，小鸭子已使用最终结果"),
     stopped: tr("■ stopped — trainee keeps the last snapshot", "■ 训练已停止，小鸭子保留最近的快照"),
     failed: tr("✗ training crashed (see runs/…/train.log)", "✗ 训练失败，请查看 runs/…/train.log"),
@@ -825,20 +829,22 @@ function LiveTraining({
     <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8, marginTop: 8 }}>
       <div style={{ fontWeight: 700 }}>
         {t.behavior.emoji} {localizeBehavior(t.behavior, locale).title}
-        {t.status === "training" && (
-          <button
-            onClick={onStop}
-            style={{
-              float: "right", background: "#3a2622", color: "#e0a08f",
-              border: "1px solid #5a3a33", borderRadius: 5, padding: "1px 8px",
-              fontFamily: mono, fontSize: 11, cursor: "pointer",
-            }}
-          >
-            ■ {tr("stop training", "停止训练")}
-          </button>
-        )}
+
       </div>
       <div style={{ color: "#8b93a3", margin: "4px 0" }}>{statusLine}</div>
+      {(t.status === "stopped" || t.status === "failed") && <div style={{ margin: "8px 0", padding: 8, border: "1px solid #405c54", borderRadius: 6 }}>
+        <button disabled={!t.canResume || resuming} onClick={async () => {
+          setResuming(true); setResumeError("");
+          try { await onResume(); }
+          catch (e) { setResumeError(e instanceof Error ? e.message : String(e)); }
+          finally { setResuming(false); }
+        }} style={{ font: "inherit", padding: "5px 9px", background: "#234638", color: "#a9e5c9", border: "1px solid #51816e", borderRadius: 5, cursor: t.canResume ? "pointer" : "default", opacity: t.canResume ? 1 : 0.5 }}>
+          {resuming ? tr("Resuming…", "正在续训…") : tr(`▶ Continue from @${p.lastCheckpointStep?.toLocaleString() ?? "?"}`, `▶ 从 @${p.lastCheckpointStep?.toLocaleString() ?? "?"} 继续训练`)}
+        </button>
+        <div style={{ color: "#8b93a3", marginTop: 5, fontSize: 10 }}>{t.resumeReason || tr("Same run and budget; step counting continues from the saved checkpoint.", "保留本次运行目录与原预算，步数从已保存的检查点继续累计。")}</div>
+        {t.stopWarning && <div style={{ color: "#ef957d", marginTop: 5 }}>{t.stopWarning}</div>}
+        {resumeError && <div role="alert" style={{ color: "#ef957d", marginTop: 5 }}>{resumeError}</div>}
+      </div>}
       {t.status === "training" && (
         <div style={{ color: "#8b93a3", fontSize: 10, marginBottom: 4 }}>
           practicing on {t.envs} parallel ducks ({t.helpers} helper{t.helpers === 1 ? "" : "s"})
@@ -1183,16 +1189,12 @@ export function TeachPanel({
 }: {
   clientRef: React.MutableRefObject<LabClient | null>;
 }) {
+  const panelDrag = usePanelDrag("teach");
   const { tr, locale } = useI18n();
   // Collapsed by default, like the PolicyPanel above it — persisted after
   // the first open.
   const [open, setOpen] = useState(() => loadJSON("teachOpen", false));
   const [wide, setWide] = useState(() => loadJSON("teachWide", false));
-  const [manualSize, setManualSize] = useState<{ width: number; height: number } | null>(() =>
-    loadJSON("teachManualSize", null)
-  );
-  const resizeStart = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
-  const policyOpen = usePolicyOpen();
   const [msgs, setMsgs] = useState<Msg[]>(() => {
     const stored = loadJSON<Msg[] | null>("teachMsgs", null);
     return Array.isArray(stored) && stored.length ? stored.slice(-MSG_CAP) : [GREETING];
@@ -1355,7 +1357,7 @@ export function TeachPanel({
     };
   }, [open, trainingStatus]);
   useEffect(() => saveJSON("teachWide", wide), [wide]);
-  useEffect(() => saveJSON("teachManualSize", manualSize), [manualSize]);
+
   useEffect(() => saveJSON("teachMsgs", msgs.slice(-MSG_CAP)), [msgs]);
 
   // Poll the streamed frame for training progress + one-shot events.
@@ -1428,7 +1430,7 @@ export function TeachPanel({
     const pid = frame?.ducks.find((d) => d.id === selectedDuck)?.policy;
     if (!pid || !isRunPolicy(pid)) return;
     const t = frame?.training ?? null;
-    if (t?.status === "training" || t?.restarting) return;
+    if (t?.status === "training" || t?.status === "stopping" || t?.restarting) return;
     if (t && runNameOfPolicy(pid) === t.runName) return;
     loadTeachRun(pid)
       .then((r) => {
@@ -1532,7 +1534,7 @@ export function TeachPanel({
   async function launchSelectedTraining() {
     const trimmed = actionText;
     if (!trimmed || cloudBusy || launchPending.current) return;
-    if (training?.status === "training" || activeCloudJobs > 0) {
+    if ((training?.status === "training" || training?.status === "stopping") || activeCloudJobs > 0) {
       setCloudError(tr(
         "A training job is already running. Stop it from the top status bar before starting another.",
         "已有训练任务正在运行，请先使用顶部状态栏停止训练或断开云算力。"
@@ -1704,7 +1706,7 @@ export function TeachPanel({
     : compute === "hf"
       ? hfAccount.connected && hfAccount.hardware.length > 0 && !!hfFlavor
       : true;
-  const trainingInProgress = training?.status === "training" || activeCloudJobs > 0;
+  const trainingInProgress = (training?.status === "training" || training?.status === "stopping") || activeCloudJobs > 0;
   const canLaunch = labOnline === true && !!actionText && !cloudBusy &&
     !trainingInProgress && (compute === "local" || (!!cloudTask && cloudAccountReady));
   // An unsupported cloud action must remain clickable so the user gets the
@@ -1730,58 +1732,15 @@ export function TeachPanel({
   // PolicyPanel above can grow into the space teach isn't using. One callback
   // ref serves both the open panel and the collapsed pill — only one of them
   // is mounted at a time.
-  const teachRO = useRef<ResizeObserver | null>(null);
-  const teachSizeRef = useCallback((el: HTMLElement | null) => {
-    teachRO.current?.disconnect();
-    teachRO.current = null;
-    if (!el) {
-      setTeachHeight(0);
-      return;
-    }
-    const publish = () => setTeachHeight(el.getBoundingClientRect().height);
-    publish();
-    teachRO.current = new ResizeObserver(publish);
-    teachRO.current.observe(el);
-  }, []);
-
-  // The panel is anchored to the bottom-right, so dragging its top-left
-  // control left/up grows it. The policy list above responds to the measured
-  // height and gives this panel room as it grows.
-  const resizePanel = (e: React.PointerEvent<HTMLButtonElement>) => {
-    const start = resizeStart.current;
-    if (!start) return;
-    const maxWidth = Math.max(280, window.innerWidth - 28);
-    const maxHeight = Math.max(240, window.innerHeight - (policyOpen ? 200 : 100));
-    setManualSize({
-      width: Math.min(maxWidth, Math.max(280, Math.round(start.width + start.x - e.clientX))),
-      height: Math.min(maxHeight, Math.max(240, Math.round(start.height + start.y - e.clientY))),
-    });
-  };
-  const effectiveWide = manualSize ? manualSize.width >= 440 : wide;
+  const effectiveWide = panelDrag.size ? panelDrag.size.width >= 440 : wide;
 
   const panel: React.CSSProperties = {
     position: "absolute",
     // Above the ducks' floating DOM labels (drei Html, zIndexRange [10, 0]).
     zIndex: 20,
-    right: 14,
-    bottom: 14,
-    // Wide mode makes room for full recipe sentences beside the sliders. The
-    // extra min() terms cap it responsively: the bottom-center Controls pad is
-    // 118px wide, so its right edge sits at 50vw + 59px — our left edge
-    // (100vw - 14px - width) stays right of it for any viewport width.
-    width: manualSize ? `min(${manualSize.width}px, calc(100vw - 28px))` : wide ? "min(560px, 44vw, 50vw - 80px)" : 320,
-    height: manualSize ? `min(${manualSize.height}px, calc(100vh - ${policyOpen ? 200 : 100}px))` : undefined,
-    // Complementary to the PolicyPanel's NOMINAL cap (min(40vh, 380px)) plus
-    // margins, so the two right-column panels can never overlap — but when
-    // that panel is collapsed to its pill, reclaim the space and grow tall.
-    // Stays keyed to that constant, never to the policy panel's measured
-    // height: policies sizes itself off OUR measured height (lib/ui.ts), and
-    // measuring each other both ways would make the pair oscillate.
-    maxHeight: manualSize
-      ? `calc(100vh - ${policyOpen ? 200 : 100}px)`
-      : policyOpen
-      ? "calc(100vh - min(40vh, 380px) - 138px)"
-      : "calc(100vh - 100px)",
+    ...(panelDrag.point ? { left: panelDrag.point.x, top: panelDrag.point.y } : { right: 14, bottom: 14 }),
+    width: wide ? "min(560px, calc(100vw - 28px))" : 320,
+    maxHeight: "calc(100vh - 110px)",
     display: "flex",
     flexDirection: "column",
     background: "rgba(14, 16, 20, 0.86)",
@@ -1792,12 +1751,12 @@ export function TeachPanel({
     fontSize: 12,
     lineHeight: 1.5,
     backdropFilter: "blur(6px)",
+    ...panelDrag.resizeStyle,
   };
 
   if (!open)
     return (
       <button
-        ref={teachSizeRef}
         data-teach-ui
         onClick={() => setOpen(true)}
         style={{
@@ -1815,39 +1774,16 @@ export function TeachPanel({
   return (
     // data-teach-ui doubles as the PolicyPanel's drop target: a policy chip
     // dropped (or armed-clicked) anywhere on this panel loads its run here.
-    <div ref={teachSizeRef} style={panel} data-teach-ui>
+    <div {...panelDrag.panelProps} style={panel} data-teach-ui>
       <div
-        style={{
+        {...panelDrag.dragHandle}
+        style={{ cursor: "inherit", touchAction: "none", userSelect: "none",
           padding: "8px 12px", fontWeight: 700, fontSize: 13,
           borderBottom: "1px solid rgba(255,255,255,0.08)",
           display: "flex", alignItems: "center", flexShrink: 0,
         }}
       >
         <span style={{ flex: 1 }}>🎓 {tr("Training", "训练")}</span>
-        <button
-          type="button"
-          aria-label={tr("drag to resize the training panel", "拖动调整训练面板尺寸")}
-          title={tr("Drag left and up to enlarge · double-click to reset", "向左上拖动可放大 · 双击恢复默认尺寸")}
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            const rect = e.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
-            if (!rect) return;
-            resizeStart.current = { x: e.clientX, y: e.clientY, width: rect.width, height: rect.height };
-            e.currentTarget.setPointerCapture(e.pointerId);
-          }}
-          onPointerMove={resizePanel}
-          onPointerUp={(e) => { resizePanel(e); resizeStart.current = null; e.currentTarget.releasePointerCapture(e.pointerId); }}
-          onPointerCancel={() => { resizeStart.current = null; }}
-          onDoubleClick={() => setManualSize(null)}
-          style={{
-            background: "#202936", border: "1px solid rgba(125,184,216,0.55)",
-            borderRadius: 5, color: "#b9d9eb", cursor: "nwse-resize",
-            fontFamily: mono, fontSize: 10, padding: "2px 6px", marginRight: 4,
-            touchAction: "none", userSelect: "none",
-          }}
-        >
-          ↖ {tr("Resize", "调整尺寸")}
-        </button>
         <button
           onClick={() => {
             setMsgs([GREETING]);
@@ -1866,16 +1802,7 @@ export function TeachPanel({
         >
           🗑
         </button>
-        <button
-          onClick={() => { setManualSize(null); setWide((w) => !w); }}
-          title={wide ? tr("back to the narrow panel", "恢复窄面板") : tr("widen the panel — full recipe sentences", "展开面板以显示完整训练说明")}
-          style={{
-            background: "none", border: "none", color: "#8b93a3",
-            cursor: "pointer", fontFamily: mono, fontSize: 12, padding: "0 4px",
-          }}
-        >
-          {wide ? "⤡" : "⤢"}
-        </button>
+
         <button
           onClick={() => setOpen(false)}
           title={tr("collapse", "收起")}
@@ -1964,7 +1891,15 @@ export function TeachPanel({
             onPinStage={(stage, steps) =>
               setStagePins((p) => ({ ...p, [stage]: steps }))
             }
-            onStop={() => fetch(`${LAB_HTTP}/teach/stop`, { method: "POST" })}
+            onResume={async () => {
+              const response = await fetch(`${LAB_HTTP}/teach/resume`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ runName: training.runName }),
+              });
+              const data = await response.json();
+              if (!response.ok || !data.ok) throw new Error(data.detail || data.message || tr("Resume failed", "续训失败"));
+              setTraining(data.job);
+            }}
             onRecipeSubmit={submitRecipe}
             onStageWeights={applyStageWeights}
             onStartStage={startFromStage}
