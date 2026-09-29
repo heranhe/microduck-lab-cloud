@@ -1,67 +1,12 @@
-# Microduck Lab 🦆: Train MicroDuck with Google Colab GPUs
+# Microduck Lab 🦆: Robot Training, Simulated Worlds & Cloud GPUs
 
 [简体中文（默认）](README.md) · **English**
 
-> 🚀 **Google Colab is this fork's headline feature.** Free Google accounts can request a Colab T4 without paid compute units. Eligible paid **Google AI Pro members also receive 200 Colab compute units (CCUs) each month**. At an illustrative rate of **about 13.3 CCUs/hour**, that is **roughly 15 cumulative hours of A100 use**. 🦆 [Google AI Pro benefits](https://support.google.com/googleone/answer/14534406?hl=en) · [Colab FAQ](https://research.google.com/colaboratory/faq.html)
+A browser-based robotics lab for local reinforcement learning, room-scale simulation, robot soccer and motion authoring, with optional Google Colab and Hugging Face GPU training.
 
-**The 15-hour figure is an estimate, not a promise of A100 availability or one uninterrupted 15-hour run.** Actual compute-unit rates, GPU supply, and runtime limits vary; check the rate shown by Colab for your account.
+Built on [Jonathan Hawkins' Microduck Lab](https://github.com/jonathanhawkins/microduck-lab). The worlds, soccer, animation tools and multi-robot framework come from that project. This fork adds the cloud workflow, Chinese/English UI and local save-and-resume controls; see [what this fork adds](#what-this-fork-adds).
 
-This repository builds on [Jonathan Hawkins' original Microduck Lab](https://github.com/jonathanhawkins/microduck-lab). The original local training, simulation, viewer, and robot support remain the foundation. The table below identifies the additions made in this fork; the rest of this document describes the underlying project in detail.
-
-## What this fork adds
-
-| Area | This fork's addition |
-|---|---|
-| Cloud GPU workflow | The original teaching panel now follows one path: choose an action, choose This Mac, Google Colab, or Hugging Face, then press one Start button. The top-right cloud panel manages accounts, hardware, job state, disconnects, and ONNX downloads. Compatibility is checked before an allowlisted `microduck_rl` task can start. The app does not collect Google passwords or OAuth tokens. |
-| Browser language | Chinese is the default. A Chinese/English switch persists across pages and browser visits. Navigation, the cloud workflow, training charts, and primary simulation controls are translated. Some advanced panels and server-provided text still appear in English. |
-| Colab notebook | `notebooks/microduck_train.ipynb` provides a browser-based Colab route, including for Windows users. |
-| Documentation | `README.md` is the default Chinese landing page; this file keeps the full English project guide. |
-
-**Verification status (2026-09-25):** Google Drive backup, interrupted-job resume, 30-second live ONNX preview, and a guaranteed 12–24-hour runtime are not implemented. The providers control GPU availability and session lifetime. A paid live GPU training run was not started during automated verification; the local UI, API contract and cancellation logic passed.
-
-## Google Colab GPU (optional)
-
-The lab can run the official `microduck_rl` trainer on a Colab GPU under
-**your own Google account**. Local training and the viewer work without Google.
-On macOS or Linux, `cd microduck_local && uv sync` installs the Colab CLI.
-Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
-
-1. In a terminal, run `cd microduck_local && uv run colab usage`. On first use,
-   follow the CLI's Google authorization link. A `0.00` paid balance still permits a free T4 request.
-   Credentials stay in the CLI's local store; the lab never accepts a Google
-   password or token.
-2. Start `duck-lab` and the viewer as described below. Use **☁ Cloud** to
-   verify the account and balance. Old `/cloud` bookmarks redirect to this panel.
-3. Open **🎓 Training**, choose an action in the original teaching panel, select
-   Colab as its compute source, and choose a GPU before pressing the single
-   Start button. Cloud submission is enabled only for actions with an
-   equivalent official `microduck_rl` task. Once a job starts, the lab toolbar shows elapsed
-   time beside a one-click control that disconnects this lab's Colab sessions.
-   The timer starts when GPU allocation succeeds; it is not Google's
-   billable time. The job list has individual disconnect controls and an ONNX
-   download when export succeeds. Lab shutdown also attempts to release active
-   Colab sessions.
-
-The top entry is now named **🎓 Training** because it opens the setup panel; the
-only actual Start button is at the bottom of that panel. Once a job starts, the
-always-visible status bar uses the same lifecycle for both compute sources:
-local CPU jobs show **Stop training**, while cloud jobs show **Disconnect now**.
-
-A connected account with `Current balance: 0.00` may request a free T4; this
-balance measures paid compute units, not remaining free GPU time. Google decides
-whether a free runtime is available and may reclaim it without warning. This
-project requires a positive paid balance before requesting L4, A100 or H100.
-If you expected paid AI Pro units, check Colab **Settings → Subscription**
-under the same Google account. Free T4 has no guaranteed 3–5 hour duration.
-
-Colab controls GPU availability, compute-unit use and runtime lifetime. The
-first version downloads the final checkpoint and ONNX after training; automatic
-resume, Drive backup and live ONNX preview are not yet implemented.
-
-Chinese is the default language, and the switch persists across pages. Navigation, the cloud workflow,
-training charts and primary simulation controls have Chinese and English copy.
-Some original advanced panels and server-provided recipe text remain English
-while translation work continues.
+[Gallery](#world-gallery) · [Worlds](#sim-rooms-senses-and-brains) · [Soccer](#soccer-1v1-2v2-3v3) · [Motion editor](#animate-keyframe-a-motion-then-make-it-real) · [Robots](#a-second-robot-the-unitree-g1) · [Quick start](#quick-start) · [Cloud GPU](#google-colab-gpu-optional)
 
 Train reinforcement-learning policies for the
 [Microduck](https://pollen-robotics.com/microduck), Pollen Robotics'
@@ -73,6 +18,14 @@ same harness: Unitree's **G1** humanoid, and **MARS**, [Innate](https://www.inna
 wheeled robot with an arm.
 
 ![The duck lab viewer: nine ducks running live, mid-backflip and mid-headstand](docs/media/viewer.png)
+
+## World gallery
+
+These screenshots and clips come from the original project and illustrate capabilities retained in this repository. Some show the original English UI; current layouts may differ. Demonstration clips are not guarantees of training outcomes.
+
+| Living room: obstacles and range sensing | Playroom: toys and a basket | Soccer pitch: 1v1 |
+|---|---|---|
+| ![Two ducks in a furnished living room with ToF sensing](docs/media/sim-living-room.jpg) | ![Toy blocks and a collection basket in the playroom](docs/media/sim-playroom.jpg) | ![The 1v1 soccer pitch and live scoreboard](docs/media/sim-pitch.jpg) |
 
 | Running (locally trained on CPU, BAM actuator physics) | Backflip showcase: spotter-assisted launch, policy landing, stand handoff |
 |---|---|
@@ -183,12 +136,68 @@ vendored here.
     duck and film it. The lab converts the take to an mp4 and a GIF you can
     paste straight into a PR
   - **⤓ ONNX download** on any run (the baked export, normalizer included), and
-    **⚙ settings** to connect your own Hugging Face token (stored and
-    validated today; the GPU-job launcher is not wired up yet)
+    **☁ Cloud** to connect your own Hugging Face account, inspect GPU resources,
+    manage jobs and download results; compatible tasks launch from the teaching panel
 
 ![Teaching a trick from the browser](docs/media/teach.png)
 
 ![A live lesson: the score per practice run, where the points come from right now, and the trainee balancing beside its teacher](docs/media/teach-live.gif)
+
+## What this fork adds
+
+| Area | This fork's addition |
+|---|---|
+| Cloud GPU workflow | The original teaching panel now follows one path: choose an action, choose This Mac, Google Colab, or Hugging Face, then press one Start button. The top-right cloud panel manages accounts, hardware, job state, disconnects, and ONNX downloads. Compatibility is checked before an allowlisted `microduck_rl` task can start. The app does not collect Google passwords or OAuth tokens. |
+| Local training lifecycle | Save and stop a local task, then continue from its saved checkpoint. The persistent status bar keeps the active task visible. This does not imply automatic cloud-job recovery. |
+| Browser language | Chinese is the default. A Chinese/English switch persists across pages and browser visits. Navigation, the cloud workflow, training charts, and primary simulation controls are translated. Some advanced panels and server-provided text still appear in English. |
+| Colab notebook | `notebooks/microduck_train.ipynb` provides a browser-based Colab route, including for Windows users. |
+| Documentation | `README.md` is the default Chinese landing page; this file keeps the full English project guide. |
+
+**Cloud verification (2026-09-29):** The official Velocity task completed one iteration on a real free-tier T4, downloaded its checkpoint and ONNX export, and released the runtime. This validates the workflow, not a learned walking skill. VelStand still needs authorized teacher checkpoints and has not passed end-to-end acceptance. See the [smoke-test record](docs/colab-smoke-test-2026-09-29.md). Automatic cloud resume, Drive backup and live cloud ONNX preview remain unimplemented; provider availability and session limits apply.
+
+## Google Colab GPU (optional)
+
+The lab can run the official `microduck_rl` trainer on a Colab GPU under
+**your own Google account**. Local training and the viewer work without Google.
+On macOS or Linux, `cd microduck_local && uv sync` installs the Colab CLI.
+Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
+
+1. In a terminal, run `cd microduck_local && uv run colab usage`. On first use,
+   follow the CLI's Google authorization link. A `0.00` paid balance still permits a free T4 request.
+   Credentials stay in the CLI's local store; the lab never accepts a Google
+   password or token.
+2. Start `duck-lab` and the viewer as described below. Use **☁ Cloud** to
+   verify the account and balance. Old `/cloud` bookmarks redirect to this panel.
+3. Open **🎓 Training**, choose an action in the original teaching panel, select
+   Colab as its compute source, and choose a GPU before pressing the single
+   Start button. Cloud submission is enabled only for actions with an
+   equivalent official `microduck_rl` task. Once a job starts, the lab toolbar shows elapsed
+   time beside a one-click control that disconnects this lab's Colab sessions.
+   The timer starts when GPU allocation succeeds; it is not Google's
+   billable time. The job list has individual disconnect controls and an ONNX
+   download when export succeeds. Lab shutdown also attempts to release active
+   Colab sessions.
+
+The top entry is named **🎓 Training** because it opens the setup panel; the
+only actual Start button is at the bottom of that panel. Once a job starts, the
+always-visible status bar uses the same lifecycle for both compute sources:
+local CPU jobs support **Save and stop**, while cloud jobs show **Disconnect now**.
+
+A connected account with `Current balance: 0.00` may request a free T4; this
+balance measures paid compute units, not remaining free GPU time. Google decides
+whether a free runtime is available and may reclaim it without warning. This
+project requires a positive paid balance before requesting L4, A100 or H100.
+If you expected paid AI Pro units, check Colab **Settings → Subscription**
+under the same Google account. Free T4 has no guaranteed 3–5 hour duration.
+
+Colab controls GPU availability, compute-unit use and runtime lifetime. The
+first version downloads the final checkpoint and ONNX after training; automatic
+resume, Drive backup and live ONNX preview are not yet implemented.
+
+Chinese is the default language, and the switch persists across pages. Navigation, the cloud workflow,
+training charts and primary simulation controls have Chinese and English copy.
+Some original advanced panels and server-provided recipe text remain English
+while translation work continues.
 
 ## Quick start
 
@@ -196,7 +205,7 @@ Prereqs: macOS on Apple Silicon (Linux works too), [uv](https://docs.astral.sh/u
 Node 20+, ~3 GB of disk for the checkouts and models.
 
 ```bash
-git clone https://github.com/jonathanhawkins/microduck-lab && cd microduck-lab
+git clone https://github.com/heranhe/microduck-lab-cloud && cd microduck-lab-cloud
 ./scripts/setup.sh    # upstream clones at the pinned shas, the shipped policies
                       # from the Hub, uv sync, npm install, a smoke test
 
@@ -270,8 +279,8 @@ reward-design rules, and the verification discipline that keeps you from
 fooling yourself.
 
 The teach panel only offers recipes that exist in `behaviors/`: an unrecognized
-request returns the catalog rather than improvising one. There are **27** today
-— the duck's tricks and kicks, the G1's own tasks, and MARS's two arm tasks —
+request returns the catalog rather than improvising one. The catalog covers
+the duck's tricks and kicks, the G1's own tasks, and MARS's two arm tasks,
 and adding the next is a Python change; see
 [Working with AI assistants](#working-with-ai-assistants) if you'd rather have
 a coding agent draft it.
@@ -665,9 +674,9 @@ next to it; one click saves that run's `.onnx`. You always get `policy.onnx`,
 the deployable export with the observation normalizer baked in, and never a raw
 checkpoint. A checkpoint handed over without its normalizer is quietly a
 different policy. While a run is still training the button falls back to its
-newest `live.onnx` snapshot, so you can pull a brain mid-run. On a staged
-trick, the chain's ⤓ gives you the **final** stage: every stage fine-tunes the
-same network, so the last one is the whole trick.
+newest `live.onnx` snapshot, so you can pull a brain mid-run. For curriculum chains, the selected stage matters: a later checkpoint is not
+automatically better. Use the run record and its measured result when choosing
+a policy to export.
 
 **🤗 Connect Hugging Face (BYOK).** Open **☁ Cloud**, switch to Hugging Face,
 and paste a fine-grained token with Jobs and model write access. Create one at
