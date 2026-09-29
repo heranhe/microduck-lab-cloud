@@ -19,6 +19,41 @@ from pathlib import Path
 GPU_TYPES = {"T4", "L4", "A100", "H100"}
 TASKS = {"Mjlab-Velocity-Flat-MicroDuck", "Mjlab-VelStand-Flat-MicroDuck"}
 RUNS = Path(__file__).resolve().parents[2] / "runs" / "colab"
+POLL_TIMEOUT = 60
+MAX_POLL_FAILURES = 6
+UPSTREAM_REVISION = "cb70b792312d559a4da09064d92009079671815f"
+TEACHERS = {
+    "69u48n8l": ("MICRODUCK_STAND_TEACHER", "model_9750.pt"),
+    "441tzs6d": ("MICRODUCK_WALK_TEACHER", "model_3750.pt"),
+}
+
+
+def teacher_checkpoints(task: str) -> dict[str, Path]:
+    """Check prerequisites before any GPU allocation; never read credentials."""
+    if task != "Mjlab-VelStand-Flat-MicroDuck":
+        return {}
+    found = {}
+    missing = []
+    for run, (variable, filename) in TEACHERS.items():
+        path = Path(os.environ.get(variable) or str(RUNS.parent.parent / "teachers" / run / filename)).expanduser()
+        if not path.is_file() or path.stat().st_size == 0:
+            missing.append(f"{run}/{filename}（可用 {variable} 指定路径）")
+        else:
+            found[run] = path.resolve()
+    if missing:
+        raise RuntimeError("VelStand 缺少教师模型，尚未分配 GPU。请从有访问权限的 W&B 项目 pollen-robotics/mjlab_microduck 下载：" + "；".join(missing) + "，放入 microduck_local/teachers/<run>/ 对应目录后重试。")
+    return found
+
+
+def friendly_cli_error(value: str) -> str:
+    """Turn known provider/client failures into an actionable UI message."""
+    raw = value.strip()
+    if "JupyterSubprotocol" in raw or "jupyter_kernel_client" in raw:
+        return (
+            "Colab CLI runtime is incompatible with its kernel client. "
+            "Update the project environment with `uv sync` (google-colab-cli >= 0.7.4), then retry."
+        )
+    return raw
 
 
 def cli_path() -> str | None:
@@ -51,7 +86,18 @@ def account_status() -> dict:
                 "message": "Run `colab usage` in Terminal to connect your Google account."}
     balance = re.search(r"Current balance:\s*([\d.,]+)", result.stdout)
     rate = re.search(r"Usage rate:\s*([\d.,]+)", result.stdout)
+    # Identity must come from the same CLI credentials used to allocate GPUs.
+    # Return only the email, never the diagnostic scopes, audience or tokens.
+    email = None
+    try:
+        identity = cli(["whoami"], timeout=15)
+        match = re.search(r"^Email:\s*([^\s<>]+@[^\s<>]+)\s*$", identity.stdout, re.MULTILINE)
+        if identity.returncode == 0 and match:
+            email = match.group(1)
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # An identity lookup failure does not invalidate a working account.
     return {"installed": True, "connected": True,
+            "email": email,
             "balance": float(balance.group(1).replace(",", "")) if balance else None,
             "rate": float(rate.group(1).replace(",", "")) if rate else None}
 
@@ -72,10 +118,35 @@ try:
     if not repo.exists():
         subprocess.run(["git", "clone", "--depth", "1",
                         "https://github.com/pollen-robotics/microduck_rl.git", str(repo)], check=True)
+    subprocess.run(["git", "fetch", "--depth", "1", "origin", "{UPSTREAM_REVISION}"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "--detach", "{UPSTREAM_REVISION}"], cwd=repo, check=True)
     subprocess.run(["uv", "sync", "--no-dev"], cwd=repo, check=True)
+    # Both training and export construct the expert-backed runner. Redirect only
+    # the pinned teachers to uploaded checkpoints; keep the algorithm unchanged.
+    entry = root / "entry.py"
+    entry.write_text("""import sys
+from pathlib import Path
+import mjlab_microduck.tasks.distill as distill
+original = distill._resolve_checkpoint
+def resolve(cfg, prefix=""):
+    run = str(cfg.get(prefix + "wandb_run_path", "")).rsplit("/", 1)[-1]
+    if run in ("69u48n8l", "441tzs6d") and not cfg.get(prefix + "checkpoint_path"):
+        path = Path("/content/microduck-teacher-" + run + ".pt")
+        if not path.is_file():
+            raise RuntimeError("Missing uploaded teacher: " + run)
+        return path
+    return original(cfg, prefix)
+distill._resolve_checkpoint = resolve
+mode = sys.argv.pop(1)
+if mode == "train":
+    from mjlab.scripts.train import main
+else:
+    from mjlab_microduck.export import main
+main()
+""")
     mark("training")
     with (root / "train.log").open("w") as log:
-        result = subprocess.run(["uv", "run", "train", "{task}",
+        result = subprocess.run(["uv", "run", "python", str(entry), "train", "{task}",
             "--env.scene.num-envs", "{envs}", "--agent.max_iterations", "{iterations}",
             "--agent.save_interval", str(max(1, min(250, {iterations})))],
             cwd=repo, env={{**os.environ, "WANDB_MODE": "disabled"}},
@@ -86,7 +157,7 @@ try:
     if not checkpoints:
         raise RuntimeError("training finished without a checkpoint")
     mark("exporting")
-    subprocess.run(["uv", "run", "python", "scripts/export.py", "{task}",
+    subprocess.run(["uv", "run", "python", str(entry), "export", "{task}",
         "--checkpoint-file", str(checkpoints[-1]), "--num-envs", "1",
         "--onnx-file", str(root / "policy.onnx")],
         cwd=repo, check=True)
@@ -120,6 +191,7 @@ class ColabJobs:
             raise ValueError("Unsupported task or GPU")
         if not 1 <= iterations <= 100_000 or not 1 <= envs <= 4096:
             raise ValueError("Training limits are out of range")
+        teacher_checkpoints(task)
         account = account_status()
         if not account["connected"]:
             raise RuntimeError("Connect your Google account with `colab usage` first")
@@ -146,17 +218,25 @@ class ColabJobs:
     def _run(self, job: dict, directory: Path, iterations: int, envs: int) -> None:
         session = job["session"]
         try:
+            teachers = teacher_checkpoints(job["task"])
             result = cli(["new", "-s", session, "--gpu", job["gpu"]], timeout=180)
             if result.returncode:
                 # The provider rejected the assignment before a runtime was
                 # allocated. A failed best-effort `stop` below must not turn
                 # this into a phantom billable session that blocks retrying.
                 job["allocation_rejected"] = True
-                raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+                raise RuntimeError(friendly_cli_error(result.stderr.strip() or result.stdout.strip()))
             job["allocated_at"] = time.time()
             (directory / "job.json").write_text(json.dumps(job, indent=2))
             if job["state"] in {"stopping", "stopped"}:
                 return
+            for run, path in teachers.items():
+                if job.get("cancel_requested"):
+                    return
+                uploaded = cli(["upload", "-s", session, str(path),
+                                f"/content/microduck-teacher-{run}.pt"], timeout=120)
+                if uploaded.returncode:
+                    raise RuntimeError(f"教师模型 {run} 上传失败，请检查连接后重试。")
             # Ask the allocated runtime instead of guessing from the requested
             # tier: Colab may serve different A100 memory variants.
             probe = cli(["exec", "-s", session], code=(
@@ -184,31 +264,45 @@ class ColabJobs:
                          "start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n")
             result = cli(["exec", "-s", session], code=bootstrap, timeout=60)
             if result.returncode:
-                raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+                raise RuntimeError(friendly_cli_error(result.stderr.strip() or result.stdout.strip()))
             if job.get("cancel_requested"):
                 return
             job["state"] = "running"
+            poll_failures = 0
             while job["state"] == "running":
                 time.sleep(15)
                 if job.get("cancel_requested"):
                     return
                 code = "import pathlib; p=pathlib.Path('/content/microduck-cloud-job/status.json'); print(p.read_text() if p.exists() else '{}')"
-                result = cli(["exec", "-s", session], code=code, timeout=30)
+                remote = None
+                try:
+                    result = cli(["exec", "-s", session], code=code, timeout=POLL_TIMEOUT)
+                    if result.returncode == 0:
+                        for line in result.stdout.splitlines():
+                            try:
+                                candidate = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(candidate, dict) and candidate.get("state") in {"setup", "training", "exporting", "done", "failed"}:
+                                remote = candidate
+                except (subprocess.TimeoutExpired, OSError):
+                    pass  # A lost progress request is not a failed remote training run.
                 if job.get("cancel_requested"):
                     return
-                if result.returncode:
+                if remote is None:
+                    poll_failures += 1
+                    job["poll_failures"] = poll_failures
+                    job["message"] = f"云端进度暂时无法获取，正在重试（{poll_failures}/{MAX_POLL_FAILURES}）；训练可能仍在运行。"
+                    if poll_failures >= MAX_POLL_FAILURES:
+                        raise RuntimeError("连续多次无法获取云端进度，已停止本次任务并尝试释放算力；无法确认远端训练结果。")
                     continue
-                for line in result.stdout.splitlines():
-                    if line.strip().startswith('{'):
-                        try:
-                            remote = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if remote.get("state") in {"setup", "training", "exporting", "done", "failed"}:
-                            job["remote_state"] = remote["state"]
-                            job["message"] = remote.get("message", "")
-                            if remote["state"] in {"done", "failed"}:
-                                job["state"] = "finalizing"
+                poll_failures = 0
+                job["poll_failures"] = 0
+                job["last_heartbeat_at"] = time.time()
+                job["remote_state"] = remote["state"]
+                job["message"] = remote.get("message", "")
+                if remote["state"] in {"done", "failed"}:
+                    job["state"] = "finalizing"
                 if job["state"] == "finalizing":
                     for name in ("policy.onnx", "checkpoint.pt", "train.log", "error.log"):
                         if job.get("cancel_requested"):

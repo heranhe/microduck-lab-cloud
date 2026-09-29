@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from
 import { LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings, type LabClient } from "@/lib/lab";
 import type { CloudAccount as Account, CloudHardware as Hardware, HfCloudAccount as HfAccount, CloudProvider as Provider } from "@/lib/cloudCompute";
 import { useI18n, type Locale } from "@/lib/i18n";
-import { requestCloudOpen, requestTeachOpen } from "@/lib/ui";
+import { localizeBehavior } from "@/lib/teachLocalization";
+import { requestCloudOpen, requestPolicyToggle, requestTeachOpen, usePolicyOpen } from "@/lib/ui";
 import styles from "./CloudPanel.module.css";
 
 type Job = {
@@ -35,6 +36,9 @@ function errorText(value: unknown, locale: Locale) {
   if (raw.includes("Connect a Hugging Face")) return "请先连接 Hugging Face 账号。";
   if (raw.includes("Connect your Google")) return "请先在终端运行 colab usage 连接 Google 账号。";
   if (raw.includes("paid Colab compute units")) return "当前没有付费 Colab 计算单元。可选择 T4 尝试免费层。";
+  if (raw.includes("Colab CLI runtime is incompatible") || raw.includes("JupyterSubprotocol") || raw.includes("jupyter_kernel_client")) {
+    return "本地 Colab CLI 与内核客户端版本不兼容，请在 microduck_local 目录运行 `uv sync` 后重试。";
+  }
   if (raw.includes("Stop and confirm all Hugging Face")) return "请先停止全部 Hugging Face 任务，确认云算力已释放后再修改 Token。";
   if (raw.includes("Failed to fetch") || raw.includes("Lab unavailable")) return "无法连接本地 duck-lab。";
   return raw;
@@ -51,6 +55,7 @@ async function jsonRequest(path: string, init?: RequestInit) {
 
 export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClient | null> }) {
   const { tr, locale } = useI18n();
+  const policyOpen = usePolicyOpen();
   const [open, setOpen] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("cloud") === "1");
   const [provider, setProvider] = useState<Provider>("colab");
   const [colab, setColab] = useState<Account>({ connected:false });
@@ -104,6 +109,12 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
     };
   }, [refresh]);
 
+  useEffect(() => {
+    if (open && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("microduck:close-policy"));
+    }
+  }, [open]);
+
   const cloudActive = useMemo(() => jobs.filter(needsRelease), [jobs]);
   const primary = cloudActive.find((j) => j.allocated_at) ?? cloudActive[0];
   const local = clientRef.current?.frame?.training ?? null;
@@ -117,7 +128,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const device = primary
     ? `${primary.platform === "hf" ? "HF" : "Colab"} · ${primary.device ?? primary.gpu}${primary.vram ? ` · ${primary.vram}` : ""}`
     : localActive
-      ? tr(`This computer · CPU · ${local.behavior.title}`, `本机 · CPU · ${local.behavior.title}`)
+      ? tr(`This computer · CPU · ${local.behavior.title}`, `本机 · CPU · ${localizeBehavior(local.behavior, locale).title}`)
       : tr("Training compute idle", "训练算力未开启");
 
   const stopActiveCompute = async () => {
@@ -175,7 +186,8 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   return <>
     <div className={styles.toolbar} data-policy-ui>
       <button className={styles.trainButton} onClick={requestTeachOpen}>🎓 {tr("Training", "训练")}</button>
-      <button className={styles.toolButton} onClick={() => open ? setOpen(false) : requestCloudOpen()}>☁ {tr("Cloud", "云算力")}</button>
+      <button className={`${styles.toolButton} ${open ? styles.toolButtonActive : ""}`} onClick={() => open ? setOpen(false) : requestCloudOpen()}>☁ {tr("Cloud", "云算力")}</button>
+      <button className={`${styles.toolButton} ${policyOpen ? styles.toolButtonActive : ""}`} onClick={requestPolicyToggle}>🧠 {tr("Policies", "策略")}</button>
     </div>
     <div className={`${styles.statusBar} ${hasActiveCompute ? styles.statusBarActive : ""}`} data-policy-ui>
       <span className={styles.dot}/><span>{device}</span><span className={styles.timer}>{elapsed}</span>
@@ -200,6 +212,12 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           <span className={`${styles.accountMark} ${account.connected ? styles.accountMarkOn : ""}`}/>
           <div style={{flex:1}}>
             <div className={account.connected ? styles.good : ""}>{account.connected ? tr("Account connected", "账号已连接") : tr("Account not connected", "账号未连接")}</div>
+            {provider === "colab" && colab.connected && <div className={styles.connectionMethod}>
+              {tr("Google account", "Google 账户")}：{colab.email || tr("Email unavailable · refresh to retry", "暂未获取邮箱，点击刷新重试")}
+            </div>}
+            {account.connected && <div className={styles.connectionMethod}>
+              {tr("Connection method", "连接方式")}：{provider === "colab" ? "Google Colab CLI (google-colab-cli)" : tr("Hugging Face access token", "Hugging Face Token")}
+            </div>}
             {provider === "colab" && colab.connected && <div className={styles.muted}>{tr("Paid balance", "付费余额")} {colab.balance ?? "—"} CCU{colab.rate != null ? ` · ${colab.rate} CCU/h` : ""}</div>}
             {provider === "hf" && hfSettings?.configured && <div className={styles.muted}>{hfSettings.username} · {hfSettings.masked}</div>}
             {account.message && <div className={styles.muted}>{account.message}</div>}
@@ -219,12 +237,6 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           <div className={styles.help}>{tr("Use a fine-grained token with Jobs and model write access.", "请使用具有 Jobs 和模型写入权限的细粒度 Token。")} <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">{tr("Create token", "创建 Token")}</a></div>
         </>}
         {provider === "colab" && !colab.connected && <div className={styles.help}>{tr("Run `uv run colab usage` once in Terminal to authorize your Google account.", "请先在终端运行 `uv run colab usage`，通过 Google 官方流程完成授权。")}</div>}
-        <div className={styles.managerNote}>
-          <strong>{tr("Training starts in the teaching panel.", "训练统一从教学面板开始。")}</strong>
-          <span>{tr("Choose an action first, then select Local, Colab, or Hugging Face beside the Start button.", "先选择动作，再在“开始训练”按钮旁选择本地、Colab 或 Hugging Face。")}</span>
-          <button className={styles.smallButton} onClick={() => { setOpen(false); requestTeachOpen(); }}>▶ {tr("Choose action and train", "选择动作并训练")}</button>
-        </div>
-
         {provider === "hf" && hf.hardware.length > 0 && <div className={styles.resources}>
           <div className={styles.formTitle}>{tr("Available hardware", "可用算力卡")}</div>
           {hf.hardware.slice(0, 5).map((h: Hardware) => <div className={styles.resource} key={h.id}>
@@ -239,7 +251,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           {!providerJobs.length && <div className={styles.muted}>{tr("No cloud jobs yet.", "暂无云端任务。")}</div>}
           {providerJobs.slice(0,6).map((job) => <div className={styles.job} key={`${job.platform}-${job.id}`}>
             <div><span className={styles.jobState}>{stateText(job.state, locale)}</span> · {job.device ?? job.gpu}{job.vram ? ` · ${job.vram}` : ""}</div>
-            <div className={styles.jobMeta}>{clock(job.allocated_at, job.released_at ? job.released_at * 1000 : now)} · {job.id}{job.message ? ` · ${job.message}` : ""}</div>
+            <div className={styles.jobMeta}>{clock(job.allocated_at, job.released_at ? job.released_at * 1000 : now)} · {job.id}{job.message ? ` · ${errorText(job.message, locale)}` : ""}</div>
             <div className={styles.jobActions}>
               {job.url && <a className={styles.jobLink} href={job.url} target="_blank" rel="noreferrer">↗</a>}
               {job.state === "done" && <a className={styles.jobLink} href={`${LAB_HTTP}/cloud/${job.platform === "hf" ? "hf" : "colab"}/jobs/${job.id}/policy.onnx`}>↓ ONNX</a>}

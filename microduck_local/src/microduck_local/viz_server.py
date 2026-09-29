@@ -4052,6 +4052,11 @@ def make_app(ducks: list[Duck]):
             },
         }
 
+    @app.get("/health")
+    def health() -> dict:
+        """Small readiness probe used by the viewer before enabling training."""
+        return {"ok": True, "service": "duck-lab", "port": 8788}
+
     @app.post("/teach/stop")
     async def teach_stop() -> dict:
         if st.job:

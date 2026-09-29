@@ -2,7 +2,7 @@
   position: absolute;
   z-index: 32;
   top: 14px;
-  right: 112px;
+  right: 14px;
   display: flex;
   gap: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -22,6 +22,11 @@
 }
 
 .toolButton:hover { border-color: rgba(112,184,216,.55); transform: translateY(-1px); }
+.toolButtonActive {
+  border-color: rgba(112,184,216,.65);
+  background: rgba(24,36,50,.95);
+  color: #cfe4f5;
+}
 .trainButton { border-color: rgba(226,170,84,.62); background: rgba(62,43,20,.92); color: #ffd998; }
 .trainButton:hover { background: rgba(83,56,23,.96); transform: translateY(-1px); }
 
@@ -89,6 +94,7 @@
 .accountMarkOn { background:#65c7a3; }
 .muted { color:#747e8d; }
 .good { color:#7fd0ad; }
+.connectionMethod { margin-top:2px; color:#aeb8c4; }
 .error { margin-top:8px; color:#ef957d; white-space:pre-wrap; }
 .notice { margin-top:8px; color:#85bed9; }
 .tokenRow { display:flex; gap:6px; margin-top:9px; }
@@ -129,7 +135,7 @@
 .help a { color:#7db8d8; }
 
 @media (max-width: 720px) {
-  .toolbar { right: 104px; gap:5px; }
+  .toolbar { right: 14px; gap:5px; }
   .toolButton, .trainButton { padding:0 9px; }
   .statusBar { left:14px; right:14px; justify-content:flex-end; }
   .statusBar > :nth-child(2) { margin-right:auto; }

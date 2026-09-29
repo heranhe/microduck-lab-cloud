@@ -18,6 +18,7 @@ import {
 } from "@/lib/lab";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
+import { localizeBehavior } from "@/lib/teachLocalization";
 import { setSelectedDuck, useSelectedDuck } from "@/lib/select";
 import { setDuckLabels, setHudRight } from "@/lib/ui";
 
@@ -583,7 +584,7 @@ export function Hud({
                 // run reset at every stage handoff.
                 const name =
                   d.id === "trainee" && training?.status === "training"
-                    ? `🎓 ${training.behavior.title} · ${abbrevSteps(
+                    ? `🎓 ${localizeBehavior(training.behavior, locale).title} · ${abbrevSteps(
                         training.progress.overallSteps ??
                           training.progress.steps ??
                           0,

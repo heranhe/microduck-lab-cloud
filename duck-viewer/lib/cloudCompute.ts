@@ -7,6 +7,7 @@ export type CloudAccount = {
   balance?: number | null;
   rate?: number | null;
   username?: string;
+  email?: string | null;
   message?: string;
 };
 
@@ -30,6 +31,6 @@ export type HfCloudAccount = CloudAccount & { hardware: CloudHardware[] };
 export function cloudTaskFor(robotId: string, behaviorId?: string): string | null {
   if (robotId !== "microduck") return null;
   if (behaviorId === "stand") return "Mjlab-VelStand-Flat-MicroDuck";
+  if (behaviorId === "official_velocity") return "Mjlab-Velocity-Flat-MicroDuck";
   return null;
 }
-

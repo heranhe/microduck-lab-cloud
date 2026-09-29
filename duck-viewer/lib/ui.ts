@@ -91,7 +91,24 @@ export function requestTeachOpen() {
 export function requestCloudOpen() {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("microduck:close-teach"));
+    window.dispatchEvent(new CustomEvent("microduck:close-policy"));
     window.dispatchEvent(new CustomEvent("microduck:open-cloud"));
+  }
+}
+
+/** Open the policy panel. */
+export function requestPolicyOpen() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("microduck:close-cloud"));
+    window.dispatchEvent(new CustomEvent("microduck:open-policy"));
+  }
+}
+
+/** Toggle the policy panel. */
+export function requestPolicyToggle() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("microduck:close-cloud"));
+    window.dispatchEvent(new CustomEvent("microduck:toggle-policy"));
   }
 }
 

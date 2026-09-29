@@ -1,8 +1,59 @@
 """Cloud orchestration tests do not allocate a real Colab runtime."""
 
 from subprocess import CompletedProcess
+import subprocess
+import pytest
 
 from microduck_local import colab_jobs
+
+
+@pytest.fixture(autouse=True)
+def available_teachers(monkeypatch, tmp_path_factory):
+    tmp_path = tmp_path_factory.mktemp("teachers")
+    for run, (variable, name) in colab_jobs.TEACHERS.items():
+        path = tmp_path / name
+        path.write_bytes(b"fixture checkpoint")
+        monkeypatch.setenv(variable, str(path))
+
+
+def test_missing_teacher_rejects_before_account_or_allocation(monkeypatch, tmp_path):
+    monkeypatch.setenv("MICRODUCK_STAND_TEACHER", str(tmp_path / "missing.pt"))
+    def unexpected(*a, **k):
+        pytest.fail("CLI must not run without prerequisites")
+    monkeypatch.setattr(colab_jobs, "cli", unexpected)
+    with pytest.raises(RuntimeError, match="尚未分配 GPU"):
+        colab_jobs.ColabJobs(tmp_path).start("Mjlab-VelStand-Flat-MicroDuck", "T4", 1, 16)
+
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_poll_timeout_recovers_or_releases_after_bounded_failures(tmp_path, monkeypatch, recover):
+    jobs = colab_jobs.ColabJobs(tmp_path)
+    job = {"id": "123456abcdef", "session": "test", "state": "allocating",
+           "gpu": "T4", "task": "Mjlab-VelStand-Flat-MicroDuck", "released": False, "message": ""}
+    polls = 0
+    stops = []
+    def fake_cli(args, **kwargs):
+        nonlocal polls
+        if args[0] == "exec" and "status.json" in kwargs.get("code", "") and "p.write_text" not in kwargs["code"]:
+            polls += 1
+            if recover and polls == 2:
+                return CompletedProcess(args, 0, '{"state":"done"}', "")
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        if args[0] == "download" and args[-1].endswith("policy.onnx"):
+            (tmp_path / "policy.onnx").write_bytes(b"test model")
+        if args[0] == "stop":
+            stops.append(polls)
+        return CompletedProcess(args, 0, "", "")
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    monkeypatch.setattr(colab_jobs.time, "sleep", lambda _: None)
+    jobs._run(job, tmp_path, 1, 16)
+    assert job["released"]
+    assert polls == (2 if recover else colab_jobs.MAX_POLL_FAILURES)
+    assert stops == [polls]
+    assert job["state"] == ("done" if recover else "failed")
+    if recover:
+        assert job["poll_failures"] == 0 and job["last_heartbeat_at"] > 0
 
 
 def test_account_status_requires_existing_auth(monkeypatch):
@@ -23,11 +74,58 @@ def test_account_status_reads_real_balance(monkeypatch):
 
 
 def test_remote_runner_uses_official_cli_flags():
+    import ast
     script = colab_jobs._remote_runner("Mjlab-Velocity-Flat-MicroDuck", 10, 64)
-    assert '"uv", "run", "train", "Mjlab-Velocity-Flat-MicroDuck"' in script
+    assert 'str(entry), "train", "Mjlab-Velocity-Flat-MicroDuck"' in script
+    assert 'str(entry), "export"' in script
+    assert colab_jobs.UPSTREAM_REVISION in script
     assert '"--checkpoint-file"' in script
     assert 'root.mkdir(parents=True, exist_ok=True)' in script
     compile(script, "remote_runner.py", "exec")
+    tree = ast.parse(script)
+    entries = [node.args[0].value for node in ast.walk(tree)
+               if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and node.func.attr == "write_text" and node.args
+               and isinstance(node.args[0], ast.Constant)
+               and isinstance(node.args[0].value, str)]
+    assert len(entries) == 1
+    compile(entries[0], "entry.py", "exec")
+
+
+def test_teacher_upload_failure_releases_without_training(tmp_path, monkeypatch):
+    job = {"id": "abcdef123456", "session": "test", "state": "allocating",
+           "gpu": "T4", "task": "Mjlab-VelStand-Flat-MicroDuck", "released": False, "message": ""}
+    calls = []
+    def fake_cli(args, **kwargs):
+        calls.append(args[0])
+        return CompletedProcess(args, 1 if args[0] == "upload" else 0, "", "")
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    colab_jobs.ColabJobs(tmp_path)._run(job, tmp_path, 1, 16)
+    assert calls == ["new", "upload", "stop"]
+    assert job["state"] == "failed" and job["released"]
+
+
+def test_account_identity_uses_cli_email_only(monkeypatch):
+    monkeypatch.setattr(colab_jobs, "cli_path", lambda: "/tmp/colab")
+    def fake_cli(args, **kwargs):
+        output = ("Email:         duck@example.com\nAudience: secret\nScopes: private\n"
+                  if args == ["whoami"] else "Current balance: 0\nUsage rate: 0/hr\n")
+        return CompletedProcess(args, 0, output, "")
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    status = colab_jobs.account_status()
+    assert status["email"] == "duck@example.com"
+    assert "secret" not in str(status) and "private" not in str(status)
+
+
+def test_identity_failure_keeps_connected_account(monkeypatch):
+    monkeypatch.setattr(colab_jobs, "cli_path", lambda: "/tmp/colab")
+    def fake_cli(args, **kwargs):
+        if args == ["whoami"]:
+            return CompletedProcess(args, 1, "Email: wrong@example.com", "lookup failed")
+        return CompletedProcess(args, 0, "Current balance: 0\nUsage rate: 0/hr\n", "")
+    monkeypatch.setattr(colab_jobs, "cli", fake_cli)
+    status = colab_jobs.account_status()
+    assert status["connected"] and status["email"] is None
 
 
 def test_rejects_unlisted_task_before_any_gpu_allocation(tmp_path):
@@ -158,7 +256,7 @@ def test_stop_during_gpu_probe_never_bootstraps_training(tmp_path, monkeypatch):
         return CompletedProcess(args, 0, "", "")
     monkeypatch.setattr(colab_jobs, "cli", fake_cli)
     jobs._run(job, directory, 10, 8)
-    assert calls == ["new", "exec", "stop"]
+    assert calls == ["new", "upload", "upload", "exec", "stop"]
     assert job["state"] == "stopped" and job["released"]
 
 

@@ -308,7 +308,7 @@ wheels = [
 
 [[package]]
 name = "google-colab-cli"
-version = "0.7.2"
+version = "0.7.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -328,9 +328,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/ea/8b2ca4c9a1b8f2041143df2f7b4b8bed385caa9df5534e7cac8708bb330a/google_colab_cli-0.7.2.tar.gz", hash = "sha256:916a960b37d260e91b351d097d92313ab39aec19df23b7a7fa5c413459327139", size = 1205726, upload-time = "2026-09-22T22:53:11.799Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/5f/821b28ef717eaa9d857863a8bfc1103e9a8fb9be54e1061a7e8d1d13ec5a/google_colab_cli-0.7.4.tar.gz", hash = "sha256:484c759f1e690a5f455dcaf031ef2170fd4177378889e12164f6e8098f0af586", size = 1193182, upload-time = "2026-09-26T00:20:40.44Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/3c/bedab205613829d4b1221fa85c878dc16a9d2feaf23a7e9e3e52ddba1ff9/google_colab_cli-0.7.2-py3-none-any.whl", hash = "sha256:1e8e1d466c63ad4195e8d93e758b98f863d1788ad73b0ef823eb13916960f38e", size = 86707, upload-time = "2026-09-22T22:53:10.315Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/b8/2621fba8c60c1c1c4cb8a13ad172e254d22bf3e8ceb80396668438e1d5ec/google_colab_cli-0.7.4-py3-none-any.whl", hash = "sha256:1435f3533a7064f27b8b81252da85370427d6cf93b94e6c34737bd1cc68ec292", size = 82610, upload-time = "2026-09-26T00:20:39.051Z" },
 ]
 
 [[package]]
@@ -573,7 +573,7 @@ wheels = [
 
 [[package]]
 name = "jupyter-kernel-client"
-version = "0.8.0"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jupyter-client" },
@@ -585,7 +585,7 @@ dependencies = [
     { name = "websocket-client" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a8/d6/7b084e598cc2ea7300d47f911b66d32264f25115af333383e5ecc05b3b81/jupyter_kernel_client-0.8.0-py3-none-any.whl", hash = "sha256:1cae48cc51056ccd464d97e312bdefaaf470e8bb6bf1ccb81d8482942383f625", size = 36069, upload-time = "2025-08-10T18:20:37.657Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/68/287315ba355aa93bda2e344de5febc45e6de1b47d8f4a5b69400b24cfdfd/jupyter_kernel_client-0.9.0-py3-none-any.whl", hash = "sha256:77acb8f2f738d97625d6bd01ee8cf21c4d59790b7ba464108712db3870416f20", size = 40097, upload-time = "2026-02-11T06:42:05.133Z" },
 ]
 
 [[package]]
@@ -688,7 +688,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "google-colab-cli", specifier = ">=0.7.2" },
+    { name = "google-colab-cli", specifier = ">=0.7.4" },
     { name = "gymnasium", specifier = ">=1.0" },
     { name = "huggingface-hub", specifier = ">=0.34" },
     { name = "imageio", specifier = ">=2.35" },

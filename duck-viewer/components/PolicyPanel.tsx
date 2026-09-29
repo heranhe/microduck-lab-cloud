@@ -553,7 +553,24 @@ export function PolicyPanel({
   useEffect(() => {
     saveJSON("policyOpen", open);
     setPolicyOpen(open); // lets the TeachPanel reclaim the vertical space
+    if (open && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("microduck:close-cloud"));
+    }
   }, [open]);
+
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    const onClose = () => setOpen(false);
+    const onToggle = () => setOpen((v) => !v);
+    window.addEventListener("microduck:open-policy", onOpen);
+    window.addEventListener("microduck:close-policy", onClose);
+    window.addEventListener("microduck:toggle-policy", onToggle);
+    return () => {
+      window.removeEventListener("microduck:open-policy", onOpen);
+      window.removeEventListener("microduck:close-policy", onClose);
+      window.removeEventListener("microduck:toggle-policy", onToggle);
+    };
+  }, []);
 
   // "/" anywhere jumps to the filter box — expanding the panel first when
   // it's collapsed, since there is nothing to focus otherwise. Ignored while
@@ -1207,27 +1224,22 @@ export function PolicyPanel({
 
   if (!open)
     return (
-      <button
-        data-policy-ui
-        onClick={() => setOpen(true)}
-        style={{
-          position: "absolute",
-          zIndex: 20,
-          right: 14,
-          top: 14,
-          background: "rgba(14,16,20,0.86)",
-          color: "#e8e6e1",
-          border: "1px solid rgba(255,255,255,0.12)",
-          borderRadius: 10,
-          padding: "8px 12px",
-          fontFamily: mono,
-          fontSize: 12,
-          cursor: "pointer",
-          backdropFilter: "blur(6px)",
-        }}
-      >
-        🧠 {tr("policies", "策略")}
-      </button>
+      <>
+        {ghost}
+        {pendingDelete && (
+          <DeleteDialog
+            target={pendingDelete}
+            busy={deleting}
+            error={deleteErr}
+            onCancel={() => {
+              if (deleting) return;
+              setPendingDelete(null);
+              setDeleteErr(null);
+            }}
+            onConfirm={confirmDelete}
+          />
+        )}
+      </>
     );
 
   return (
@@ -1240,20 +1252,14 @@ export function PolicyPanel({
           // [10, 0]) — labels must never scribble over the chip list.
           zIndex: 20,
           right: 14,
-          top: 14,
+          top: 96,
           width: 230,
-          // Grow to fill the column: take everything the TeachPanel below
-          // isn't using. Chrome to subtract = 14px top inset + 14px gap +
-          // teach's 14px bottom inset + our own 2px of border (maxHeight is
-          // content-box here) = 44px. So a collapsed or short teach panel
-          // hands the chip list its space instead of leaving a dead gap.
-          // Teach derives its own maxHeight from the min(40vh, 380px) cap
-          // below and never from our measured height, so this stays a
-          // one-way dependency — that cap is also the fallback until teach
-          // reports in (SSR and first paint).
+          // Sits below the toolbar + status bar (top: 96px).
+          // Chrome to subtract = 96px top inset + 14px gap +
+          // teach's 14px bottom inset + 2px border = 126px.
           maxHeight: teachHeight
-            ? `calc(100vh - ${Math.round(teachHeight) + 44}px)`
-            : "min(40vh, 380px)",
+            ? `calc(100vh - ${Math.round(teachHeight) + 126}px)`
+            : "calc(100vh - 150px)",
           display: "flex",
           flexDirection: "column",
           background: "rgba(14, 16, 20, 0.82)",
@@ -1298,9 +1304,6 @@ export function PolicyPanel({
             onClick={() => setOpen(false)}
             title="collapse"
             style={{
-              // keep clear of the Next.js dev-tools badge that floats in
-              // this corner during development
-              marginRight: 30,
               background: "none",
               border: "none",
               color: "#8b93a3",

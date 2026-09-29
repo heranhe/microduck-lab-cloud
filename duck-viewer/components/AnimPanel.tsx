@@ -87,6 +87,21 @@ const TRACK_PAD = 10; // px inset of the timeline track inside its box
  *  a section that already says which leg. */
 const jointLabel = (name: string) => name.replace(/^(left|right)_/, "").replace(/_joint$/, "");
 
+/** Labels sent by the lab are intentionally stable English identifiers. Keep
+ *  the identifiers for the English UI, while making the common duck groups
+ *  readable when the app is in Chinese. */
+const translateAnimLabel = (label: string, tr: (en: string, zh: string) => string) => {
+  const key = label.toLowerCase();
+  const zh: Record<string, string> = {
+    stance: "站姿", twist: "扭转", toes: "脚趾", look: "视线", trunk: "躯干",
+    "left leg": "左腿", "right leg": "右腿", left_leg: "左腿", right_leg: "右腿", "head + neck": "头部 + 颈部",
+    root: "根部", root_pitch: "根部俯仰", hip_yaw: "髋部偏航", hip_roll: "髋部横滚",
+    hip_pitch: "髋部俯仰", knee: "膝盖", ankle: "脚踝", foot: "脚",
+    neck_pitch: "颈部俯仰", head_pitch: "头部俯仰", head_yaw: "头部偏航", head_roll: "头部横滚",
+  };
+  return tr(label, zh[key] ?? label);
+};
+
 /** A residual the eye should know about: past the millimetre the solver
  *  calls converged, as centimetres. Null below that. */
 export function residualLabel(metres: number | undefined): string | null {
@@ -732,8 +747,8 @@ export function AnimPanel() {
               disabled={!r.ready}
               title={
                 r.ready
-                  ? `pose the ${r.title} (${r.numJoints} joints)`
-                  : `uv run fetch-robot ${r.id}`
+                  ? tr(`pose the ${r.title} (${r.numJoints} joints)`, `调整${r.title}（${r.numJoints} 个关节）`)
+                  : tr(`uv run fetch-robot ${r.id}`, `运行 uv run fetch-robot ${r.id}`)
               }
               onClick={() => {
                 if (r.id !== robot) switchRobot(r.id);
@@ -745,7 +760,7 @@ export function AnimPanel() {
         })}
         <button
           style={btn}
-          title="frame the preview robot"
+          title={tr("frame the preview robot", "聚焦预览机器人")}
           onClick={() => {
             animStore.focusRequest = 1;
           }}
@@ -754,7 +769,7 @@ export function AnimPanel() {
         </button>
         <button
           onClick={() => setOpen(false)}
-          title="collapse"
+          title={tr("collapse", "收起")}
           style={{
             background: "none",
             border: "none",
@@ -795,7 +810,7 @@ export function AnimPanel() {
           style={{ ...field, width: 132 }}
         />
         <label style={{ color: "#8b93a3", fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}>
-          dur
+          {tr("dur", "时长")}
           <input
             type="number"
             min={0.1}
@@ -805,32 +820,32 @@ export function AnimPanel() {
             onChange={(e) => setDuration(Number(e.target.value))}
             style={{ ...field, width: 58 }}
           />
-          s
+          {tr("s", "秒")}
         </label>
         <label
           style={{ color: "#8b93a3", fontSize: 10, display: "flex", alignItems: "center", gap: 3 }}
-          title="loop the clip (the RL side reads this flag)"
+          title={tr("loop the clip (the RL side reads this flag)", "循环播放片段（强化学习端会读取此标记）")}
         >
           <input
             type="checkbox"
             checked={clip.loop}
             onChange={(e) => setClip((c) => ({ ...c, loop: e.target.checked }))}
           />
-          loop
+          {tr("loop", "循环")}
         </label>
         <div style={{ flex: 1 }} />
-        <button style={btn} onClick={() => save()} disabled={saving} title="save to clips/">
+        <button style={btn} onClick={() => save()} disabled={saving} title={tr("save to clips/", "保存到片段列表") }>
           {saving ? "…" : `💾 ${tr("save", "保存")}`}
         </button>
-        <button style={btn} onClick={() => setBrowsing((b) => !b)} title="saved clips">
+        <button style={btn} onClick={() => setBrowsing((b) => !b)} title={tr("saved clips", "已保存片段")}>
           📂
         </button>
         <button
           style={{ ...btn, color: "#e8c87d", borderColor: "rgba(216,198,125,0.4)" }}
           onClick={trainThis}
-          title="save the clip so a policy can be trained to track it"
+          title={tr("save the clip so a policy can be trained to track it", "保存片段并训练策略进行跟踪")}
         >
-          ⚡ train this
+          ⚡ {tr("train this", "训练此片段")}
         </button>
       </div>
 
@@ -886,14 +901,14 @@ export function AnimPanel() {
       {/* ---- timeline ---- */}
       <div style={{ padding: "8px 12px", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
-          <button style={btn} title="back to start" onClick={() => { setPlaying(false); seek(0); }}>
+          <button style={btn} title={tr("back to start", "回到开头")} onClick={() => { setPlaying(false); seek(0); }}>
             ⏮
           </button>
-          <button style={btn} onClick={() => setPlaying((p) => !p)} title="play / pause">
+          <button style={btn} onClick={() => setPlaying((p) => !p)} title={tr("play / pause", "播放 / 暂停")}>
             {playing ? "⏸" : "▶"}
           </button>
-          <button style={btn} onClick={addKey} title="key the current pose at the playhead">
-            ◆ key
+          <button style={btn} onClick={addKey} title={tr("key the current pose at the playhead", "在播放头位置添加当前姿态关键帧")}>
+            ◆ {tr("key", "关键帧")}
           </button>
           <button
             style={{ ...btn, opacity: keyIdx > 0 ? 1 : 0.4 }}
@@ -901,17 +916,17 @@ export function AnimPanel() {
             disabled={keyIdx <= 0}
             title={
               keyIdx > 0
-                ? "delete the key under the playhead"
+                ? tr("delete the key under the playhead", "删除播放头下的关键帧")
                 : keyIdx === 0
-                  ? "the first key anchors t = 0 and can't be deleted"
-                  : "no key under the playhead"
+                  ? tr("the first key anchors t = 0 and can't be deleted", "第一个关键帧固定在 t = 0，不能删除")
+                  : tr("no key under the playhead", "播放头下没有关键帧")
             }
           >
-            ✕ key
+            ✕ {tr("key", "关键帧")}
           </button>
           <div style={{ flex: 1 }} />
           <span style={{ color: keyIdx >= 0 ? "#ffd166" : "#8b93a3", fontSize: 10 }}>
-            {keyIdx >= 0 ? `● on key ${keyIdx + 1} — edits auto-key` : "○ unkeyed pose"}
+            {keyIdx >= 0 ? tr(`● on key ${keyIdx + 1} — edits auto-key`, `● 当前为关键帧 ${keyIdx + 1} — 修改会自动记录`) : tr("○ unkeyed pose", "○ 未设关键帧的姿态")}
           </span>
           <span style={{ color: "#a5adbb", fontSize: 11 }}>
             {playhead.toFixed(2)} / {clip.duration.toFixed(2)}s
@@ -1042,7 +1057,7 @@ export function AnimPanel() {
             flexShrink: 0,
           }}
         >
-          <span style={{ color: "#8b93a3", fontSize: 10 }}>clicking the robot edits</span>
+          <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("clicking the robot edits", "点击机器人进行编辑")}</span>
           <button
             style={{
               ...btn,
@@ -1055,7 +1070,7 @@ export function AnimPanel() {
             title="a click selects one servo; dragging rotates just that hinge"
             onClick={() => setMode("joints")}
           >
-            🦴 joints
+            🦴 {tr("joints", "关节")}
           </button>
           <button
             style={{
@@ -1067,7 +1082,7 @@ export function AnimPanel() {
             title="a click selects the rig control for that part (feet → toes, thigh → swing, shin → squat, trunk → lean, head → look, hip sides → sway/twist); dragging drives the whole coupling"
             onClick={() => setMode("rig")}
           >
-            🎮 rig
+            🎮 {tr("rig", "联动")}
           </button>
           <button
             style={{
@@ -1085,7 +1100,7 @@ export function AnimPanel() {
             }
             onClick={() => setMode("ik")}
           >
-            🎯 ik
+            🎯 {tr("ik", "逆运动学")}
           </button>
           <div style={{ flex: 1 }} />
           <button
@@ -1104,7 +1119,7 @@ export function AnimPanel() {
               if (next) setBalance(animStore.balance);
             }}
           >
-            ⊕ balance
+            ⊕ {tr("balance", "平衡")}
           </button>
         </div>
       )}
@@ -1135,7 +1150,7 @@ export function AnimPanel() {
       {/* ---- joints ---- */}
       <div style={{ overflowY: "auto", padding: "0 12px 8px" }}>
         {!meta && !metaErr && (
-          <div style={{ color: "#8b93a3", padding: "8px 0" }}>loading joint limits…</div>
+          <div style={{ color: "#8b93a3", padding: "8px 0" }}>{tr("loading joint limits…", "正在加载关节限制…")}</div>
         )}
         {meta && (
           <>
@@ -1145,7 +1160,7 @@ export function AnimPanel() {
                   style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}
                   title="each control drives several servos in a fixed coupling; its range ends where the first servo hits its MJCF limit"
                 >
-                  🎮 rig
+                  🎮 {tr("rig", "联动")}
                 </div>
                 {rigVectors.map((v) => (
                   <RigRow
@@ -1165,7 +1180,7 @@ export function AnimPanel() {
                   style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}
                   title="each handle is a point the solver can be asked to put somewhere: drag it in the scene, and the joints on that limb follow. The readout is how far short the last solve fell."
                 >
-                  🎯 ik handles
+                  🎯 {tr("ik handles", "逆运动学控制柄")}
                 </div>
                 {effectors.map((e) => {
                   const sel = selectedEffector === e.id;
@@ -1201,10 +1216,10 @@ export function AnimPanel() {
                 })}
               </>
             )}
-            <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>trunk</div>
+            <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>{tr("trunk", "躯干")}</div>
             <JointRow
-              label="root pitch"
-              hint="− lean back"
+              label={tr("root pitch", "根部俯仰")}
+              hint={tr("− lean back", "− 后仰")}
               min={meta.rootPitchRange[0]}
               max={meta.rootPitchRange[1]}
               value={pose.rootPitch}
@@ -1218,11 +1233,11 @@ export function AnimPanel() {
             />
             {meta.groups.map((g) => (
               <div key={g}>
-                <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>{g}</div>
+                <div style={{ color: "#8b93a3", fontSize: 10, margin: "6px 0 2px" }}>{translateAnimLabel(g, tr)}</div>
                 {jointRows(g).map((j) => (
                   <JointRow
                     key={j.name}
-                    label={jointLabel(j.name)}
+                    label={translateAnimLabel(jointLabel(j.name), tr)}
                     min={j.min}
                     max={j.max}
                     value={pose.joints[j.index] ?? 0}
@@ -1240,10 +1255,10 @@ export function AnimPanel() {
             <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
               <button
                 style={btn}
-                title="every joint back to DEFAULT_POSE"
+                title={tr("every joint back to DEFAULT_POSE", "将所有关节恢复到默认姿态")}
                 onClick={() => applyPose(defaultPose(meta))}
               >
-                ↺ default pose
+                ↺ {tr("default pose", "默认姿态")}
               </button>
               <button
                 style={btn}
@@ -1366,6 +1381,7 @@ function RigRow({
   onSelect: () => void;
   onChange: (value: number) => void;
 }) {
+  const { tr } = useI18n();
   const value = rigMeasure(v, pose);
   // round3(…) || 0 folds the projection's float dust (and −0) into true zero
   // so the readout never says “−0.000”.
@@ -1398,7 +1414,7 @@ function RigRow({
         style={{ width: 74, flexShrink: 0, fontSize: 10, color: selected ? "#8ee6d6" : "#6fbfae", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         title={`${v.ctrl.title}\ndrives: ${joints}`}
       >
-        {v.ctrl.label}
+        {translateAnimLabel(v.ctrl.label, tr)}
       </span>
       <input
         type="range"

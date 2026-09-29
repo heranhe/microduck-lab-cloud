@@ -64,3 +64,5 @@ duck-viewer/viewer-server.log
 # MuJoCo writes this beside whatever process loaded a model (compile
 # warnings from the G1 attach); it is a runtime log, not source.
 MUJOCO_LOG.TXT
+# Locally supplied pretrained cloud teachers
+microduck_local/teachers/

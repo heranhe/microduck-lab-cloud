@@ -6,6 +6,10 @@ describe("cloudTaskFor", () => {
     expect(cloudTaskFor("microduck", "stand")).toBe("Mjlab-VelStand-Flat-MicroDuck");
   });
 
+  it("offers the separately named official walking task", () => {
+    expect(cloudTaskFor("microduck", "official_velocity")).toBe("Mjlab-Velocity-Flat-MicroDuck");
+  });
+
   it("does not silently replace unsupported local recipes with another cloud task", () => {
     expect(cloudTaskFor("microduck", "one_leg")).toBeNull();
     expect(cloudTaskFor("microduck", "headstand")).toBeNull();
@@ -15,4 +19,3 @@ describe("cloudTaskFor", () => {
     expect(cloudTaskFor("g1", "stand")).toBeNull();
   });
 });
-

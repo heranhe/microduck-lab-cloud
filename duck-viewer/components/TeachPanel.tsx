@@ -33,6 +33,7 @@ import { fetchRobots, type RobotInfo } from "@/lib/anim";
 import { trickNoun } from "@/lib/robots";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
+import { localizeBehavior, rewardMetricLabel } from "@/lib/teachLocalization";
 import {
   cloudTaskFor,
   type CloudAccount,
@@ -175,6 +176,7 @@ export function Tip({ tip, children }: { tip: React.ReactNode; children: React.R
 }
 
 function RecipeRows({ terms }: { terms: BehaviorCard["terms"] }) {
+  const { tr } = useI18n();
   const max = Math.max(...terms.map((t) => t.weight));
   return (
     <div style={{ marginTop: 6 }}>
@@ -216,7 +218,7 @@ function RecipeRows({ terms }: { terms: BehaviorCard["terms"] }) {
         </Tip>
       ))}
       <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 4 }}>
-        green = points to win · red = points lost · bar = how much it matters
+        {tr("green = points to win · red = points lost · bar = how much it matters", "绿色＝加分 · 红色＝扣分 · 条形长度＝权重大小")}
       </div>
     </div>
   );
@@ -370,6 +372,8 @@ function RecipeEditor({
    *  for the chat note. */
   onSubmit: (weights: Record<string, number>, fineTune: boolean, changed: number) => void;
 }) {
+  const { locale, tr } = useI18n();
+  const displayBehavior = localizeBehavior(t.behavior, locale);
   // Only touched sliders live here; everything else displays the effective
   // weight straight from the stream. Keyed by run so a new run resets dirt.
   const [edited, setEdited] = useState<Record<string, number>>({});
@@ -417,7 +421,7 @@ function RecipeEditor({
   // into the submitted weights (adding at the default weight is itself the
   // change — the key's presence is what makes the server adopt the term);
   // the rest wait in the picker.
-  const catalog = t.behavior.availableTerms ?? [];
+  const catalog = displayBehavior.availableTerms ?? [];
   const inRecipe = new Set(t.behavior.terms.map((term) => term.key));
   const addedTerms = catalog.filter((a) => !inRecipe.has(a.key) && added[a.key] != null);
   const pickable = catalog.filter((a) => !inRecipe.has(a.key) && added[a.key] == null);
@@ -502,8 +506,8 @@ function RecipeEditor({
       <>
         <div>{term.friendly}</div>
         <div style={{ color: "#8b93a3", marginTop: 3 }}>
-          default weight {def} · currently {value.toFixed(2)}
-          {isAdded && " · added — ✕ puts it back in the picker"}
+          {tr(`default weight ${def} · currently ${value.toFixed(2)}`, `默认权重 ${def} · 当前 ${value.toFixed(2)}`)}
+          {isAdded && tr(" · added — ✕ puts it back in the picker", " · 已添加，点击 ✕ 移回条件库")}
         </div>
       </>
     );
@@ -571,11 +575,13 @@ function RecipeEditor({
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ color: "#8b93a3", fontSize: 10 }}>
-        the recipe{live ? " (read-only while training)" : " — edit it:"}
+        {tr("the recipe", "训练配方")}{live
+          ? tr(" (read-only while training)", "（训练中只读）")
+          : tr(" — edit it:", " — 可调整：")}
       </div>
       <div style={{ color: "#8b93a3", fontSize: 10, margin: "2px 0 4px" }}>
-        green terms pay points, red ones charge — drag to change how much each
-        matters, then retrain.
+        {tr("green terms pay points, red ones charge — drag to change how much each matters, then retrain.",
+          "绿色条件加分，红色条件扣分；拖动滑块调整权重，然后重新训练。")}
       </div>
       {(
         [
@@ -586,14 +592,14 @@ function RecipeEditor({
         // Added terms join the group they belong to instead of trailing the
         // whole list, so a freshly added penalty sits with the penalties.
         const rows = [
-          ...t.behavior.terms.map((term) => [term, false] as const),
+          ...displayBehavior.terms.map((term) => [term, false] as const),
           ...(live ? [] : addedTerms.map((term) => [term, true] as const)),
         ].filter(([term]) => term.isPenalty === penalty);
         if (rows.length === 0) return null;
         return (
           <div key={label} style={{ marginTop: 4 }}>
             <div style={{ color: penalty ? "#e0a08f" : "#9fd89f", fontSize: 9, opacity: 0.7 }}>
-              {label}
+              {tr(label, penalty ? "扣分条件" : "加分条件")}
             </div>
             {rows.map(([term, isAdded]) => termRow(term, isAdded))}
           </div>
@@ -614,7 +620,7 @@ function RecipeEditor({
               cursor: "pointer",
             }}
           >
-            ＋ add a term
+            {tr("＋ add a term", "＋ 添加条件")}
           </button>
           {pickerOpen && (
             <div
@@ -628,7 +634,7 @@ function RecipeEditor({
             >
               {pickable.length === 0 ? (
                 <div style={{ color: "#8b93a3", fontSize: 10, padding: "2px 5px" }}>
-                  every catalog term is already in the recipe
+                  {tr("every catalog term is already in the recipe", "条件库中的项目已全部添加")}
                 </div>
               ) : (
                 byPolarity(pickable).map((a) => (
@@ -676,19 +682,20 @@ function RecipeEditor({
         <div style={{ marginTop: 6 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button style={btn} onClick={() => onSubmit(submitted, false, movedN + addedN)}>
-              ↻ retrain with edited recipe
+              ↻ {tr("retrain with edited recipe", "按调整后的配方重新训练")}
             </button>
             <button
               style={{ ...btn, color: "#d8c97d", borderColor: "#5a5233" }}
               onClick={() => onSubmit(submitted, true, movedN + addedN)}
             >
-              ✨ fine-tune the result
+              ✨ {tr("fine-tune the result", "微调当前结果")}
             </button>
           </div>
           <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 3 }}>
-            fine-tune keeps what it learned and adjusts; retrain starts fresh
-            {movedN > 0 && ` · ${movedN} weight${movedN > 1 ? "s" : ""} changed`}
-            {addedN > 0 && ` · ${addedN} term${addedN > 1 ? "s" : ""} added`}
+            {tr("fine-tune keeps what it learned and adjusts; retrain starts fresh",
+              "微调会保留已有训练成果；重新训练会从头开始")}
+            {movedN > 0 && tr(` · ${movedN} weight${movedN > 1 ? "s" : ""} changed`, ` · 已调整 ${movedN} 项权重`)}
+            {addedN > 0 && tr(` · ${addedN} term${addedN > 1 ? "s" : ""} added`, ` · 已添加 ${addedN} 个条件`)}
           </div>
         </div>
       )}
@@ -735,7 +742,7 @@ function LiveTraining({
   onStageWeights: (stageWeights: StageWeightsMap) => void;
   onStartStage: (idx: number, stageWeights: StageWeightsMap | null) => void;
 }) {
-  const { tr } = useI18n();
+  const { tr, locale } = useI18n();
   const p = t.progress;
   const stage = t.stage ?? null;
   // Curriculum jobs count the WHOLE chain in the headline numbers and main
@@ -807,16 +814,17 @@ function LiveTraining({
   };
   const maxAbs = Math.max(0.01, ...terms.map(([, v]) => Math.abs(v)));
   const statusLine = {
-    training: `training… ${overallSteps.toLocaleString()} / ${overallTotal.toLocaleString()} practice steps`,
-    done: "✔ finished — the trainee duck runs the final result",
-    stopped: "■ stopped — trainee keeps the last snapshot",
-    failed: "✗ training crashed (see runs/…/train.log)",
+    training: tr(`training… ${overallSteps.toLocaleString()} / ${overallTotal.toLocaleString()} practice steps`,
+      `训练中… 已完成 ${overallSteps.toLocaleString()} / ${overallTotal.toLocaleString()} 步`),
+    done: tr("✔ finished — the trainee duck runs the final result", "✔ 训练完成，小鸭子已使用最终结果"),
+    stopped: tr("■ stopped — trainee keeps the last snapshot", "■ 训练已停止，小鸭子保留最近的快照"),
+    failed: tr("✗ training crashed (see runs/…/train.log)", "✗ 训练失败，请查看 runs/…/train.log"),
   }[t.status];
 
   return (
     <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8, marginTop: 8 }}>
       <div style={{ fontWeight: 700 }}>
-        {t.behavior.emoji} {t.behavior.title}
+        {t.behavior.emoji} {localizeBehavior(t.behavior, locale).title}
         {t.status === "training" && (
           <button
             onClick={onStop}
@@ -1119,7 +1127,7 @@ function LiveTraining({
       {rewHistory.length > 1 && (
         <div style={{ marginTop: 6 }}>
           <div style={{ color: "#8b93a3", fontSize: 10 }}>
-            score per practice run (higher = doing the trick better)
+            {tr("score per practice run (higher = doing the trick better)", "每轮训练得分（越高表示动作完成得越好）")}
           </div>
           <Sparkline points={rewHistory} />
         </div>
@@ -1127,12 +1135,12 @@ function LiveTraining({
       {terms.length > 0 && (
         <div style={{ marginTop: 4 }}>
           <div style={{ color: "#8b93a3", fontSize: 10, marginBottom: 2 }}>
-            where the points come from right now
+            {tr("where the points come from right now", "当前各项得分")}
           </div>
           {terms.map(([k, v]) => (
             <div key={k} style={{ display: "flex", alignItems: "center", gap: 6, margin: "2px 0" }}>
               <span style={{ width: 120, color: "#aab3c0", fontSize: 10, textAlign: "right" }}>
-                {k.replace(/_penalty$/, "").replace(/_/g, " ")}
+                {rewardMetricLabel(k, t.behavior.id, locale)}
               </span>
               <div style={{ flex: 1, height: 5, background: "#20242c", borderRadius: 2, position: "relative" }}>
                 <div
@@ -1155,8 +1163,8 @@ function LiveTraining({
       )}
       {(p.snapshots ?? 0) > 0 && (
         <div style={{ color: "#d8c97d", fontSize: 10, marginTop: 4 }}>
-          📸 {p.snapshots} snapshot{(p.snapshots ?? 0) > 1 ? "s" : ""} sent to the 🎓 duck —
-          watch it improve in the scene
+          📸 {tr(`${p.snapshots} snapshot${(p.snapshots ?? 0) > 1 ? "s" : ""} sent to the 🎓 duck — watch it improve in the scene`,
+            `已向 🎓 小鸭子发送 ${p.snapshots} 个训练快照，可在场景中观察它的进步`)}
         </div>
       )}
       <RecipeEditor
@@ -1180,6 +1188,10 @@ export function TeachPanel({
   // the first open.
   const [open, setOpen] = useState(() => loadJSON("teachOpen", false));
   const [wide, setWide] = useState(() => loadJSON("teachWide", false));
+  const [manualSize, setManualSize] = useState<{ width: number; height: number } | null>(() =>
+    loadJSON("teachManualSize", null)
+  );
+  const resizeStart = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const policyOpen = usePolicyOpen();
   const [msgs, setMsgs] = useState<Msg[]>(() => {
     const stored = loadJSON<Msg[] | null>("teachMsgs", null);
@@ -1202,6 +1214,9 @@ export function TeachPanel({
   const launchPending = useRef(false);
   const [cloudError, setCloudError] = useState("");
   const [activeCloudJobs, setActiveCloudJobs] = useState(0);
+  // Training is owned by duck-lab. Keep this separate from provider account
+  // state so an offline backend cannot look like an unconnected Google account.
+  const [labOnline, setLabOnline] = useState<boolean | null>(null);
   // WHICH BODY the next trick is for. Everything robot-specific below — the
   // greeting, the chips, the placeholder — is read off the lab's /robots, so
   // a third robot shows up here by registering recipes, not by editing this.
@@ -1220,6 +1235,7 @@ export function TeachPanel({
   // Old servers returned the built-in text without behavior ids. Preserve the
   // one exact, equivalent mapping instead of making all cloud options vanish.
   const selectedBehavior = selectedSuggestion?.behavior ||
+    (input.trim().toLocaleLowerCase() === "official walking" ? "official_velocity" : undefined) ||
     (input.trim().toLocaleLowerCase() === "stand still" ? "stand" : undefined) ||
     (!input.trim() && chosenAction?.robotId === robot.id ? chosenAction.behavior : undefined);
   const actionText = input.trim() || (chosenAction?.robotId === robot.id ? chosenAction.text : "");
@@ -1284,12 +1300,14 @@ export function TeachPanel({
   }, [open]);
 
   const refreshCompute = useCallback(async () => {
-    const [colab, hf, colabJobs, hfJobs] = await Promise.allSettled([
+    const [health, colab, hf, colabJobs, hfJobs] = await Promise.allSettled([
+        cloudRequest("/health"),
         cloudRequest("/cloud/colab/account"),
         cloudRequest("/cloud/hf/account"),
         cloudRequest("/cloud/colab/jobs"),
         cloudRequest("/cloud/hf/jobs"),
       ]);
+    setLabOnline(health.status === "fulfilled" && health.value?.ok === true);
     if (colab.status === "fulfilled") {
       setColabAccount(colab.value);
       if (!(typeof colab.value.balance === "number" && colab.value.balance > 0)) setColabGpu("T4");
@@ -1310,7 +1328,7 @@ export function TeachPanel({
       setCloudError(locale === "zh" && (raw.includes("Failed to fetch") || raw.includes("Lab unavailable"))
         ? "无法连接本地 duck-lab。"
         : raw);
-    } else setCloudError("");
+    } else if (health.status === "fulfilled") setCloudError("");
   }, [hfFlavor, locale]);
 
   useEffect(() => {
@@ -1337,6 +1355,7 @@ export function TeachPanel({
     };
   }, [open, trainingStatus]);
   useEffect(() => saveJSON("teachWide", wide), [wide]);
+  useEffect(() => saveJSON("teachManualSize", manualSize), [manualSize]);
   useEffect(() => saveJSON("teachMsgs", msgs.slice(-MSG_CAP)), [msgs]);
 
   // Poll the streamed frame for training progress + one-shot events.
@@ -1686,8 +1705,13 @@ export function TeachPanel({
       ? hfAccount.connected && hfAccount.hardware.length > 0 && !!hfFlavor
       : true;
   const trainingInProgress = training?.status === "training" || activeCloudJobs > 0;
-  const canLaunch = !!actionText && !cloudBusy &&
+  const canLaunch = labOnline === true && !!actionText && !cloudBusy &&
     !trainingInProgress && (compute === "local" || (!!cloudTask && cloudAccountReady));
+  // An unsupported cloud action must remain clickable so the user gets the
+  // explanation from launchSelectedTraining instead of an unexplained grey
+  // button. Account/offline guards still disable the real launch control.
+  const launchButtonEnabled = labOnline === true && !!actionText && !cloudBusy &&
+    !trainingInProgress && (compute === "local" || cloudAccountReady);
   const startLabel = trainingInProgress
     ? tr("Training in progress", "训练进行中")
     : compute === "local"
@@ -1720,6 +1744,21 @@ export function TeachPanel({
     teachRO.current.observe(el);
   }, []);
 
+  // The panel is anchored to the bottom-right, so dragging its top-left
+  // control left/up grows it. The policy list above responds to the measured
+  // height and gives this panel room as it grows.
+  const resizePanel = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const start = resizeStart.current;
+    if (!start) return;
+    const maxWidth = Math.max(280, window.innerWidth - 28);
+    const maxHeight = Math.max(240, window.innerHeight - (policyOpen ? 200 : 100));
+    setManualSize({
+      width: Math.min(maxWidth, Math.max(280, Math.round(start.width + start.x - e.clientX))),
+      height: Math.min(maxHeight, Math.max(240, Math.round(start.height + start.y - e.clientY))),
+    });
+  };
+  const effectiveWide = manualSize ? manualSize.width >= 440 : wide;
+
   const panel: React.CSSProperties = {
     position: "absolute",
     // Above the ducks' floating DOM labels (drei Html, zIndexRange [10, 0]).
@@ -1730,15 +1769,18 @@ export function TeachPanel({
     // extra min() terms cap it responsively: the bottom-center Controls pad is
     // 118px wide, so its right edge sits at 50vw + 59px — our left edge
     // (100vw - 14px - width) stays right of it for any viewport width.
-    width: wide ? "min(560px, 44vw, 50vw - 80px)" : 320,
+    width: manualSize ? `min(${manualSize.width}px, calc(100vw - 28px))` : wide ? "min(560px, 44vw, 50vw - 80px)" : 320,
+    height: manualSize ? `min(${manualSize.height}px, calc(100vh - ${policyOpen ? 200 : 100}px))` : undefined,
     // Complementary to the PolicyPanel's NOMINAL cap (min(40vh, 380px)) plus
     // margins, so the two right-column panels can never overlap — but when
     // that panel is collapsed to its pill, reclaim the space and grow tall.
     // Stays keyed to that constant, never to the policy panel's measured
     // height: policies sizes itself off OUR measured height (lib/ui.ts), and
     // measuring each other both ways would make the pair oscillate.
-    maxHeight: policyOpen
-      ? "calc(100vh - min(40vh, 380px) - 56px)"
+    maxHeight: manualSize
+      ? `calc(100vh - ${policyOpen ? 200 : 100}px)`
+      : policyOpen
+      ? "calc(100vh - min(40vh, 380px) - 138px)"
       : "calc(100vh - 100px)",
     display: "flex",
     flexDirection: "column",
@@ -1766,7 +1808,7 @@ export function TeachPanel({
           backdropFilter: "blur(6px)",
         }}
       >
-        🎓 {tr("teach", "教学")}
+        🎓 {tr("Training", "训练")}
       </button>
     );
 
@@ -1781,7 +1823,31 @@ export function TeachPanel({
           display: "flex", alignItems: "center", flexShrink: 0,
         }}
       >
-        <span style={{ flex: 1 }}>🎓 {tr("teach", "教学")}</span>
+        <span style={{ flex: 1 }}>🎓 {tr("Training", "训练")}</span>
+        <button
+          type="button"
+          aria-label={tr("drag to resize the training panel", "拖动调整训练面板尺寸")}
+          title={tr("Drag left and up to enlarge · double-click to reset", "向左上拖动可放大 · 双击恢复默认尺寸")}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            const rect = e.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
+            if (!rect) return;
+            resizeStart.current = { x: e.clientX, y: e.clientY, width: rect.width, height: rect.height };
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={resizePanel}
+          onPointerUp={(e) => { resizePanel(e); resizeStart.current = null; e.currentTarget.releasePointerCapture(e.pointerId); }}
+          onPointerCancel={() => { resizeStart.current = null; }}
+          onDoubleClick={() => setManualSize(null)}
+          style={{
+            background: "#202936", border: "1px solid rgba(125,184,216,0.55)",
+            borderRadius: 5, color: "#b9d9eb", cursor: "nwse-resize",
+            fontFamily: mono, fontSize: 10, padding: "2px 6px", marginRight: 4,
+            touchAction: "none", userSelect: "none",
+          }}
+        >
+          ↖ {tr("Resize", "调整尺寸")}
+        </button>
         <button
           onClick={() => {
             setMsgs([GREETING]);
@@ -1801,7 +1867,7 @@ export function TeachPanel({
           🗑
         </button>
         <button
-          onClick={() => setWide((w) => !w)}
+          onClick={() => { setManualSize(null); setWide((w) => !w); }}
           title={wide ? tr("back to the narrow panel", "恢复窄面板") : tr("widen the panel — full recipe sentences", "展开面板以显示完整训练说明")}
           style={{
             background: "none", border: "none", color: "#8b93a3",
@@ -1843,9 +1909,9 @@ export function TeachPanel({
               }}
             >
               <div style={{ fontWeight: 700 }}>
-                {m.card.emoji} {m.card.title}
+                {m.card.emoji} {localizeBehavior(m.card, locale).title}
               </div>
-              <div style={{ color: "#aab3c0", margin: "3px 0" }}>{m.card.description}</div>
+              <div style={{ color: "#aab3c0", margin: "3px 0" }}>{localizeBehavior(m.card, locale).description}</div>
               {/* Staged tricks get their training plan spelled out up front —
                   the chain is part of the story, not trainer plumbing. */}
               {m.card.curriculum && m.card.curriculum.length > 0 && (
@@ -1874,7 +1940,7 @@ export function TeachPanel({
                 <summary style={{ cursor: "pointer", color: "#7db8d8" }}>
                   {tr("how will it learn this?", "它如何学会这个动作？")}
                 </summary>
-                <div style={{ color: "#aab3c0", marginTop: 4 }}>{m.card.howItLearns}</div>
+                <div style={{ color: "#aab3c0", marginTop: 4 }}>{localizeBehavior(m.card, locale).howItLearns}</div>
                 <div style={{ color: "#8b93a3", marginTop: 4, fontSize: 10 }}>
                   {tr("The simulation runs faster than real life;", "仿真速度高于真实时间；")}{" "}
                   {fmtSteps(m.stepBudget ?? cardSteps(m.card))} {tr("practice steps run on this Mac.", "步练习将在这台 Mac 上运行。")}
@@ -1883,7 +1949,7 @@ export function TeachPanel({
               <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 2 }}>
                 {tr("the scorecard (checked 50× per second):", "评分卡（每秒检查 50 次）：")}
               </div>
-              <RecipeRows terms={m.card.terms} />
+              <RecipeRows terms={localizeBehavior(m.card, locale).terms} />
             </div>
           )
         )}
@@ -1891,7 +1957,7 @@ export function TeachPanel({
           <LiveTraining
             t={training}
             traineeSpeed={traineeSpeed}
-            wide={wide}
+            wide={effectiveWide}
             rewHistory={rewHistory.current}
             plan={plan}
             pinned={pins}
@@ -1910,10 +1976,10 @@ export function TeachPanel({
         {robots.length > 1 && (
           <div
             role="radiogroup"
-            aria-label="robot to teach"
+            aria-label={tr("robot to teach", "训练机器人")}
             style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 6 }}
           >
-            <span style={{ color: "#8b93a3", fontSize: 10 }}>teach</span>
+            <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("teach", "训练")}</span>
             {robots.map((r) => {
               const on = r.id === robot.id;
               return (
@@ -2013,6 +2079,21 @@ export function TeachPanel({
               </span>
             );
           })}
+          {robot.id === "microduck" && compute !== "local" && (
+            <button
+              type="button"
+              onClick={() => { setInput("official walking"); setChosenAction(null); setCloudError(""); }}
+              style={{
+                background: selectedBehavior === "official_velocity" ? "#263c4d" : "#1c2230",
+                color: selectedBehavior === "official_velocity" ? "#e8f2fb" : "#9fb4d8",
+                border: "1px solid rgba(112,184,216,0.45)", borderRadius: 12,
+                padding: "2px 8px", fontFamily: mono, fontSize: 10, cursor: "pointer",
+              }}
+              title={tr("Official MicroDuck walking task on cloud compute", "云端官方 MicroDuck 行走任务")}
+            >
+              ☁ {tr("official walking", "官方行走")}
+            </button>
+          )}
         </div>
         {/* How long should it practice? LAST of the three questions (who, what,
             how long) and folded to one line, because the recipe's own plan is
@@ -2062,7 +2143,7 @@ export function TeachPanel({
                   placeholder={tr("recipe", "默认")}
                   onCommit={setBudgetSteps}
                 />
-                <span style={{ color: "#8b93a3", fontSize: 10 }}>M steps</span>
+                <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("M steps", "百万步")}</span>
                 {offRecipe && (
                   <Tip tip={tr("back to the practice plan the recipe ships with", "恢复动作方案的默认练习计划")}>
                     <button
@@ -2155,7 +2236,11 @@ export function TeachPanel({
                   role="radio"
                   aria-checked={on}
                   disabled={trainingInProgress}
-                  onClick={() => { setCompute(source); setCloudError(""); }}
+                  onClick={() => {
+                    setCompute(source);
+                    if (source === "local" && selectedBehavior === "official_velocity") setInput("");
+                    setCloudError("");
+                  }}
                   style={{
                     minWidth: 0, borderRadius: 6, padding: "6px 4px",
                     border: `1px solid ${on ? (source === "local" ? "#8794a8" : "#70b8d8") : "rgba(255,255,255,0.09)"}`,
@@ -2170,7 +2255,17 @@ export function TeachPanel({
             })}
           </div>
 
-          {compute === "local" ? (
+          {labOnline === false ? (
+            <div style={{ color: "#efb37d", fontSize: 10, lineHeight: 1.45, marginTop: 6, padding: "7px 8px", border: "1px solid rgba(239,179,125,0.35)", borderRadius: 6, background: "rgba(120,70,35,0.14)" }}>
+              <strong>{tr("Training service is offline.", "训练服务未启动。")}</strong>{" "}
+              {tr("Start duck-lab in the microduck_local folder, then press refresh or reopen this panel.", "请在 microduck_local 文件夹运行 `uv run duck-lab`，然后点击刷新或重新打开训练面板。")}
+              <code style={{ display: "block", marginTop: 4, color: "#f4d1a3" }}>cd microduck_local &amp;&amp; uv run duck-lab</code>
+            </div>
+          ) : labOnline === null ? (
+            <div style={{ color: "#9fb4d8", fontSize: 10, marginTop: 6 }}>
+              {tr("Checking the local training service…", "正在检查本地训练服务…")}
+            </div>
+          ) : compute === "local" ? (
             <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
               {tr("Uses the selected local recipe and this computer's CPU.", "使用当前动作的本地训练配方和本机 CPU。")}
             </div>
@@ -2181,8 +2276,8 @@ export function TeachPanel({
           ) : !cloudTask ? (
             <div style={{ color: "#d8b46f", fontSize: 10, marginTop: 6 }}>
               {tr(
-                "This action only supports local training. Cloud training currently supports Stand still for Microduck. Choose Stand still above or switch to This Mac.",
-                "当前动作只能使用本机训练。云端目前仅支持 Microduck 的“保持站立”；请点选上方“保持站立”，或切换为“本机”。"
+                "This action only supports local training. For MicroDuck, choose Stand still or Official walking above, or switch to This Mac.",
+                "当前动作暂不支持云端训练。MicroDuck 可选择上方的“保持站立”或“官方行走”，也可切换为“本机”。"
               )}
             </div>
           ) : (
@@ -2216,6 +2311,16 @@ export function TeachPanel({
                   {tr("0 paid CCU does not block a free T4 request. Google decides availability and may end the session at any time.", "0 付费 CCU 不影响尝试免费 T4；能否分配及会话时长由 Google 动态决定。")}
                 </div>
               )}
+              {selectedBehavior === "stand" && (
+                <div style={{ color: "#d8b46f", fontSize: 10, marginTop: 6 }}>
+                  {tr("Cloud uses the official VelStand task (walking + fall recovery); it is not the local stand-still recipe.", "云端使用官方 VelStand 任务（行走＋跌倒恢复），与本机“保持站立”配方不同。")}
+                </div>
+              )}
+              {selectedBehavior === "official_velocity" && (
+                <div style={{ color: "#9fb4d8", fontSize: 10, marginTop: 6 }}>
+                  {tr("Uses the official Velocity task for walking. This is separate from the local action recipes.", "使用官方 Velocity 行走任务，与本地动作配方相互独立。")}
+                </div>
+              )}
               {!cloudAccountReady && (
                 <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6, color: "#d8b46f", fontSize: 10 }}>
                   <span style={{ flex: 1 }}>
@@ -2247,7 +2352,7 @@ export function TeachPanel({
           <input
             value={input}
             onChange={(e) => { setInput(e.target.value); setChosenAction(null); setCloudError(""); }}
-            placeholder={tr(`teach ${robotPhrase(robot)} a new policy…`, `教${noun}学习新策略…`)}
+            placeholder={tr(`train ${robotPhrase(robot)} a new policy…`, `训练${noun}学习新策略…`)}
             style={{
               flex: 1, minWidth: 0, boxSizing: "border-box", background: "#12151b",
               border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6,
@@ -2257,14 +2362,22 @@ export function TeachPanel({
           />
           <button
             type="submit"
-            disabled={!canLaunch}
-            title={tr("review the choice, then start training", "确认所选动作后开始训练")}
+            disabled={!launchButtonEnabled}
+            title={labOnline !== true
+              ? tr("Start duck-lab first", "请先启动 duck-lab")
+              : !actionText
+                ? tr("Choose an action first", "请先选择动作")
+                : compute !== "local" && !cloudTask
+                  ? tr("This action is not available on cloud compute yet; click to see details", "此动作暂不支持云端训练，点击查看原因")
+                : !canLaunch && compute !== "local"
+                  ? tr("Connect the selected cloud provider first", "请先连接所选云算力")
+                  : tr("review the choice, then start training", "确认所选动作后开始训练")}
             style={{
               border: "1px solid #d39a48", borderRadius: 6,
-              background: canLaunch ? "#694318" : "#25221d",
-              color: canLaunch ? "#ffe0a6" : "#68645d",
+              background: canLaunch ? "#694318" : launchButtonEnabled ? "#46351f" : "#25221d",
+              color: canLaunch ? "#ffe0a6" : launchButtonEnabled ? "#e0b977" : "#68645d",
               padding: "6px 10px", fontFamily: mono, fontSize: 11,
-              fontWeight: 700, cursor: canLaunch ? "pointer" : "default",
+              fontWeight: 700, cursor: launchButtonEnabled ? "pointer" : "default",
               whiteSpace: "nowrap",
             }}
           >
