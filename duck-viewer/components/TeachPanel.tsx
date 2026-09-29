@@ -1194,7 +1194,7 @@ export function TeachPanel({
   // Collapsed by default, like the PolicyPanel above it — persisted after
   // the first open.
   const [open, setOpen] = useState(() => loadJSON("teachOpen", false));
-  const [wide, setWide] = useState(() => loadJSON("teachWide", false));
+  const [wide] = useState(() => loadJSON("teachWide", false));
   const [msgs, setMsgs] = useState<Msg[]>(() => {
     const stored = loadJSON<Msg[] | null>("teachMsgs", null);
     return Array.isArray(stored) && stored.length ? stored.slice(-MSG_CAP) : [GREETING];

@@ -24,7 +24,7 @@ import { assignDrag, nearestDuck, type AssignTarget } from "@/lib/assign";
 import { getSelectedDuck, setSelectedDuck } from "@/lib/select";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
-import { simBrainLabel, simText } from "@/lib/simLocalization";
+import { simText } from "@/lib/simLocalization";
 import { Voices } from "@/lib/quack";
 import { duckAudio } from "@/lib/quackaudio";
 import { duckMouths } from "@/lib/mouth";

@@ -1,8 +1,9 @@
 """Cloud orchestration tests do not allocate a real Colab runtime."""
 
-from subprocess import CompletedProcess
 import subprocess
 import threading
+from subprocess import CompletedProcess
+
 import pytest
 
 from microduck_local import colab_jobs
