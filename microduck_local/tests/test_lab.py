@@ -2586,6 +2586,19 @@ def test_ws_handshake_refuses_a_non_loopback_origin(fake_popen):
         assert sock not in st.clients
 
 
+def test_ws_commands_work_when_launch_terminal_is_unavailable(fake_popen, monkeypatch):
+    app = V.make_app([])
+
+    def unavailable_terminal(*args, **kwargs):
+        raise OSError("launch terminal is no longer available")
+
+    monkeypatch.setattr(V, "print", unavailable_terminal, raising=False)
+    sock = _FakeSock("http://localhost:63317", msgs=[{"cmd": [0.2, 0.0, 0.0]}])
+    asyncio.run(_ws_endpoint(app)(sock))
+    assert sock.accepted and sock.reads == 2
+    assert app.state.lab.override[0] == pytest.approx(0.2)
+
+
 def test_cors_and_ws_enforce_one_shared_origin_rule(fake_popen):
     """Two enforcement points, one regex. A second literal in the middleware
     would drift from the socket's check the next time the allowlist changes —

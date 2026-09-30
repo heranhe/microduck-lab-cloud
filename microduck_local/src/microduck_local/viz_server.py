@@ -4484,7 +4484,9 @@ def make_app(ducks: list[Duck]):
         try:
             while True:
                 msg = json.loads(await sock.receive_text())
-                print(f"[ws] recv {msg}", flush=True)
+                # Commands must not depend on the launch terminal remaining
+                # writable: a failed debug print would close this socket before
+                # spawn/assign/reset could reach their handlers.
                 if "cmd" in msg:
                     # vx clamp follows the RUN curriculum ceiling (0.9), not
                     # the walk range (0.4) — the run policy trains to 0.9.
