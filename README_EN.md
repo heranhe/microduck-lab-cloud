@@ -8,6 +8,28 @@ Built on [Jonathan Hawkins' Microduck Lab](https://github.com/jonathanhawkins/mi
 
 [Gallery](#world-gallery) · [Worlds](#sim-rooms-senses-and-brains) · [Soccer](#soccer-1v1-2v2-3v3) · [Motion editor](#animate-keyframe-a-motion-then-make-it-real) · [Robots](#a-second-robot-the-unitree-g1) · [Quick start](#quick-start) · [Cloud GPU](#google-colab-gpu-optional)
 
+## Latest update: visible training progress, scores and robot motion
+
+**v1.2.0 · September 30, 2026 fixes fragmented training monitoring and losing sight of score changes when the detailed panel is closed.** A persistent status card shows the current task, cumulative steps, completion percentage, elapsed/remaining time and a live score curve, with Save and stop always available. The detailed panel shows per-run scores, reward terms and curriculum stages; the trainee in the scene updates as new checkpoints arrive, so you can compare the curve with actual motion.
+
+![Live training monitoring: persistent progress and score curve alongside robot motion](docs/media/training-monitor-live.jpg)
+
+<details>
+<summary>Detailed score monitoring screenshot</summary>
+
+![Detailed training panel: one-leg practice progress, score changes, reward terms and robot motion](docs/media/training-monitor-detail.png)
+
+This screenshot illustrates the detailed monitor; the image above shows the final persistent status card layout.
+
+</details>
+
+- Progress and scores keep updating with the panel closed. New jobs reset the curve; curriculum stages use cumulative steps. History is collected while the page is open and starts again after a reload.
+- Checkpoints update the visible trainee. Higher reward alone does not establish that the robot has learned the motion.
+- New `/plans` supports templates, declarative JSON/Python configuration import, keyframe import, immutable revisions, export, launch records and AI-assisted editable drafts. See the [training-plan guide](docs/training-plans.md).
+- Training, playground, keyframe editor and plan navigation are clearer. Local recipes and official cloud tasks have separate configurations.
+
+Existing users should update `main`, install dependencies and restart both the viewer and `duck-lab`. New users can follow [Quick start](#quick-start). See the [validation record and known limitations](docs/training-plans-validation.md).
+
 Train reinforcement-learning policies for the
 [Microduck](https://pollen-robotics.com/microduck), Pollen Robotics'
 open-source ~25 cm bipedal robot, **on an ordinary Apple Silicon Mac with no

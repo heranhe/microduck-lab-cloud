@@ -1321,7 +1321,7 @@ export function PolicyPanel({
             alignItems: "center",
           }}
         >
-          <span style={{ flex: 1 }}>🧠 {tr("policies", "策略")}</span>
+          <span style={{ flex: 1 }}>🧠 {tr("models & results", "模型与训练结果")}</span>
           <button
             onClick={refresh}
             title="refresh policy list"

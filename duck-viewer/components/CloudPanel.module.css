@@ -9,6 +9,12 @@
 }
 
 .toolButton, .trainButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  text-decoration: none;
+  white-space: nowrap;
   height: 36px;
   padding: 0 13px;
   border: 1px solid rgba(255,255,255,.12);
@@ -147,7 +153,11 @@
 
 .statusHeading { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
 .monitorLink { border:0; background:none; color:inherit; font:inherit; text-align:left; padding:0; cursor:pointer; }
-.trainingBar { width:min(600px, calc(100vw - 28px)); }
+.trainingBar { left:50%; right:auto; transform:translateX(-50%); width:min(360px, calc(100vw - 28px)); max-width:min(360px, calc(100vw - 28px)); display:flex; flex-direction:column; gap:4px; padding:6px 8px; }
+.trainingBar .statusHeading { gap:6px; }
+.trainingBar .statusContent { gap:4px; }
+.trainingBar .progressLine { gap:4px 8px; }
+.trainingBar .progressTrack { height:4px; }
 .progressLine, .snapshotLine { display:flex; flex-wrap:wrap; gap:5px 12px; font-variant-numeric:tabular-nums; }
 .progressLine { color:#c5d9e4; }
 .progressLine strong { color:#8cdbbb; }
@@ -156,6 +166,27 @@
 .progressTrack span { display:block; height:100%; min-width:2px; background:#75cfaa; }
 .more { position:relative; margin-left:auto; }
 .more summary { cursor:pointer; list-style:none; font-size:18px; line-height:20px; }
-.moreMenu { position:absolute; right:0; top:26px; width:145px; padding:6px; background:#18212a; border:1px solid #405161; border-radius:7px; z-index:40; }
+.moreMenu { position:absolute; right:0; top:26px; width:240px; max-width:calc(100vw - 56px); padding:6px; background:#18212a; border:1px solid #405161; border-radius:7px; z-index:40; }
+.moreMenu .snapshotLine { padding:7px; border-bottom:1px solid rgba(255,255,255,.08); }
 .moreMenu button { display:block; width:100%; text-align:left; border:0; background:none; color:#c5d9e4; font:inherit; padding:7px; cursor:pointer; }
 .moreMenu button:last-child { color:#ef957d; }
+
+.statusContent { display:flex; flex-direction:column; gap:6px; min-width:0; flex:1; }
+.scoreChart { min-width:0; display:flex; flex-direction:column; gap:2px; border-top:1px solid rgba(125,184,216,.18); padding-top:4px; }
+.scoreChart svg { height:24px; }
+.scoreHeading { display:flex; justify-content:space-between; gap:8px; color:#aeb8c4; }
+.scoreHeading strong { color:#7db8d8; font-variant-numeric:tabular-nums; }
+.scoreCaption { color:#929ead; font-size:9px; }
+.scoreEmpty { height:24px; display:flex; align-items:center; color:#929ead; }
+@media (max-width: 720px) {
+  .trainingBar { left:50%; right:auto; }
+}
+
+.toolButton:active, .trainButton:active { transform: scale(.97); }
+.toolButton:focus-visible, .trainButton:focus-visible {
+  outline: 2px solid #7db8d8;
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .toolButton, .trainButton { transition: none; }
+}

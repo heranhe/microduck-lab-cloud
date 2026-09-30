@@ -499,7 +499,7 @@ export function Hud({
           }}
         >
           <span style={{ flex: 1 }}>
-            🦆 {tr("Ducks in the scene", "场景里的鸭子")}
+            🦆 {tr("Ducks in the scene", "鸭子训练场")}
           </span>
           <button onClick={toggle} title={tr("Switch language", "切换语言")}
             style={{ background: "none", border: "none", color: "#9aa5b1", cursor: "pointer", fontSize: 10 }}>
@@ -745,7 +745,7 @@ export function Hud({
             backdropFilter: "blur(6px)",
           }}
         >
-          🦆 {tr("Ducks in the scene", "场景里的鸭子")}{" "}
+          🦆 {tr("Ducks in the scene", "鸭子训练场")}{" "}
           <span style={{ color: link.color }} title={link.title}>
             {link.dot}
           </span>

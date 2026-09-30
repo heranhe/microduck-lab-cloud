@@ -1,11 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from "react";
+import Link from "next/link";
+import { plansHref } from "@/lib/plans";
 import { LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings, type LabClient } from "@/lib/lab";
 import type { CloudAccount as Account, CloudHardware as Hardware, HfCloudAccount as HfAccount, CloudProvider as Provider } from "@/lib/cloudCompute";
 import { useI18n, type Locale } from "@/lib/i18n";
 import { localizeBehavior } from "@/lib/teachLocalization";
 import { requestCloudOpen, requestPolicyToggle, requestTeachOpen, usePolicyOpen } from "@/lib/ui";
+import { TrainingScoreChart } from "./TrainingScoreChart";
+import { useTrainingScoreHistory } from "./useTrainingScoreHistory";
 import styles from "./CloudPanel.module.css";
 import { usePanelDrag } from "./usePanelDrag";
 
@@ -55,6 +59,7 @@ async function jsonRequest(path: string, init?: RequestInit) {
 }
 
 export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClient | null> }) {
+  const scoreHistory = useTrainingScoreHistory(clientRef);
   const panelDrag = usePanelDrag("cloud");
   const { tr, locale } = useI18n();
   const policyOpen = usePolicyOpen();
@@ -198,8 +203,10 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
       <button className={styles.trainButton} onClick={requestTeachOpen}>🎓 {tr("Training", "训练")}</button>
       <button className={`${styles.toolButton} ${open ? styles.toolButtonActive : ""}`} onClick={() => open ? setOpen(false) : requestCloudOpen()}>☁ {tr("Cloud", "云算力")}</button>
       <button className={`${styles.toolButton} ${policyOpen ? styles.toolButtonActive : ""}`} onClick={requestPolicyToggle}>🧠 {tr("Policies", "策略")}</button>
+      <Link className={styles.toolButton} href={plansHref()} title={tr("Create or import a training plan", "创建或导入训练方案")}>📋 {tr("Plans", "方案")}</Link>
     </div>
     <div className={`${styles.statusBar} ${hasActiveCompute ? styles.statusBarActive : ""} ${localActive ? styles.trainingBar : ""}`} data-policy-ui>
+      <div className={styles.statusContent}>
       <div className={styles.statusHeading}>
         <span className={styles.dot}/>
         <button className={styles.monitorLink} onClick={requestTeachOpen} title={local?.runName}>{device}</button>
@@ -211,6 +218,12 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
         {localActive && <details className={styles.more}>
           <summary aria-label={tr("Training actions", "训练操作")}>⋯</summary>
           <div className={styles.moreMenu}>
+            {progress && <div className={styles.snapshotLine}>
+              <span>{tr("Latest checkpoint", "最近检查点")}：{progress.lastCheckpointStep != null ? `@${progress.lastCheckpointStep.toLocaleString()}` : tr("None", "暂无")}</span>
+              {!saving && nextSnap != null && <span>{tr("Next snapshot", "下次快照")} @{nextSnap.toLocaleString()}{snapEta != null ? ` · ≈${duration(snapEta)}` : ""}</span>}
+              {local?.stage && <span>{tr("Stage", "阶段")} {local.stage.idx}/{local.stage.count}</span>}
+              <span>{sps && sps > 0 ? `${Math.round(sps).toLocaleString()} ${tr("steps/s", "步/秒")}` : tr("Measuring speed…", "正在测量速度…")}</span>
+            </div>}
             <button onClick={requestTeachOpen}>{tr("Open monitor", "查看训练监控")}</button>
             <button onClick={async () => {
               if (!window.confirm(tr("Force terminate? Progress since the last saved checkpoint will be lost.", "强制终止训练？最近检查点之后的进度会丢失。"))) return;
@@ -224,20 +237,24 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
         <div className={styles.progressLine}>
           <strong>{percent.toFixed(1)}%</strong>
           <span>{steps.toLocaleString()} / {total.toLocaleString()} {tr("steps", "步")}</span>
-          <span>{sps && sps > 0 ? `${Math.round(sps).toLocaleString()} ${tr("steps/s", "步/秒")}` : tr("Measuring speed…", "正在测量速度…")}</span>
           <span>{saving ? tr("Saving checkpoint", "正在保存检查点") : progress.etaSeconds != null ? `${tr("Remaining ≈", "剩余约")}${duration(progress.etaSeconds)}` : tr("Estimating time…", "正在估算剩余时间…")}</span>
         </div>
         <div className={styles.progressTrack} role="progressbar" aria-label={tr("Training progress", "训练进度")} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
           <span style={{ width: `${percent}%` }}/>
         </div>
-        <div className={styles.snapshotLine}>
-          <span>{tr("Latest checkpoint", "最近检查点")}：{progress.lastCheckpointStep != null ? `@${progress.lastCheckpointStep.toLocaleString()}` : tr("None · trainee is untrained", "暂无 · 学员尚未训练")}</span>
-          {!saving && nextSnap != null && <span>{tr("Next snapshot", "下次快照")} @{nextSnap.toLocaleString()}{snapEta != null ? ` · ≈${duration(snapEta)}` : ""}</span>}
-          {local?.stage && <span>{tr("Stage", "阶段")} {local.stage.idx}/{local.stage.count}</span>}
-        </div>
       </>}
       {primary && <div className={styles.snapshotLine}>{tr("Cloud progress is not available yet ·", "云端进度暂不可用 ·")} {stateText(primary.state, locale)}</div>}
       {error && <div className={styles.error} role="alert">{error}</div>}
+      </div>
+      {localActive && <div className={styles.scoreChart}>
+        <div className={styles.scoreHeading}>
+          <span title={tr("Score per practice run; higher is better", "每轮训练得分，越高表示动作完成得越好")}>{tr("Training score · higher is better", "训练得分 · 越高越好")}</span>
+          {scoreHistory.length > 0 && <strong>{scoreHistory[scoreHistory.length - 1].y.toFixed(2)}</strong>}
+        </div>
+        {scoreHistory.length > 0
+          ? <TrainingScoreChart points={scoreHistory} label={tr("Score per practice run; higher is better", "每轮训练得分，越高表示动作完成得越好")} />
+          : <div className={styles.scoreEmpty}>{tr("Waiting for the first score…", "等待首轮得分…")}</div>}
+      </div>}
     </div>
     {open && <section {...panelDrag.panelProps} className={styles.panel} data-policy-ui style={{ ...(panelDrag.point ? { left: panelDrag.point.x, top: panelDrag.point.y, right: "auto" } : {}), ...panelDrag.resizeStyle }}>
       <header className={styles.header} {...panelDrag.dragHandle} style={{ cursor: "inherit", touchAction: "none", userSelect: "none" }}><span className={styles.title}>☁ {tr("Cloud compute", "云算力中心")}</span><button className={styles.close} onClick={() => setOpen(false)}>✕</button></header>
