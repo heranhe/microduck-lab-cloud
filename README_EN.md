@@ -8,6 +8,8 @@ Built on [Jonathan Hawkins' Microduck Lab](https://github.com/jonathanhawkins/mi
 
 [Gallery](#world-gallery) · [Worlds](#sim-rooms-senses-and-brains) · [Soccer](#soccer-1v1-2v2-3v3) · [Motion editor](#animate-keyframe-a-motion-then-make-it-real) · [Robots](#a-second-robot-the-unitree-g1) · [Quick start](#quick-start) · [Cloud GPU](#google-colab-gpu-optional)
 
+**Updates:** current fixes land on `main`; routine updates no longer create GitHub Releases. Changes and historical release notes are preserved in the [changelog](CHANGELOG.md).
+
 ## Latest update: visible training progress, scores and robot motion
 
 **v1.2.0 · September 30, 2026 fixes fragmented training monitoring and losing sight of score changes when the detailed panel is closed.** A persistent status card shows the current task, cumulative steps, completion percentage, elapsed/remaining time and a live score curve, with Save and stop always available. The detailed panel shows per-run scores, reward terms and curriculum stages; the trainee in the scene updates as new checkpoints arrive, so you can compare the curve with actual motion.

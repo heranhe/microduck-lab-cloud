@@ -20,7 +20,7 @@
 // count or a section name — both come from the metadata.
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { plansHref, downloadJSON, planRequest, type Plan } from "@/lib/plans";
+import { plansHref, downloadJSON, planRequest, loadReferenceClip, type Plan } from "@/lib/plans";
 import { useI18n } from "@/lib/i18n";
 import {
   type Balance,
@@ -548,19 +548,18 @@ export function AnimPanel() {
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
-    const plan = query.get("plan"), revision = query.get("revision"), name = query.get("clip");
-    if (!plan && !name) return;
+    if (!query.get("plan") && !query.get("clip")) return;
+    let active = true;
     const load = async () => {
       try {
-        const c = plan && revision
-          ? (await planRequest<Plan>(`/plans/${encodeURIComponent(plan)}/versions/${Number(revision)}`)).reference
-          : await loadClip(name!);
-        if (!c) throw new Error("方案没有参考动作");
+        const c = await loadReferenceClip(query, {plan: path => planRequest<Plan>(path), clip: loadClip});
+        if (!active || !c) return;
         setClip(c); clipRef.current = c; setPlayhead(0); setPlaying(false); setOpen(true);
         switchRobot(clipRobot(c));
-      } catch(e) {pushToast(`⚠ ${e instanceof Error ? e.message : String(e)}`);}
+      } catch(e) {if (active) pushToast(`⚠ ${e instanceof Error ? e.message : String(e)}`);}
     };
     void load();
+    return () => { active = false; };
     // Entry handoff is resolved once; subsequent edits belong to the editor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
