@@ -9,6 +9,7 @@
 // /sim page's SimRecord; this file is the lab page's layout and framing.
 
 import Link from "next/link";
+import styles from "./RecordPanel.module.css";
 import { useEffect, useRef, useState } from "react";
 import { LAB_HTTP, type LabClient } from "@/lib/lab";
 import { useSelectedDuck } from "@/lib/select";
@@ -59,13 +60,6 @@ const linkStyle: React.CSSProperties = {
   color: "#7db8d8",
 };
 
-const worldStyle: React.CSSProperties = {
-  ...panelStyle,
-  padding: "6px 10px",
-  textDecoration: "none",
-  whiteSpace: "nowrap",
-};
-
 export function RecordPanel({
   clientRef,
 }: {
@@ -80,9 +74,7 @@ export function RecordPanel({
   // HUD's live right edge, this panel's own width, and the window width.
   const hudRight = useHudRight();
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const worldRef = useRef<HTMLAnchorElement | null>(null);
   const [panelW, setPanelW] = useState(220);
-  const [worldW, setWorldW] = useState(82);
   const [winW, setWinW] = useState(() =>
     typeof window === "undefined" ? 1200 : window.innerWidth
   );
@@ -99,14 +91,7 @@ export function RecordPanel({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  useEffect(() => {
-    const el = worldRef.current;
-    if (!el) return;
-    setWorldW(el.offsetWidth);
-    const ro = new ResizeObserver(() => setWorldW(el.offsetWidth));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+
 
   const duckName = () =>
     selected
@@ -188,32 +173,22 @@ export function RecordPanel({
     );
   }
 
-  // Keep the capture panel centered, with the standalone world-page button
-  // immediately to its left. Treat both controls as one collision group when
-  // dodging the HUD, while preserving separate pill backgrounds.
-  const worldGap = 10;
+  // Measure navigation and capture as one toolbar to avoid the HUD.
   const centered = (winW - panelW) / 2;
   const left = Math.round(
-    Math.min(
-      Math.max(centered, hudRight + 12 + worldW + worldGap),
-      Math.max(12 + worldW + worldGap, winW - panelW - 12)
-    )
+    Math.min(Math.max(centered, hudRight + 12), Math.max(12, winW - panelW - 12))
   );
-  const worldLeft = left - worldW - worldGap;
   return (
-    <>
+    <div ref={wrapRef} data-policy-ui className={styles.toolbar} style={{ ...panelStyle, left }}>
       <Link
-        ref={worldRef}
         href="/sim"
-        data-policy-ui
-        title={tr("the world page — rooms, sensors, brains", "世界页面：房间、传感器与智能体")}
-        style={{ ...worldStyle, left: worldLeft }}
+        className={styles.playground}
+        title={tr("playground — rooms, sensors, brains", "游乐场：探索场景、传感器与智能体")}
       >
-        🌍 {tr("world", "世界")}
+        🌍 {tr("playground", "游乐场")}
       </Link>
-      <div ref={wrapRef} data-policy-ui style={{ ...panelStyle, left }}>
-        {content}
-      </div>
-    </>
+      <span className={styles.divider} aria-hidden="true" />
+      {content}
+    </div>
   );
 }

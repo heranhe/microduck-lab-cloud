@@ -10,6 +10,8 @@
 // frame via clientRef (same polling pattern as Hud).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { TrainingScoreChart } from "./TrainingScoreChart";
+import { useTrainingScoreHistory } from "./useTrainingScoreHistory";
 import { usePanelDrag } from "./usePanelDrag";
 import { createPortal } from "react-dom";
 import {
@@ -34,6 +36,8 @@ import { fetchRobots, type RobotInfo } from "@/lib/anim";
 import { trickNoun } from "@/lib/robots";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
+import { planRequest, plansHref, type Plan } from "@/lib/plans";
+import { loadClip } from "@/lib/anim";
 import { localizeBehavior, rewardMetricLabel } from "@/lib/teachLocalization";
 import {
   cloudTaskFor,
@@ -249,26 +253,6 @@ function fmtSteps(n: number): string {
   if (n < 1e5) return `${Math.round(n / 1e3)}k`;
   if (n < 1e6) return `${(n / 1e6).toFixed(2).replace(/0$/, "")}M`;
   return `${(n / 1e6).toFixed(1)}M`;
-}
-
-function Sparkline({ points }: { points: { x: number; y: number }[] }) {
-  if (points.length < 2) return null;
-  const w = 250, h = 36;
-  const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs);
-  const y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const path = points
-    .map((p, i) => {
-      const px = ((p.x - x0) / Math.max(x1 - x0, 1)) * w;
-      const py = h - ((p.y - y0) / Math.max(y1 - y0, 1e-6)) * (h - 4) - 2;
-      return `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`;
-    })
-    .join(" ");
-  return (
-    <svg width={w} height={h} style={{ display: "block" }}>
-      <path d={path} fill="none" stroke="#7db8d8" strokeWidth={1.5} />
-    </svg>
-  );
 }
 
 // --- practice budget --------------------------------------------------------
@@ -682,6 +666,17 @@ function RecipeEditor({
       {!live && (
         <div style={{ marginTop: 6 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button style={btn} onClick={async () => {
+              const title = window.prompt(tr("Name this training plan", "为训练方案命名"), displayBehavior.title);
+              if (!title) return;
+              try {
+                const p: Plan = {version:1, title, description:t.behavior.description, success:t.behavior.successMetric || "观察实际动作是否完成目标", robot:t.robot || "microduck", source:"run", cloud:null,
+                  local:{behavior:t.behavior.id, steps:t.chosenBudget || t.stepBudget || t.behavior.defaultSteps, weights:submitted, stageSteps:t.stageBudgets || {}, stageWeights:t.stageWeights || {}}};
+                if (t.clip) p.reference = await loadClip(t.clip);
+                const saved = await planRequest<Plan>("/plans", "POST", p);
+                pushToast(`💾 ${title} · v${saved.revision} · ${saved.path}`);
+              } catch(e) { pushToast(`⚠ ${e instanceof Error ? e.message : String(e)}`); }
+            }}>{tr("save as training plan", "保存为我的方案")}</button>
             <button style={btn} onClick={() => onSubmit(submitted, false, movedN + addedN)}>
               ↻ {tr("retrain with edited recipe", "按调整后的配方重新训练")}
             </button>
@@ -1135,7 +1130,7 @@ function LiveTraining({
           <div style={{ color: "#8b93a3", fontSize: 10 }}>
             {tr("score per practice run (higher = doing the trick better)", "每轮训练得分（越高表示动作完成得越好）")}
           </div>
-          <Sparkline points={rewHistory} />
+          <TrainingScoreChart points={rewHistory} label={tr("Training score", "训练得分")} />
         </div>
       )}
       {terms.length > 0 && (
@@ -1238,6 +1233,7 @@ export function TeachPanel({
   // one exact, equivalent mapping instead of making all cloud options vanish.
   const selectedBehavior = selectedSuggestion?.behavior ||
     (input.trim().toLocaleLowerCase() === "official walking" ? "official_velocity" : undefined) ||
+    (input.trim().toLocaleLowerCase() === "official recovery" ? "official_velstand" : undefined) ||
     (input.trim().toLocaleLowerCase() === "stand still" ? "stand" : undefined) ||
     (!input.trim() && chosenAction?.robotId === robot.id ? chosenAction.behavior : undefined);
   const actionText = input.trim() || (chosenAction?.robotId === robot.id ? chosenAction.text : "");
@@ -1263,14 +1259,7 @@ export function TeachPanel({
   // stage back its proportional share".
   const [stagePins, setStagePins] = useState<Record<number, number | null>>({});
   const behaviorRef = useRef<string | null>(null);
-  const rewHistory = useRef<{ x: number; y: number }[]>([]);
-  const lastSteps = useRef(-1);
-  // Which JOB the sparkline's points belong to (runName sans the -sN stage
-  // suffix). The history must live and die with the job: points are keyed by
-  // its cumulative step counter, so mixing jobs — or keeping points a warm
-  // restart is about to re-earn — folds the path back on itself and draws
-  // stray lines across the chart.
-  const histJob = useRef("");
+  const rewHistory = useTrainingScoreHistory(clientRef);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => saveJSON("teachOpen", open), [open]);
@@ -1374,32 +1363,6 @@ export function TeachPanel({
         behaviorRef.current = t.behavior.id;
         setBudgetSteps(null);
         setStagePins({});
-      }
-      // Overall steps (falling back to per-stage for single runs): a
-      // stage-local x would rewind to 0 at every curriculum handoff and fold
-      // the sparkline back on itself.
-      const steps = t?.progress?.overallSteps ?? t?.progress?.steps;
-      if (t != null && steps != null) {
-        const job = (t.runName ?? "").replace(/-s\d+$/, "");
-        if (job !== histJob.current) {
-          // A job this panel didn't launch (another tab, a relaunch) — its
-          // counter starts over, so the old points can't share an axis.
-          histJob.current = job;
-          rewHistory.current = [];
-          lastSteps.current = -1;
-        }
-        if (steps !== lastSteps.current) {
-          if (steps < lastSteps.current) {
-            // Same job, counter rewound: a warm restart (stage-weight apply,
-            // helper rescale, crash recovery) is replaying this stretch —
-            // drop the stale tail so the new attempt redraws it.
-            rewHistory.current = rewHistory.current.filter((p) => p.x < steps);
-          }
-          lastSteps.current = steps;
-          if (t.progress.ep_rew != null)
-            rewHistory.current.push({ x: steps, y: t.progress.ep_rew });
-          if (rewHistory.current.length > 400) rewHistory.current.shift();
-        }
       }
       for (const ev of frame.events ?? []) {
         if (/Trainee|Training/.test(ev))
@@ -1547,8 +1510,8 @@ export function TeachPanel({
     }
     if (!cloudTask) {
       setCloudError(tr(
-        "This action has no equivalent official cloud task yet. Use local training or choose Stand still.",
-        "这个动作暂时没有等价的官方云端任务，请使用本地训练或选择“保持站立”。"
+        "This action has no equivalent official cloud task yet. Use local training or choose an official cloud task.",
+        "这个动作暂时没有等价的官方云端任务，请使用本地训练或明确选择官方云端任务。"
       ));
       return;
     }
@@ -1739,8 +1702,8 @@ export function TeachPanel({
     // Above the ducks' floating DOM labels (drei Html, zIndexRange [10, 0]).
     zIndex: 20,
     ...(panelDrag.point ? { left: panelDrag.point.x, top: panelDrag.point.y } : { right: 14, bottom: 14 }),
-    width: wide ? "min(560px, calc(100vw - 28px))" : 320,
-    maxHeight: "calc(100vh - 110px)",
+    width: wide ? "min(560px, calc(100vw - 28px))" : "min(300px, calc(100vw - 28px))",
+    maxHeight: panelDrag.size ? "calc(100vh - 110px)" : "min(360px, calc(100vh - 240px))",
     display: "flex",
     flexDirection: "column",
     background: "rgba(14, 16, 20, 0.86)",
@@ -1754,22 +1717,9 @@ export function TeachPanel({
     ...panelDrag.resizeStyle,
   };
 
-  if (!open)
-    return (
-      <button
-        data-teach-ui
-        onClick={() => setOpen(true)}
-        style={{
-          position: "absolute", zIndex: 20, right: 14, bottom: 14,
-          background: "rgba(14,16,20,0.86)", color: "#e8e6e1",
-          border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10,
-          padding: "8px 12px", fontFamily: mono, fontSize: 12, cursor: "pointer",
-          backdropFilter: "blur(6px)",
-        }}
-      >
-        🎓 {tr("Training", "训练")}
-      </button>
-    );
+  // The top toolbar is the single training entry point. Keep hooks mounted
+  // while closed so saved state and open requests still work.
+  if (!open) return null;
 
   return (
     // data-teach-ui doubles as the PolicyPanel's drop target: a policy chip
@@ -1784,6 +1734,7 @@ export function TeachPanel({
         }}
       >
         <span style={{ flex: 1 }}>🎓 {tr("Training", "训练")}</span>
+        <a href={plansHref()} style={{color:"#d8c97d",fontSize:11,marginRight:8}}>{tr("plans / import", "方案 / 导入")}</a>
         <button
           onClick={() => {
             setMsgs([GREETING]);
@@ -1815,7 +1766,7 @@ export function TeachPanel({
         </button>
       </div>
 
-      <div ref={logRef} style={{ overflowY: "auto", padding: "8px 12px", flex: 1 }}>
+      <div ref={logRef} style={{ overflowY: "auto", padding: "8px 12px", flex: 1, minHeight: 96 }}>
         {msgs.map((m, i) =>
           m.kind === "user" ? (
             <div key={i} style={{ textAlign: "right", margin: "6px 0" }}>
@@ -1885,7 +1836,7 @@ export function TeachPanel({
             t={training}
             traineeSpeed={traineeSpeed}
             wide={effectiveWide}
-            rewHistory={rewHistory.current}
+            rewHistory={rewHistory}
             plan={plan}
             pinned={pins}
             onPinStage={(stage, steps) =>
@@ -1907,7 +1858,7 @@ export function TeachPanel({
         )}
       </div>
 
-      <div style={{ padding: "8px 12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+      <div style={{ padding: "8px 12px", borderTop: "1px solid rgba(255,255,255,0.08)", overflowY: "auto", minHeight: 0, flexShrink: 1 }}>
         {robots.length > 1 && (
           <div
             role="radiogroup"
@@ -2027,6 +1978,11 @@ export function TeachPanel({
               title={tr("Official MicroDuck walking task on cloud compute", "云端官方 MicroDuck 行走任务")}
             >
               ☁ {tr("official walking", "官方行走")}
+            </button>
+          )}
+          {robot.id === "microduck" && compute !== "local" && (
+            <button type="button" style={{background:"#1c2230",color:"#9fb4d8",border:"1px solid rgba(112,184,216,0.45)",borderRadius:12,padding:"2px 8px",fontFamily:mono,fontSize:10,cursor:"pointer"}} onClick={() => {setInput("official recovery");setChosenAction(null);setCloudError("");}}>
+              ☁ {tr("official recovery", "官方行走与跌倒恢复")}
             </button>
           )}
         </div>
@@ -2173,7 +2129,7 @@ export function TeachPanel({
                   disabled={trainingInProgress}
                   onClick={() => {
                     setCompute(source);
-                    if (source === "local" && selectedBehavior === "official_velocity") setInput("");
+                    if (source === "local" && (selectedBehavior === "official_velocity" || selectedBehavior === "official_velstand")) setInput("");
                     setCloudError("");
                   }}
                   style={{
@@ -2211,7 +2167,7 @@ export function TeachPanel({
           ) : !cloudTask ? (
             <div style={{ color: "#d8b46f", fontSize: 10, marginTop: 6 }}>
               {tr(
-                "This action only supports local training. For MicroDuck, choose Stand still or Official walking above, or switch to This Mac.",
+                "This action only supports local training. For MicroDuck, choose Official recovery or Official walking above, or switch to This Mac.",
                 "当前动作暂不支持云端训练。MicroDuck 可选择上方的“保持站立”或“官方行走”，也可切换为“本机”。"
               )}
             </div>
@@ -2246,7 +2202,7 @@ export function TeachPanel({
                   {tr("0 paid CCU does not block a free T4 request. Google decides availability and may end the session at any time.", "0 付费 CCU 不影响尝试免费 T4；能否分配及会话时长由 Google 动态决定。")}
                 </div>
               )}
-              {selectedBehavior === "stand" && (
+              {selectedBehavior === "official_velstand" && (
                 <div style={{ color: "#d8b46f", fontSize: 10, marginTop: 6 }}>
                   {tr("Cloud uses the official VelStand task (walking + fall recovery); it is not the local stand-still recipe.", "云端使用官方 VelStand 任务（行走＋跌倒恢复），与本机“保持站立”配方不同。")}
                 </div>

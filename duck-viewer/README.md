@@ -191,12 +191,15 @@ lab restarts.
 ## `/sim`: the world page
 
 `http://localhost:63317/sim` renders the lab's **world mode** (start the lab
-with `uv run duck-lab --world living-room`, or load a scenario from the
-page's picker). The lab page's `🦆 duck lab` panel carries a `sim →` link to
+with `uv run duck-lab --world living-room`, or open this page to automatically
+load `living-room` when the lab has no world). An existing world is preserved.
+The lab page's `🦆 duck lab` panel carries a `sim →` link to
 get here, and this page's `← lab` goes back. One room, many ducks, and what
 each duck senses:
 
-- **Scenario picker + load** (top bar): built-ins and anything saved under
+- **Scenario picker** (top bar): selecting an item loads it immediately,
+  with a central loading indicator while the scene is built. Loading errors
+  remain visible and the empty-world panel offers a retry button. Built-ins and anything saved under
   `microduck_local/scenarios/`. Walls, static boxes and the floor come from
   the scenario JSON; balls and free boxes stream their poses at 25 Hz.
 - **Sensor overlay** (`T` — the button names the selected body's own range
@@ -537,3 +540,7 @@ so rather than reading as a broken run.
   per body.
 - The lab loop is single-threaded Python: 8 ducks × 50 Hz ≈ 5% of one core.
   Dozens of ducks are fine; hundreds would want the envs in a worker pool.
+
+## Training plans
+
+The `/plans` workspace manages named, versioned training recipes, imports JSON or declarative Python files, binds authored clips, and configures local SB3 and official cloud mjlab implementations separately. Animation now opens plan setup before launching. See [the training-plan guide](../docs/training-plans.md) for formats, storage paths and AI configuration. Restart duck-lab after updating the backend.

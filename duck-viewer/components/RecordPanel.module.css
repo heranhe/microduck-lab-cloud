@@ -1,0 +1,32 @@
+.playground {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 6px;
+  background: rgba(255,255,255,.06);
+  color: #d8dee8;
+  font: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.divider {
+  width: 1px;
+  height: 18px;
+  flex-shrink: 0;
+  background: rgba(255,255,255,.12);
+}
+.toolbar button, .playground {
+  transition: filter 160ms ease, transform 160ms ease-out;
+}
+.toolbar button:not(:disabled):hover, .playground:hover { filter: brightness(1.2); }
+.toolbar button:not(:disabled):active, .playground:active { transform: scale(.97); }
+.toolbar button:focus-visible, .playground:focus-visible {
+  outline: 2px solid #7db8d8;
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .toolbar button, .playground { transition: none; }
+}

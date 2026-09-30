@@ -174,6 +174,8 @@ export interface TrainingStage {
   start?: number;
 }
 export interface TrainingPayload {
+  robot?: string;
+  clip?: string | null;
   canResume?: boolean;
   resumeReason?: string | null;
   stopWarning?: string | null;

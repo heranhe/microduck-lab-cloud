@@ -20,6 +20,7 @@
 // count or a section name — both come from the metadata.
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { plansHref, downloadJSON, planRequest, type Plan } from "@/lib/plans";
 import { useI18n } from "@/lib/i18n";
 import {
   type Balance,
@@ -66,7 +67,6 @@ import {
 } from "@/lib/anim";
 import { robotChipLabel, setActiveRobot, useActiveRobot } from "@/lib/activeRobot";
 import { robotEmoji } from "@/lib/robots";
-import { LAB_HTTP } from "@/lib/lab";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import {
   rigApply,
@@ -519,22 +519,7 @@ export function AnimPanel() {
   /** Start a training run that tracks a SAVED clip (by name on disk — the
    *  trainer subprocess loads it from clips/, so it must be saved first). */
   const trainClip = async (name: string) => {
-    try {
-      const res = await fetch(`${LAB_HTTP}/teach`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: "copy the animation", clip: name }),
-      });
-      const data = await res.json();
-      if (!data.matched) {
-        pushToast(`⚠ ${data.message ?? "the lab wouldn't start that run"}`);
-        return;
-      }
-      setBrowsing(false);
-      pushToast(`⚡ training a policy to perform “${name}” — watch the 🎓 trainee`);
-    } catch (e) {
-      pushToast(`⚠ ${String((e as Error)?.message ?? e)}`);
-    }
+    window.location.assign(plansHref(name));
   };
 
   const trainThis = async () => {
@@ -560,6 +545,25 @@ export function AnimPanel() {
       pushToast(`⚠ ${String((e as Error)?.message ?? e)}`);
     }
   };
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const plan = query.get("plan"), revision = query.get("revision"), name = query.get("clip");
+    if (!plan && !name) return;
+    const load = async () => {
+      try {
+        const c = plan && revision
+          ? (await planRequest<Plan>(`/plans/${encodeURIComponent(plan)}/versions/${Number(revision)}`)).reference
+          : await loadClip(name!);
+        if (!c) throw new Error("方案没有参考动作");
+        setClip(c); clipRef.current = c; setPlayhead(0); setPlaying(false); setOpen(true);
+        switchRobot(clipRobot(c));
+      } catch(e) {pushToast(`⚠ ${e instanceof Error ? e.message : String(e)}`);}
+    };
+    void load();
+    // Entry handoff is resolved once; subsequent edits belong to the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const dropClip = async (name: string) => {
     try {
@@ -643,7 +647,7 @@ export function AnimPanel() {
     return (
       <button
         onClick={() => setOpen(true)}
-        title={tr("keyframe animation editor — pose the robot, key it, save a clip", "关键帧动画编辑器：调整姿态、设置关键帧并保存片段")}
+        title={tr("keyframe animation editor — pose the robot, key it, save a clip", "动作关键帧编辑：调整姿态、设置关键帧并保存动作")}
         style={{
           position: "absolute",
           bottom: 14,
@@ -661,7 +665,7 @@ export function AnimPanel() {
           zIndex: 20,
         }}
       >
-        🎬 {tr("animate", "动画")}
+        🎬 {tr("motion keyframe editor", "动作关键帧编辑")}
       </button>
     );
 
@@ -731,7 +735,7 @@ export function AnimPanel() {
           flexShrink: 0,
         }}
       >
-        <span style={{ flex: 1 }}>🎬 {tr("animate", "动画")}</span>
+        <span style={{ flex: 1 }}>🎬 {tr("motion keyframe editor", "动作关键帧编辑")}</span>
         {/* the robot switch: one chip per body the lab can pose */}
         {robotChips.map((r) => {
           const active = r.id === robot;
@@ -809,7 +813,7 @@ export function AnimPanel() {
           value={clip.name}
           onChange={(e) => setClip((c) => ({ ...c, name: e.target.value }))}
           placeholder={tr("clip name", "片段名称")}
-          title="saved as clips/<name>.json"
+          title={tr("saved on the lab as clips/<name>.json", "保存到训练服务的 clips/<名称>.json；方案页可查看实际路径")}
           style={{ ...field, width: 132 }}
         />
         <label style={{ color: "#8b93a3", fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}>
@@ -841,14 +845,15 @@ export function AnimPanel() {
           {saving ? "…" : `💾 ${tr("save", "保存")}`}
         </button>
         <button style={btn} onClick={() => setBrowsing((b) => !b)} title={tr("saved clips", "已保存片段")}>
-          📂
+          📂 {tr("saved clips", "已保存动作")}
         </button>
+        <button style={btn} onClick={() => downloadJSON(clip, `${clip.name}.json`)}>{tr("export JSON", "导出动作 JSON")}</button>
         <button
           style={{ ...btn, color: "#e8c87d", borderColor: "rgba(216,198,125,0.4)" }}
           onClick={trainThis}
-          title={tr("save the clip so a policy can be trained to track it", "保存片段并训练策略进行跟踪")}
+          title={tr("save the clip so a policy can be trained to track it", "保存参考动作并配置训练方案")}
         >
-          ⚡ {tr("train this", "训练此片段")}
+          ⚡ {tr("create training plan", "创建训练方案")}
         </button>
       </div>
 

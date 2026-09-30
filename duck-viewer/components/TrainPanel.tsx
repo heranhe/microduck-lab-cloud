@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { plansHref } from "@/lib/plans";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
 import { groupLearned } from "@/lib/sim";
@@ -154,6 +155,7 @@ export default function TrainPanel() {
         <Link href="/sim" style={S.back}>
           ← {tr("sim", "仿真")}
         </Link>
+        <Link href={plansHref()} style={S.back}>训练方案</Link>
         <span style={S.title}>/train</span>
         <span style={S.sub}>{tr("brain training", "智能体训练")} · train-brain</span>
         <span style={{ flex: 1 }} />

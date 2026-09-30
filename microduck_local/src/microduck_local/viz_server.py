@@ -2046,6 +2046,8 @@ class TrainingJob:
         reason = self.resume_reason()
         return {
             "runName": self.run_name,
+            "robot": self.behavior.robot,
+            "clip": self.clip_name(),
             "status": self.status,
             "canResume": reason is None,
             "resumeReason": reason,
@@ -4980,6 +4982,12 @@ def make_app(ducks: list[Duck]):
             next_t += 1.0 / TICK_HZ
             await asyncio.sleep(max(0.0, next_t - time.monotonic()))
 
+    from .training_plans import mount_plans
+    mount_plans(app, behaviors=behaviors_mod, clean_clip=clean_clip,
+                atomic_write=_atomic_write_json, launch_local=teach,
+                launch_colab=colab_start_job, launch_hf=hf_start_job,
+                teach_req=TeachReq, colab_req=ColabStartReq, hf_req=HfStartReq,
+                clip_path=clip_path, origin_allowed=origin_allowed)
     return app
 
 

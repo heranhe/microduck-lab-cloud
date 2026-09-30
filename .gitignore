@@ -66,3 +66,6 @@ duck-viewer/viewer-server.log
 MUJOCO_LOG.TXT
 # Locally supplied pretrained cloud teachers
 microduck_local/teachers/
+
+# User training plans, immutable revisions and AI credentials
+microduck_local/training-plans/

@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { plansHref } from "@/lib/plans";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -1145,6 +1146,7 @@ function ScenePicker({
       }}
     >
       <button
+        disabled={busy}
         onClick={() => {
           onPick(s.name);
           setOpen(false);
@@ -1188,7 +1190,7 @@ function ScenePicker({
 
   return (
     <div ref={boxRef} style={{ position: "relative" }}>
-      <button style={{ ...BTN, padding: "3px 6px" }} onClick={() => setOpen((v) => !v)}>
+      <button disabled={busy} style={{ ...BTN, padding: "3px 6px" }} onClick={() => setOpen((v) => !v)}>
         {current ? label(current) : pick || "…"} ▾
       </button>
       {open && (
@@ -1300,6 +1302,8 @@ export default function SimViewer() {
   const [world, setWorld] = useState<WorldInfo | null>(null);
   const [pick, setPick] = useState<string>("living-room");
   const [loading, setLoading] = useState(false);
+  const [initializing, setInitializing] = useState(true);
+  const loadInFlight = useRef(false);
   const [driving, setDriving] = useState(false);
   const [showTof, setShowTof] = useState(true);
   const [showMap, setShowMap] = useState(true);
@@ -1468,23 +1472,55 @@ export default function SimViewer() {
   useEffect(() => {
     const client = new SimClient(setConnected);
     clientRef.current = client;
-    const load = () =>
-      Promise.all([fetchScene(), fetchScenarios(), fetchWorld()])
-        .then(([s, list, w]) => {
-          setScene(s);
-          setScenarios(list);
-          setWorld(w);
-          if (w.scenario) setPick(w.scenario.name);
-          setError(null);
-          if ((w.scenario?.persons ?? []).some((p) => p.kind === "g1")) {
-            fetchG1Scene().then(setG1Scene).catch(() => setG1Scene(null));
-          }
-        })
-        .catch(() => {
-          setError("duck-lab not reachable on :8788 — start it with `uv run duck-lab …`");
-          setTimeout(load, 2000);
-        });
-    load();
+    let stopped = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
+      let startup: [Scene, ScenarioListing[], WorldInfo];
+      try {
+        startup = await Promise.all([fetchScene(), fetchScenarios(), fetchWorld()]);
+      } catch {
+        if (stopped) return;
+        setError("duck-lab not reachable on :8788 — start it with `uv run duck-lab …`");
+        retryTimer = setTimeout(load, 2000);
+        return;
+      }
+      if (stopped) return;
+      const [s, list] = startup;
+      let w = startup[2];
+      setScene(s);
+      setScenarios(list);
+      setError(null);
+      try {
+        // Another viewer may already be building a world. Wait for it rather
+        // than posting a second load or resetting its selected scenario.
+        while (w.loading) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          if (stopped) return;
+          w = await fetchWorld();
+        }
+        if (stopped) return;
+        if (!w.scenario) {
+          setLoading(true);
+          loadInFlight.current = true;
+          w = await loadWorld("living-room");
+        }
+        if (stopped) return;
+        setWorld(w);
+        if (w.scenario) setPick(w.scenario.name);
+        if ((w.scenario?.persons ?? []).some((p) => p.kind === "g1")) {
+          fetchG1Scene().then((sc) => { if (!stopped) setG1Scene(sc); }).catch(() => {});
+        }
+      } catch (e) {
+        if (!stopped) setError(String((e as Error).message ?? e));
+      } finally {
+        loadInFlight.current = false;
+        if (!stopped) {
+          setLoading(false);
+          setInitializing(false);
+        }
+      }
+    };
+    void load();
     // Low-rate status mirror (HUD numbers, toasts): 4 Hz is plenty.
     const statusTimer = setInterval(() => {
       const f = client.live;
@@ -1534,6 +1570,8 @@ export default function SimViewer() {
       if (drivingRef.current && held.current.size) client.sendCmd(twistFromKeys(held.current));
     }, 100);
     return () => {
+      stopped = true;
+      clearTimeout(retryTimer);
       clearInterval(statusTimer);
       clearInterval(driveTimer);
       client.close();
@@ -1664,7 +1702,11 @@ export default function SimViewer() {
   }, [askSpeed]);
 
   const doLoad = async (name: string) => {
+    if (loadInFlight.current || initializing) return;
+    loadInFlight.current = true;
+    setPick(name);
     setLoading(true);
+    setError(null);
     try {
       const w = await loadWorld(name);
       setWorld(w);
@@ -1677,8 +1719,8 @@ export default function SimViewer() {
       }
     } catch (e) {
       setError(String((e as Error).message ?? e));
-      setTimeout(() => setError(null), 4000);
     } finally {
+      loadInFlight.current = false;
       setLoading(false);
     }
   };
@@ -1808,6 +1850,24 @@ export default function SimViewer() {
         <Snapshotter />
       </Canvas>
 
+      {!editor && (initializing || loading || !scenario) && (
+        <div style={{ position: "absolute", top: frameBox.barBottom + GAP, bottom: 54, left: 0, right: 0, zIndex: 25, display: "grid", placeItems: "center", overflowY: "auto", background: "rgba(10, 13, 18, 0.6)" }}>
+          <div role={error ? "alert" : "status"} aria-live="polite" aria-busy={initializing || loading}
+            style={{ background: "#171d26", border: "1px solid #364353", borderRadius: 14, padding: "28px 32px", width: 360, maxWidth: "calc(100vw - 80px)", color: "#e9edf1", textAlign: "center", boxShadow: "0 16px 60px rgba(0,0,0,0.45)" }}>
+            <div style={{ fontSize: 30, marginBottom: 12 }}>{error ? "⚠" : "🌍"}</div>
+            {!error && <progress aria-label={tr("Loading scene", "正在加载场景")} style={{ width: "100%", height: 5, accentColor: "#43c2b8", marginBottom: 16 }} />}
+            <div style={{ fontSize: 20, fontWeight: 600 }}>
+              {error ? tr("Unable to load the world", "场景暂时无法加载") : loading ? tr(`Loading ${pick}…`, `正在加载 ${pick}…`) : tr("Preparing your world…", "正在准备世界…")}
+            </div>
+            <p style={{ fontSize: 14, lineHeight: 1.7, color: "#aab7c6", margin: "12px 0 0" }}>
+              {error ? initializing ? tr("Waiting for the simulation service. Reconnecting automatically…", "正在等待仿真服务，将自动重连…") : tr("Please retry or select another scene from the list.", "请重试，或从上方列表选择其他场景。") : loading ? tr("Building the scene and preparing robots. Please wait…", "正在构建场景并准备机器人，请稍候…") : tr("Connecting to the simulation service and reading the scene…", "正在连接仿真服务并读取场景…")}
+            </p>
+            {error && <p style={{ fontSize: 12, color: "#f2b632", overflowWrap: "anywhere" }}>{error}</p>}
+            {!initializing && !loading && <button style={{ ...BTN, marginTop: 18 }} onClick={() => void doLoad(pick)}>{tr("Retry loading", "重新加载")}</button>}
+          </div>
+        </div>
+      )}
+
       {/* top bar */}
       <div
         ref={topBarRef}
@@ -1824,19 +1884,18 @@ export default function SimViewer() {
         >
           🎓 {tr("train", "训练")}
         </Link>
+        <Link href={plansHref()} style={{ ...BTN, textDecoration: "none", lineHeight: 1.4 }}>训练方案 · 创建 / 导入</Link>
         <Link href="/cloud" style={{ ...BTN, textDecoration: "none", lineHeight: 1.4 }}>☁ {tr("cloud", "云端")}</Link>
         <button style={BTN} onClick={toggle} title={tr("Switch language", "切换语言")}>{locale === "en" ? "中文" : "EN"}</button>
         <ScenePicker
           scenarios={scenarios}
           pick={pick}
-          onPick={setPick}
+          onPick={(name) => void doLoad(name)}
           onDelete={doDelete}
-          busy={loading}
+          busy={initializing || loading}
           locale={locale}
         />
-        <button style={BTN} disabled={loading} onClick={() => doLoad(pick)}>
-          {loading ? tr("loading…", "加载中…") : tr("load", "加载")}
-        </button>
+        {(initializing || loading) && <span style={{ color: "#f2b632" }}>{tr("loading…", "加载中…")}</span>}
         <button style={BTN} onClick={() => client?.sendReset()} title="R">
           ↺ {tr("restart", "重启")}
         </button>
