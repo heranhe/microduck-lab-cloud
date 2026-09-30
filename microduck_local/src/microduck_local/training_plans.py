@@ -247,6 +247,10 @@ def mount_plans(app, *, behaviors, clean_clip, atomic_write, launch_local, launc
         guard(request)
         return save(data, pid, data.get("revision"))
 
+    @app.get("/plans/{pid}")
+    def latest_version(pid: str):
+        return card(read(pid))
+
     @app.get("/plans/{pid}/versions/{revision}")
     def version(pid: str, revision: int):
         return card(read(pid, revision))

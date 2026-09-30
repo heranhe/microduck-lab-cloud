@@ -71,3 +71,23 @@ export function localizedCatalog(c: Catalog): Catalog {
     return b ? {...p,title:b.title,description:b.description,success:b.successMetric} : p;
   })};
 }
+
+/** Resolve plan handoffs without ever treating a missing clip as a filename. */
+export async function loadReferenceClip(
+  query: URLSearchParams,
+  loaders: { plan: (path: string) => Promise<Plan>; clip: (name: string) => Promise<Clip> },
+): Promise<Clip | null> {
+  const id = query.get("plan");
+  if (id) {
+    const revision = query.get("revision");
+    if (revision !== null && (!/^[1-9]\d*$/.test(revision) || !Number.isSafeInteger(Number(revision)))) {
+      throw new Error("方案版本必须是正整数");
+    }
+    const path = `/plans/${encodeURIComponent(id)}${revision === null ? "" : `/versions/${revision}`}`;
+    const plan = await loaders.plan(path);
+    if (!plan.reference) throw new Error("方案没有参考动作");
+    return plan.reference;
+  }
+  const name = query.get("clip");
+  return name ? loaders.clip(name) : null;
+}

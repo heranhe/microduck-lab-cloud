@@ -1,8 +1,9 @@
 "use client";
 import Link from "next/link";
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useRef, useState, useSyncExternalStore} from "react";
 import {listClips, loadClip, putClip, type Clip, type StoredClip} from "@/lib/anim";
 import {clipPlan, localizedCatalog, downloadJSON, downloadText, newFromTemplate, planFile, planRequest, planNavigationQuery, pythonPlan, type Catalog, type Plan} from "@/lib/plans";
+import {PlanDraftEditor} from "@/lib/planDraft";
 import s from "./PlansPanel.module.css";
 
 type Library = {plans:Plan[]; path:string; clipPath:string; errors:{path:string;message:string}[]};
@@ -13,8 +14,8 @@ export default function PlansPanel(){
   const [catalog,setCatalog]=useState<Catalog>({templates:[],behaviors:[]});
   const [library,setLibrary]=useState<Library>({plans:[],path:"",clipPath:"",errors:[]});
   const [clips,setClips]=useState<StoredClip[]>([]);
-  const [draft,setDraft]=useState<Plan|null>(null);
-  const [baseline,setBaseline]=useState("");
+  const [editor]=useState(()=>new PlanDraftEditor());
+  const {draft,dirty}=useSyncExternalStore(editor.subscribe,editor.getSnapshot,editor.getSnapshot);
   const [tab,setTab]=useState("templates");
   const [compute,setCompute]=useState("local");
   const [notice,setNotice]=useState("");
@@ -30,7 +31,6 @@ export default function PlansPanel(){
   const fileRef=useRef<HTMLInputElement>(null);
   const clipRef=useRef<HTMLInputElement>(null);
   const initial=useRef(false);
-  const dirty=!!draft && JSON.stringify(planFile(draft))!==baseline;
   const recipe=catalog.behaviors.find(b=>b.id===draft?.local?.behavior);
   const robots=[...new Set(catalog.behaviors.map(b=>b.robot))];
   const link=(path:string)=>{const p=planNavigationQuery(typeof window!=="undefined"?window.location.search:"");return path+(p.size?`?${p}`:"");};
@@ -38,27 +38,33 @@ export default function PlansPanel(){
     const [c,l,cl,a]=await Promise.all([planRequest<Catalog>("/plans/templates"),planRequest<Library>("/plans"),listClips(),planRequest<Ai>("/plans/ai/settings")]);
     setCatalog(localizedCatalog(c));setLibrary(l);setClips(cl);setAi(a);setOnline(true);return c;
   }
-  function select(p:Plan){
-    setDraft(structuredClone(p));setBaseline(JSON.stringify(planFile(p)));setCompute(p.local?"local":"colab");setError("");
-  }
-  async function action(fn:()=>Promise<void>){
+  const select=useCallback((p:Plan)=>{
+    editor.select(p);setCompute(p.local?"local":"colab");setError("");
+  },[editor]);
+  async function action(fn:()=>Promise<unknown>){
     setBusy(true);setError("");
     try{await fn();}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}
   }
   useEffect(()=>{let active=true; Promise.all([planRequest<Catalog>("/plans/templates"),planRequest<Library>("/plans"),listClips(),planRequest<Ai>("/plans/ai/settings")]).then(async([c,l,cl,a])=>{
     if(!active)return;setCatalog(localizedCatalog(c));setLibrary(l);setClips(cl);setAi(a);setOnline(true);
     if(!initial.current){initial.current=true;const name=new URLSearchParams(window.location.search).get("clip");
-      if(name){const clip=await loadClip(name);if(active){select(clipPlan(clip,localizedCatalog(c).behaviors));setNotice("参考动作已绑定。请检查本地配方和训练预算，再保存方案。");}}
+      if(name){const clip=await loadClip(name);if(active&&!editor.getSnapshot().draft){select(clipPlan(clip,localizedCatalog(c).behaviors));setNotice("参考动作已绑定。请检查本地配方和训练预算，再保存方案。");}}
     }
-  }).catch(e=>{if(active)setError(`无法加载训练方案：${e.message}`);});return()=>{active=false;};},[]);
+  }).catch(e=>{if(active)setError(`无法加载训练方案：${e.message}`);});return()=>{active=false;};},[editor,select]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();}};window.addEventListener("beforeunload",warn);return()=>window.removeEventListener("beforeunload",warn);},[dirty]);
-  function switchDraft(p:Plan){if(dirty&&!window.confirm("当前方案有未保存的修改，是否放弃并打开另一方案？"))return;select(p);}
-  function patch(fields:Partial<Plan>){setDraft(p=>p?{...p,...fields}:p);}
-  async function save(copy=false){if(!draft)return;
-    const payload=copy?newFromTemplate(draft):planFile(draft);
+  function switchDraft(p:Plan){
+    if(!editor.switchDraft(p,()=>window.confirm("当前方案有未保存的修改，是否放弃并打开另一方案？")))return false;
+    setCompute(p.local?"local":"colab");setError("");return true;
+  }
+  function patch(fields:Partial<Plan>){editor.patch(fields);}
+  async function save(copy=false){
+    const request=editor.beginSave();if(!request)return;
+    const payload=copy?newFromTemplate(request.draft):planFile(request.draft);
     const existing=payload.id&&!payload.id.startsWith("template-");
     const p=await planRequest<Plan>(existing?`/plans/${payload.id}`:"/plans",existing?"PUT":"POST",payload);
-    select(p);await refresh();setTab("mine");setNotice(`已保存“${p.title}” · v${p.revision}。方案保存在本地，执行位置另行选择。`);
+    const result=editor.completeSave(request,p);
+    await refresh();setTab("mine");
+    setNotice(`已保存“${p.title}” · v${p.revision}。${result==="edited"?"保存期间的新编辑已保留，仍需再次保存。":result==="switched"?"当前打开的草稿已保留。":"方案保存在本地，执行位置另行选择。"}`);
   }
   async function importFile(file:File,kind:"plan"|"clip"){
     if(file.size>2_000_000)throw new Error("文件超过 2 MB");

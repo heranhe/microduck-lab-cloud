@@ -173,3 +173,31 @@ def test_cloud_preflight_reports_missing_teachers(app,monkeypatch):
     monkeypatch.setattr(colab_jobs,'teacher_checkpoints',missing)
     result=endpoint(app,'/plans/{pid}/check','POST')(saved['id'],P.LaunchReq(revision=1,compute='hf'),request())
     assert not result['ready'] and result['problems']==['缺少教师模型'] and not app.calls
+
+
+def test_latest_plan_tracks_saved_revision_and_preserves_pinned_version(app):
+    first = create(app)
+    changed = {k: v for k, v in first.items() if k not in ('path', 'storage', 'revisions')}
+    changed['title'] = '最新版本'
+    second = endpoint(app, '/plans/{pid}', 'PUT')(first['id'], changed, request())
+    latest = endpoint(app, '/plans/{pid}', 'GET')(first['id'])
+    assert latest['revision'] == second['revision'] == 2
+    assert latest['title'] == '最新版本'
+    assert latest['path'].endswith('/v2.json')
+    old = endpoint(app, '/plans/{pid}/versions/{revision}', 'GET')(first['id'], 1)
+    assert old['title'] == first['title']
+    assert old['revision'] == 1
+
+
+@pytest.mark.parametrize('pid,status', [('missing', 404), ('../escape', 422)])
+def test_latest_plan_validates_identifier_and_missing_plan(app, pid, status):
+    with pytest.raises(HTTPException) as exc:
+        endpoint(app, '/plans/{pid}', 'GET')(pid)
+    assert exc.value.status_code == status
+
+
+def test_latest_plan_route_does_not_shadow_templates(app):
+    from starlette.routing import Match
+    scope = {'type': 'http', 'path': '/plans/templates', 'method': 'GET'}
+    matched = next(route for route in app.routes if route.matches(scope)[0] == Match.FULL)
+    assert matched.path == '/plans/templates'
