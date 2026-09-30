@@ -22,6 +22,41 @@ pytestmark = pytest.mark.skipif(
 ORIGIN = {"origin": "http://localhost:63317"}
 
 
+def receive_frame_until(ws, predicate, *, description, max_frames=250):
+    """Drain buffered frames until the command's effect reaches the stream.
+
+    Sending a command does not discard frames already queued by TestClient.
+    Bound the frame budget so a missing state change still fails the test.
+    """
+    frame = None
+    for _ in range(max_frames):
+        frame = ws.receive_json()
+        if predicate(frame):
+            return frame
+    pytest.fail(f"No {description} after {max_frames} frames; last frame: {frame}")
+
+
+def test_receive_frame_until_drains_stale_frames_and_rejects_missing_changes():
+    class BufferedSocket:
+        def __init__(self, frames):
+            self.frames = iter(frames)
+
+        def receive_json(self):
+            return next(self.frames)
+
+    stale = [{"mode": "auto"}] * 12
+    changed = {"mode": "manual"}
+    def is_manual(frame):
+        return frame["mode"] == "manual"
+
+    assert receive_frame_until(
+        BufferedSocket([*stale, changed]), is_manual,
+        description="manual mode", max_frames=13) == changed
+    with pytest.raises(pytest.fail.Exception, match="No manual mode after 12 frames"):
+        receive_frame_until(BufferedSocket(stale), is_manual,
+                            description="manual mode", max_frames=12)
+
+
 @pytest.fixture
 def app(monkeypatch, tmp_path):
     monkeypatch.setenv("MICRODUCK_SCENARIOS_DIR", str(tmp_path / "scenarios"))
@@ -141,19 +176,24 @@ def test_load_world_and_stream_frames(app):
             # A duck with a ToF drives itself in auto mode.
             assert d["brain"]["kind"] == "wander" and d["brain"]["state"] in ("cruise", "steer", "spin", "blind", "unstick")
             # Drive and reset go through the socket.
+            # Model a slow consumer: the stream keeps queuing auto frames
+            # while assertions (or a busy CI host) delay the next receive.
+            time.sleep(0.4)
             ws.send_text(json.dumps({"cmd": [0.2, 0.0, 0.0]}))
-            for _ in range(4):
-                frame = ws.receive_json()
+            frame = receive_frame_until(
+                ws, lambda f: f["mode"] == "manual", description="manual mode")
             assert frame["mode"] == "manual" and frame["cmd"][0] == 0.2
             assert frame["ducks"][0]["cmdSpeed"] == 0.2
             assert frame["ducks"][0]["brain"]["kind"] == "manual"
             ws.send_text(json.dumps({"noise": {"duck": "d0", "preset": "hostile"}}))
-            for _ in range(3):
-                frame = ws.receive_json()
+            frame = receive_frame_until(
+                ws, lambda f: f["ducks"][0]["tof"] == "hostile",
+                description="hostile noise preset")
             assert frame["ducks"][0]["tof"] == "hostile"
+            before_reset = frame["tick"]
             ws.send_text(json.dumps({"reset": True}))
-            for _ in range(2):
-                frame = ws.receive_json()
+            frame = receive_frame_until(
+                ws, lambda f: f["tick"] < before_reset, description="world reset")
             assert frame["ducks"][0]["step"] < 5
         assert c.get("/world").json()["ducks"][0]["tof"] == "hostile"
         r = c.post("/world/noise", json={"duck": "d0", "preset": "ideal"})
