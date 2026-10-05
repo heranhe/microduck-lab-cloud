@@ -445,6 +445,27 @@ def main() -> None:
         prev = Path(args.init_from)
         resume = prev.resolve() == out.resolve()
         venv = VecNormalize.load(str(prev / "vecnormalize.pkl"), venv)
+        # A slot that was DEAD in the donor (always exactly 0: mean 0, var
+        # ~1e-10) passes through un-normalized. Frozen as it is, the first
+        # real value there divides by 1e-5 and clips — 10/12 -> 0/12 for the
+        # shipped pick when slots 28-30 were filled (microduck_local/AGENTS.md).
+        # A slot that stays dead maps 0 -> 0 either way, so no existing
+        # warm-start changes.
+        import numpy as np
+        dead = np.flatnonzero((venv.obs_rms.var < 1e-8)
+                              & (np.abs(venv.obs_rms.mean) < 1e-6))
+        if dead.size:
+            venv.obs_rms.mean[dead] = 0.0
+            venv.obs_rms.var[dead] = 1.0
+            print(f"donor-dead obs dims passed through: {dead.tolist()}")
+        # ...and a slot whose MEANING this run changes (a body says which):
+        # the donor's statistics there describe something else.
+        _rep = getattr(_body(args.robot), "repurposed_obs_dims", None)
+        _dims = _rep(env_kwargs, prev) if _rep else []
+        if _dims:
+            venv.obs_rms.mean[_dims] = 0.0
+            venv.obs_rms.var[_dims] = 1.0
+            print(f"repurposed obs dims passed through: {_dims}")
         if args.freeze_obs_norm:
             # FREEZE the observation statistics of a warm start.
             #

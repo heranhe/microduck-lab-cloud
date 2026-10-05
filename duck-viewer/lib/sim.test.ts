@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import { applyFloorClick, makePitch, makeRoom } from "@/components/SimEditor";
-import { goalDefenders, groupLearned, LEARNED_GROUPS, PITCH_TEAMS, RUG_LONG_MAX,
+import { detLabel, goalDefenders, groupLearned, LEARNED_GROUPS, PITCH_TEAMS, RUG_LONG_MAX,
   RUG_SHORT_MAX, rugSize, SIM_SPEEDS, SIM_SPEED_DEFAULT, simRate, SimClient, speedLabel,
   speedShortfall, stepSpeed, type LearnedInfo, type Scenario } from "./sim";
 import { scaleSceneToMetres } from "./sim";
@@ -302,5 +302,18 @@ describe("scaleSceneToMetres", () => {
     scaleSceneToMetres(sc);
     expect(sc.meshes[0].v).toEqual([0.5, 0.25, 0.125]);
     expect(sc.vertScale).toBeUndefined();
+  });
+});
+
+describe("what the camera inset writes on a detection box", () => {
+  it("names the OBJECT, because the class says nothing in a tidy room", () => {
+    // Every prop in `moss-yard` is class "toy", so three boxes in a row read
+    // "toy 1.42 m" and told you nothing about which was which.
+    expect(detLabel({ name: "card0", range: 1.418 })).toBe("card0 1.42 m");
+    expect(detLabel({ name: "butt0", range: 0.1 })).toBe("butt0 0.10 m");
+  });
+  it("still calls an unmatched detection a ghost", () => {
+    // `Detection.name` is "" for a ghost — a box with no real object behind it.
+    expect(detLabel({ name: "", range: 0.94 })).toBe("ghost 0.94 m");
   });
 });

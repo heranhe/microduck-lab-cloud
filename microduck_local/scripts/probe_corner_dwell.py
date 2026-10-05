@@ -226,7 +226,7 @@ def report(t: dict, rows: list, seconds: float, seeds: int) -> None:
         tail = "" if chance is None else f"   chance {100 * chance:>4.1f}%  ->  {pct / (100 * chance):.2f}x"
         print(f"    {label:<54} {secs / ds * 180:>6.1f} s ({pct:>4.1f}%){tail}")
     nb, strand = t.get("noball_support", 0.0), t.get("stranded", 0.0)
-    print(f"\n  THE MECHANISM — a supporter that does not know where the ball is")
+    print("\n  THE MECHANISM — a supporter that does not know where the ball is")
     print(f"    no-ball support ticks                       {nb * dt / ds * 180:>6.1f} s a duck a 180 s run")
     print(f"    ...of them, spent within 0.30 m of a board  {strand * dt / ds * 180:>6.1f} s "
           f"({100 * strand / nb if nb else 0:.0f}% of them)   <-- the trap")
@@ -234,7 +234,7 @@ def report(t: dict, rows: list, seconds: float, seeds: int) -> None:
           f"{t.get('stranded_corner', 0.0) * dt / ds * 180:>6.1f} s")
     cn = t.get("corner_ticks", 0.0)
     if cn:
-        print(f"\n  WHILE IN A CORNER")
+        print("\n  WHILE IN A CORNER")
         print(f"    ball truly within 0.5 m           {100 * t.get('corner_ball_near', 0) / cn:>5.1f}%")
         print(f"    ball NOT seen for over 0.3 s      {100 * t.get('corner_blind', 0) / cn:>5.1f}%")
         pt = t.get("corner_posted", 0)

@@ -125,6 +125,12 @@ class BehaviorEnv(MicroduckWalkEnv):
         # the unfold while this stood. The backward route is priced by
         # wrong_way per-step instead; wasted get-up time earns nothing and
         # is bounded by the 8 s clip.
+        # The recipe's own task failure (Behavior.terminate_fn). After the
+        # base step so it reads the state the reward was just paid on, and
+        # only when nothing has ended the episode already — a recipe must not
+        # be able to UN-terminate a fall.
+        if self.behavior.terminate_fn is not None and not terminated:
+            terminated = bool(self.behavior.terminate_fn(self))
         return obs, reward, terminated, truncated, info
 
     def _knob_prob(self, name: str, default: float) -> float:

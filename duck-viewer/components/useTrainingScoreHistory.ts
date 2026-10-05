@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState, type MutableRefObject } from "react";
-import type { LabClient } from "@/lib/lab";
+import { displayedTraining, type LabClient } from "@/lib/lab";
+
+import { getSelectedDuck } from "@/lib/select";
 
 type Point = { x: number; y: number };
 
@@ -13,7 +15,7 @@ export function useTrainingScoreHistory(clientRef: MutableRefObject<LabClient | 
     let lastSteps = -1;
     let history: Point[] = [];
     const sample = () => {
-      const training = clientRef.current?.frame?.training;
+      const training = displayedTraining(clientRef.current?.frame, getSelectedDuck());
       if (!training) {
         if (history.length) setPoints([]);
         history = [];

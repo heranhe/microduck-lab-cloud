@@ -206,6 +206,7 @@ class LidarSensor:
         groups: tuple[int, ...] = DEFAULT_GROUPS,
         exclude_body: str | None = None,
         base_body: str | None = None,
+        centred: bool = False,
     ):
         if n_rays < 1:
             raise ValueError("n_rays must be >= 1")
@@ -224,7 +225,10 @@ class LidarSensor:
         self._model = model
         if exclude_body is None:
             exclude_body = self._parent_body(model, mount)
-        self.fan = RayFan(model, planar_fan(self.n_rays, self.fov_deg, ccw=True),
+        # `centred`: a FORWARD fan, left edge first and symmetric about +x —
+        # a depth camera's row read as a scan (`robots/moss.py`'s RealSense),
+        # not a rotating scanner's turn from +x.
+        self.fan = RayFan(model, planar_fan(self.n_rays, self.fov_deg, ccw=not centred),
                           body=mount, max_range=self.max_range, groups=groups,
                           exclude_body=exclude_body)
         self.exclude_body = exclude_body

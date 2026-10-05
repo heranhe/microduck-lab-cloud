@@ -173,6 +173,19 @@ uv run scripts/infer_policy.py --walking ../microduck_local/runs/my-run/policy.o
   and stop it. A bare `uv run train-*` is invisible to them. Batteries and
   paired A/Bs are the exception (use `MICRODUCK_RUNS_DIR`). Full rule in
   `microduck_local/AGENTS.md`.
+- **And POSTing is not the same as being watched.** After launching, confirm
+  a real frame carries the trainee (`uv run --with websockets python
+  scripts/stage_check.py` — there is no GET for the roster), and give
+  the person the URL of the lab you actually launched on (a tab pointing at a
+  scratch lab shows an empty room while the job runs fine). A restarted lab
+  starts EMPTY and reaps the trainee the moment the job ends, so a chain that
+  finishes inside one turn was never seen by anyone.
+- **The stage must show the physics the trainer is running.** The lab builds
+  preview envs in-process; the trainer is a subprocess that imports the env
+  fresh. Edit anything under `robots/`, `behaviors/`, `world/` or `brain/` and
+  the stage keeps previewing the code the lab booted with — so restart the
+  backend BEFORE you POST, while it is still idle. Both rules, with the
+  measurements behind them, in `microduck_local/AGENTS.md`.
 - Before claiming anything about a trained policy, **render it and look**
   (`render-rollout`) — reward curves and eval sums have repeatedly lied here.
   The same rule for world mode: before claiming what happens in a room or on

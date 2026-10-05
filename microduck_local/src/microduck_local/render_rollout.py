@@ -439,11 +439,27 @@ def run_episode(env, renderer, cam, probe: Probe, seed: int, driver: Driver,
         if step % stride == 0 or terminated or truncated:
             capture(step)
 
+    # WHY it terminated, not just THAT it did. `Behavior.terminate_fn` is
+    # additive (a recipe may end a clip on its own condition — `dribble` ends
+    # one when the ball is unrecoverable), so "terminated" stopped meaning
+    # "fell" the moment that hook existed. A dribble sheet printed
+    # `FELL (terminated)` over a duck that was visibly still walking, at
+    # trunk_z 0.117 against a 0.120 stand reference, with the ball 1.21 m away
+    # — the header contradicted its own frames. The fall test is walk_env's:
+    # projected gravity past the fall line, or the height terminal.
+    if terminated:
+        fell = bool(env._projected_gravity()[2] > env._fall_gravity_z)
+        if not fell and getattr(env, "height_termination", False):
+            fell = bool(env._trunk_xpos[2] < env._fall_height)
+        outcome = "FELL (terminated)" if fell else "ENDED by the recipe (terminate_fn)"
+    else:
+        outcome = "completed (truncated)"
     meta = {
         "steps": step,
         "seconds": step * C.CTRL_DT,
-        "outcome": "FELL (terminated)" if terminated else "completed (truncated)",
+        "outcome": outcome,
         "terminated": bool(terminated),
+        "fell": bool(terminated and outcome.startswith("FELL")),
         "handoff_t": handoff_t,
         "spawn": getattr(env, "last_spawn", None),
     }

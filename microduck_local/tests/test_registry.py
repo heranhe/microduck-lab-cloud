@@ -386,17 +386,25 @@ def test_ids_lists_a_known_body_whether_or_not_it_loads(monkeypatch):
     would be a worse answer, so the choices must not depend on the download —
     and `ids()` must therefore read the DECLARATION, not the loaded body.
 
-    The three built-ins LEAD the list, in their declared order, and the
-    assertion is a prefix rather than an equality because a fourth source
-    exists now: a discovered body (`menagerie:<name>`, `robots/menagerie.py`)
-    follows whatever is in this machine's cache. That is the opposite
-    property to the one under test here — a discovered id is only listed once
-    it HAS been downloaded — so it cannot be enumerated and must not be able
-    to break this case.
+    The built-ins LEAD the list, in their declared order, and the assertion
+    is a prefix rather than an equality because another source exists: a
+    discovered body (`menagerie:<name>`, `robots/menagerie.py`) follows
+    whatever is in this machine's cache. That is the opposite property to the
+    one under test here — a discovered id is only listed once it HAS been
+    downloaded — so it cannot be enumerated and must not be able to break
+    this case.
+
+    The built-in prefix is read off `_BUILTINS` rather than typed, because
+    the list grows (MOSS was the fourth, 2026-09-24) and a literal here would
+    make adding a body a two-file edit for no gain. What the case is actually
+    about is the ORDER and the absence of a colon, both of which survive.
     """
     monkeypatch.setattr(R, "_load_builtin", lambda b: None)
-    assert R.ids()[:3] == ("microduck", "g1", "mars")
-    assert all(":" in i for i in R.ids()[3:]), R.ids()
+    builtins = tuple(b.id for b in R._BUILTINS)
+    assert builtins[:3] == ("microduck", "g1", "mars"), (
+        "the duck leads and the reference bodies follow it")
+    assert R.ids()[:len(builtins)] == builtins
+    assert all(":" in i for i in R.ids()[len(builtins):]), R.ids()
     assert T.parse_args(["--robot", "g1"]).robot == "g1"
 
 

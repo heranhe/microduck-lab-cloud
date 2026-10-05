@@ -10,7 +10,15 @@ Built on [Jonathan Hawkins' Microduck Lab](https://github.com/jonathanhawkins/mi
 
 **Updates:** current fixes land on `main`; routine updates no longer create GitHub Releases. Changes and historical release notes are preserved in the [changelog](CHANGELOG.md).
 
-## Latest update: visible training progress, scores and robot motion
+## October 5, 2026: upstream MOSS and concurrent training
+
+Merged upstream `bbf0326` while preserving training plans, Colab / Hugging Face workflows, Chinese/English UI, and save/resume controls.
+
+MOSS adds yard/demo worlds, wrist camera, perception explanations and a map. Run `cd microduck_local && uv run fetch-robot moss` to fetch the pinned assets, including the collision package. Existing MOSS users should rerun this command. Concurrent local jobs share an environment budget and retain separate trainees/helpers; selecting a trainee routes monitoring, stop/resume, stage weights and card removal to that job.
+
+Reinstall dependencies and restart services after completing or saving active training. See the [integration record](docs/upstream-sync-2026-10-05.md) for validation and rollback.
+
+## Visible training progress, scores and robot motion
 
 **v1.2.0 · September 30, 2026 fixes fragmented training monitoring and losing sight of score changes when the detailed panel is closed.** A persistent status card shows the current task, cumulative steps, completion percentage, elapsed/remaining time and a live score curve, with Save and stop always available. The detailed panel shows per-run scores, reward terms and curriculum stages; the trainee in the scene updates as new checkpoints arrive, so you can compare the curve with actual motion.
 

@@ -178,6 +178,19 @@ class Behavior:
     caption_fn: Callable | None = None
     markers_fn: Callable | None = None
     report_fn: Callable | None = None
+    # END THE EPISODE ON A TASK FAILURE, not just on a fall. `fn(env) -> bool`,
+    # checked after the base step. None (the default) leaves termination
+    # exactly as `terminate_on_fall` decides it, so every recipe written
+    # before this hook is unchanged.
+    #
+    # It exists because of the imitation lesson (roadmap 13.2 / AGENTS.md):
+    # a reward alone cannot teach "do not lose the thing" — a policy that
+    # abandons the target still collects every OTHER term for the rest of the
+    # clip, and DeepMimic-style early termination on not-tracking is what took
+    # the G1 kick from 0.10 m to 0.62 m. A dribble has exactly that shape: the
+    # ball leaving is the failure, and without a terminal the cheapest policy
+    # is to shove it away and bank the pose terms.
+    terminate_fn: Callable | None = None
     # HANDOFF: the brain a finished behavior gives control to, and when.
     # `handoff_fn(env) -> bool` is the condition, asked once per control step
     # while a handoff is armed. It lives HERE, on the behavior, because the

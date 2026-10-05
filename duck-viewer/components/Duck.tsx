@@ -17,11 +17,25 @@ import type { DuckFrame, Scene, SceneGeom } from "@/lib/lab";
 import { assignDrag } from "@/lib/assign";
 import { captureWantsCleanFrame } from "@/lib/record";
 import { getSelectedDuck } from "@/lib/select";
+import { propRadius, propShape } from "@/lib/prop";
+import {
+  episodeEdge,
+  episodeFlashAlpha,
+  episodeFlashLabel,
+  type EpisodeCause,
+} from "@/lib/episode";
 import { getDuckLabels } from "@/lib/ui";
 import { CREASE_ANGLE_DEG, G1_KINDS, g1PartKind, useG1Materials, weldAndSmooth, weldTolerance } from "./G1Look";
 import { MARS_KINDS, marsPartKind, useMarsMaterials } from "./MarsLook";
 import { duckMouths, MOUTH_TRAVEL_RAD } from "@/lib/mouth";
 import { SHELL_MATERIALS, TEAM_COLORWAYS, TRIM_MATERIALS, teamColor, type TeamName, POSE_SMOOTH_HZ, simRate } from "@/lib/sim";
+
+/** three's cylinder mesh is Y-up and this scene is Z-up, so every
+ *  prop carries this quarter turn about X underneath its own
+ *  orientation. */
+const CYL_Z_UP = new THREE.Quaternion().setFromAxisAngle(
+  new THREE.Vector3(1, 0, 0), Math.PI / 2,
+);
 
 // FALLBACK body-name → color, used only against servers that predate rgba
 // streaming (whole body painted one guessed color).
@@ -231,10 +245,32 @@ export function Duck({
   const labelRef = useRef<THREE.Group>(null);
   const labelDivRef = useRef<HTMLDivElement>(null);
   const spawnDivRef = useRef<HTMLDivElement>(null);
+  // EPISODE BOUNDARIES. A clip ending looks exactly like the ball being
+  // kicked away — both teleport duck and ball in one frame — so the boundary
+  // is annotated rather than left to be inferred. State in refs, not React:
+  // this updates per-frame inside the Canvas tree like the rest of the label.
+  const resetFlashRef = useRef<{ at: number; cause: EpisodeCause } | null>(null);
+  const lastEpisodeRef = useRef<{ step: number; falls: number } | null>(null);
+  const resetDivRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<THREE.Mesh>(null);
   const ballRef = useRef<THREE.Mesh>(null);
+  const propRef = useRef<THREE.Mesh>(null);
+  const boxRef = useRef<THREE.Mesh>(null);
+  const ghostRef = useRef<THREE.Mesh>(null);
+  const ghostPropRef = useRef<THREE.Mesh>(null);
+  const ghostRingRef = useRef<THREE.Mesh>(null);
+  // `lineSegments`, not `line`: the JSX intrinsic `line` resolves to SVG's,
+  // so it type-errors on `visible` (r3f's own long-standing name clash).
+  const ghostLineRef = useRef<THREE.LineSegments>(null);
+  const targetRef = useRef<THREE.Mesh>(null);
+  const targetPinRef = useRef<THREE.Mesh>(null);
   const tmpP = useMemo(() => new THREE.Vector3(), []);
   const tmpQ = useMemo(() => new THREE.Quaternion(), []);
+  // The error segment's two endpoints. PER DUCK and stable across renders:
+  // a module-level array would be shared by every duck on the stage and
+  // they would all draw the last one's line, and a fresh array inline in
+  // `args` would make r3f rebuild the attribute on every re-render.
+  const ghostLinePositions = useMemo(() => new Float32Array(6), []);
 
   useFrame((_, dt) => {
     const duck = frameRef.current;
@@ -285,17 +321,150 @@ export function Duck({
         ringRef.current.position.lerp(tmpP, alpha);
       }
     }
-    // The find_ball ball: streamed as [x, y, z, r] in the duck's own frame
-    // (it lives in the env, not the physics, so it is not a body). Hidden
-    // for every other brain.
+    // The ball this trainee is working on: [x, y, z, r] in the duck's own
+    // frame. find_ball's is virtual, a ball-scene recipe's is a real body —
+    // one field, because "what ball is this duck on" is one question.
+    const ball = duck.ball;
+    // WHICH of the three shapes this payload is, decided ONCE. A 5th number
+    // is the prop's half-height (a cylinder), a 10th makes it a box; the
+    // table and the reason this is not three ad-hoc length tests here are
+    // in `lib/prop.ts`. Asked separately, the sphere's own test only ruled
+    // out the cylinder — so every box was drawn with the orange ball still
+    // switched on inside it.
+    const shape = propShape(ball);
+    const isBox = shape === "box";
+    const isCan = shape === "cylinder";
+    if (boxRef.current) {
+      boxRef.current.visible = isBox;
+      if (ball && isBox) {
+        tmpP.set(ball[0], ball[1], ball[2]);
+        boxRef.current.position.lerp(tmpP, alpha);
+        // half-extents, and the geometry is 2 units across, so scale = half
+        boxRef.current.scale.set(ball[3], ball[4], ball[5]);
+        tmpQ.set(ball[7], ball[8], ball[9], ball[6]);   // three is (x,y,z,w)
+        boxRef.current.quaternion.slerp(tmpQ, alpha);
+      }
+    }
+    if (propRef.current) {
+      propRef.current.visible = isCan;
+      if (ball && isCan) {
+        tmpP.set(ball[0], ball[1], ball[2]);
+        propRef.current.position.lerp(tmpP, alpha);
+        const r = ball[3] || 0.033;
+        propRef.current.scale.set(r, ball[4] || 0.0575, r);
+        // three's cylinder is Y-up and this scene is Z-up, so the mesh gets a
+        // fixed quarter turn about X...
+        if (ball.length >= 9) {
+          // ...THEN THE CAN'S OWN ORIENTATION on top of it. Without this the
+          // can was drawn bolt upright whatever the physics did, so a lab
+          // spawning half its cans on their side looked like one that never
+          // varied — which is exactly what it was reported as, twice. The
+          // server sends [x, y, z, r, halfH, qw, qx, qy, qz]; a payload that
+          // stops at five keeps the old upright behaviour.
+          tmpQ.set(ball[6], ball[7], ball[8], ball[5]);   // three is (x,y,z,w)
+          tmpQ.multiply(CYL_Z_UP);
+          propRef.current.quaternion.slerp(tmpQ, alpha);
+        } else {
+          propRef.current.rotation.set(Math.PI / 2, 0, 0);
+        }
+      }
+    }
     if (ballRef.current) {
-      const ball = duck.ball;
-      ballRef.current.visible = !!ball;
-      if (ball) {
+      // ...and ONLY for a sphere. `!isCan` left this on for a box too.
+      ballRef.current.visible = shape === "sphere";
+      if (ball && shape === "sphere") {
         tmpP.set(ball[0], ball[1], ball[2]);
         ballRef.current.position.lerp(tmpP, alpha);
-        const r = ball[3] || 0.035;
+        const r = propRadius(ball);
         ballRef.current.scale.set(r, r, r);
+      }
+    }
+    // THE GHOST: where the policy BELIEVES the ball is. Snapped, not lerped —
+    // a belief jumps when a sighting lands, and smoothing it would draw a
+    // confidence the estimate does not have. Fades with `conf` so dead
+    // reckoning looks like dead reckoning, and turns amber the moment the
+    // ball leaves frame.
+    const ghost = duck.ballGhost;
+    // The TRUTH's footprint radius, which for a box is not `ball[3]` — see
+    // `propRadius`. The ghost is drawn at the size of the thing it is a
+    // belief about, so it has to ask the same question the truth did.
+    const gr = propRadius(ball);
+    // The belief is drawn as the SAME SHAPE as the thing it is a belief
+    // about: a 6th number is the prop's half-height, exactly as the 5th is
+    // on `ball`. A cylinder's ghost drawn as a sphere reads as a different
+    // object sitting next to the real one.
+    const ghostIsCan = !!ghost && ghost.length > 5;
+    for (const [ref, mine] of [
+      [ghostRef, !ghostIsCan] as const,
+      [ghostPropRef, ghostIsCan] as const,
+    ]) {
+      if (!ref.current) continue;
+      ref.current.visible = !!ghost && mine;
+      if (ghost && mine) {
+        ref.current.position.set(ghost[0], ghost[1], ghost[2]);
+        if (ghostIsCan) {
+          ref.current.scale.set(gr, ghost[5] ?? 0.0575, gr);
+          // ...AND THE SAME ORIENTATION, for the reason above: an upright
+          // ghost beside a can lying on its side reads as a second object,
+          // which is the thing this block exists to avoid. The ORIENTATION
+          // is the can's own, not the belief's — the 32-slot contract
+          // carries `target_base` as position only, so the tracker has no
+          // opinion about pose. What is believed is WHERE; the shape and its
+          // attitude are the object's, and drawing them truthfully is what
+          // makes the gap between ghost and can readable as a position
+          // error rather than as two different things.
+          if (ball && ball.length >= 9) {
+            tmpQ.set(ball[6], ball[7], ball[8], ball[5]);
+            tmpQ.multiply(CYL_Z_UP);
+            ref.current.quaternion.copy(tmpQ);   // not slerped: see above
+          } else {
+            ref.current.rotation.set(Math.PI / 2, 0, 0);   // three is Y-up
+          }
+        } else {
+          ref.current.scale.set(gr, gr, gr);
+        }
+        const m = ref.current.material as THREE.MeshStandardMaterial;
+        m.opacity = 0.2 + 0.45 * (ghost[3] ?? 0);
+        m.color.set(ghost[4] ? "#43c2b8" : "#e8b24a");
+      }
+    }
+    if (ghostRingRef.current) {
+      ghostRingRef.current.visible = !!ghost;
+      if (ghost) {
+        ghostRingRef.current.position.set(ghost[0], ghost[1], 0.003);
+        const s2 = gr * (1.6 + 2.6 * (1 - (ghost[3] ?? 0)));   // widens as the belief goes stale
+        ghostRingRef.current.scale.set(s2, s2, 1);
+        (ghostRingRef.current.material as THREE.MeshBasicMaterial).color.set(
+          ghost[4] ? "#43c2b8" : "#e8b24a");
+      }
+    }
+    // THE LONG GOAL: a ring on the floor at the reach radius, with a pin so
+    // it reads at a distance. This is where the BALL is being taken, not
+    // where the duck is going — the two differ the moment the ball is off
+    // the line, which is the whole skill.
+    const tgt = duck.dribbleTarget;
+    if (targetRef.current) {
+      targetRef.current.visible = !!tgt;
+      if (tgt) {
+        targetRef.current.position.set(tgt[0], tgt[1], 0.004);
+        const rr = tgt[3] || 0.15;
+        targetRef.current.scale.set(rr, rr, 1);
+      }
+    }
+    if (targetPinRef.current) {
+      targetPinRef.current.visible = !!tgt;
+      if (tgt) targetPinRef.current.position.set(tgt[0], tgt[1], 0.06);
+    }
+    // ...and the error itself, as a segment from the belief to the truth.
+    if (ghostLineRef.current) {
+      const show = !!ghost && !!ball;
+      ghostLineRef.current.visible = show;
+      if (show && ghost && ball) {
+        const g = ghostLineRef.current.geometry as THREE.BufferGeometry;
+        const a = g.getAttribute("position") as THREE.BufferAttribute;
+        a.setXYZ(0, ghost[0], ghost[1], ghost[2]);
+        a.setXYZ(1, ball[0], ball[1], ball[2]);
+        a.needsUpdate = true;
       }
     }
     if (labelDivRef.current) {
@@ -317,6 +486,35 @@ export function Duck({
       const txt = parts.filter(Boolean).join(" · ");
       if (spawnDivRef.current.textContent !== txt)
         spawnDivRef.current.textContent = txt;
+    }
+    // The boundary itself: `step` going backwards, with `falls` incrementing
+    // telling a fall from a clip that simply ran out. Both come straight off
+    // the stream; see lib/episode.ts for why it is not a `step === 0` test.
+    const sample = { step: duck.step, falls: duck.falls };
+    const edge = episodeEdge(lastEpisodeRef.current, sample);
+    if (edge.reset && edge.cause) {
+      resetFlashRef.current = { at: performance.now(), cause: edge.cause };
+    }
+    lastEpisodeRef.current = sample;
+    if (resetDivRef.current) {
+      const flash = resetFlashRef.current;
+      const alpha = flash ? episodeFlashAlpha(performance.now() - flash.at) : 0;
+      const st = resetDivRef.current.style;
+      if (alpha <= 0) {
+        if (st.opacity !== "0") {
+          st.opacity = "0";
+          resetDivRef.current.textContent = "";
+        }
+        if (flash) resetFlashRef.current = null;
+      } else {
+        const txt2 = episodeFlashLabel(flash!.cause);
+        if (resetDivRef.current.textContent !== txt2)
+          resetDivRef.current.textContent = txt2;
+        st.opacity = String(alpha);
+        // A fall is the one worth a different colour: it is a failure, where a
+        // clip running out is just the next attempt starting.
+        st.color = flash!.cause === "fell" ? "#f08a8a" : "#7fd4a0";
+      }
     }
   });
 
@@ -347,6 +545,68 @@ export function Duck({
         <sphereGeometry args={[1, 24, 16]} />
         <meshStandardMaterial color="#ff8c00" roughness={0.5} />
       </mesh>
+      {/* ...and the same slot for a prop that is NOT a ball. A MOSS trainee
+          practises on a 66 x 115 mm drinks can, and a sphere of its radius is
+          a picture of a different object: you cannot see it topple, and a can
+          lying down looks identical to one standing up. The server sends a
+          fifth number (half-height) when the prop is a cylinder; without it
+          nothing here changes and the duck's ball is the sphere it always
+          was. Z-up, like every other body in this scene. */}
+      <mesh ref={propRef} visible={false} castShadow>
+        <cylinderGeometry args={[1, 1, 2, 24]} />
+        <meshStandardMaterial color="#ee7362" roughness={0.55} />
+      </mesh>
+      {/* ...and a BOX, for the litter that is not a can. The server tells the
+          shapes apart by payload LENGTH — 4 a sphere, 9 a cylinder, 10 a box —
+          so a lab training on six shapes stops drawing every one of them as a
+          can. */}
+      <mesh ref={boxRef} visible={false} castShadow>
+        <boxGeometry args={[2, 2, 2]} />
+        <meshStandardMaterial color="#d8cf9e" roughness={0.7} />
+      </mesh>
+      {/* THE GHOST — the belief, beside the truth above. Translucent, and a
+          ring that WIDENS as the estimate goes stale, so "I last saw it a
+          second ago" reads differently from "I can see it". */}
+      <mesh ref={ghostRef} visible={false}>
+        <sphereGeometry args={[1, 20, 14]} />
+        <meshStandardMaterial color="#43c2b8" transparent opacity={0.5} depthWrite={false} roughness={0.4} />
+      </mesh>
+      {/* the same ghost for a prop that is not a ball — the belief wears the
+          shape of the thing it is a belief about. */}
+      <mesh ref={ghostPropRef} visible={false}>
+        <cylinderGeometry args={[1, 1, 2, 20]} />
+        <meshStandardMaterial color="#43c2b8" transparent opacity={0.5} depthWrite={false} roughness={0.4} />
+      </mesh>
+      <mesh ref={ghostRingRef} visible={false} rotation={[0, 0, 0]}>
+        <ringGeometry args={[0.85, 1, 32]} />
+        <meshBasicMaterial color="#43c2b8" transparent opacity={0.55} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+      {/* the long goal — a flat ring at the reach radius plus a standing pin */}
+      <mesh ref={targetRef} visible={false}>
+        <ringGeometry args={[0.88, 1, 40]} />
+        <meshBasicMaterial color="#e8b24a" transparent opacity={0.85} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+      <mesh ref={targetPinRef} visible={false}>
+        <cylinderGeometry args={[0.006, 0.006, 0.12, 8]} />
+        <meshBasicMaterial color="#e8b24a" transparent opacity={0.7} depthWrite={false} />
+      </mesh>
+      {/* THE ERROR SEGMENT. `frustumCulled={false}` because this is the one
+          thing here that moves by rewriting its VERTICES instead of its
+          transform: three computes a bounding sphere once, lazily, from
+          whatever the attribute held at the time — all zeros — and
+          `needsUpdate` on the attribute never invalidates it. Left on, the
+          line is culled whenever the duck's own origin leaves the frustum,
+          which is every time someone zooms in on the ball it is pointing
+          at. Same answer as SimStage's blob mesh. `ghostLinePositions` is
+          the other half of it: inline, `args` is a new array identity on
+          every re-render, r3f rebuilds the attribute and the segment reads
+          zeros for a frame. */}
+      <lineSegments ref={ghostLineRef} visible={false} frustumCulled={false}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[ghostLinePositions, 3]} />
+        </bufferGeometry>
+        <lineBasicMaterial color="#43c2b8" transparent opacity={0.8} />
+      </lineSegments>
       {/* drop-target ring, flat on the floor (XY plane in this Z-up group).
           hideInCapture: 📷 snapshots hide it for their capture render. */}
       <mesh
@@ -392,6 +652,18 @@ export function Duck({
                 color: "#e8b24a",
                 textAlign: "center",
                 minHeight: 11,
+              }}
+            />
+            <div
+              ref={resetDivRef}
+              style={{
+                fontSize: 9,
+                fontWeight: 700,
+                textAlign: "center",
+                minHeight: 11,
+                opacity: 0,
+                transition: "none",
+                pointerEvents: "none",
               }}
             />
           </div>

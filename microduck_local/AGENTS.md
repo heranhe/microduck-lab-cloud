@@ -214,6 +214,250 @@ env modules; the viewer does, so leave it running) and then POST:
 bash .claude/skills/restart-servers/restart.sh --backend-only
 ```
 
+### POSTing is not the same as being WATCHED — check the stage, every time
+
+Launching through the lab is only half the rule. On 2026-09-25 a three-stage
+MOSS pick chain was POSTed to `/teach`, ran all 2.5M steps and finished, and
+the person who asked for it **saw nothing at all** — then reasonably asked why
+it was not being trained in the lab. It was. It was invisible anyway, for
+reasons that are all checkable in one command, so check them:
+
+```bash
+uv run --with websockets python scripts/stage_check.py 127.0.0.1:8788
+```
+
+**There is no GET for the roster** — it exists only in the streamed frames, so
+`curl` cannot answer this. `/state` is a 404, and its body parses to zero
+ducks if you are careless, which is a false alarm that reads exactly like the
+real failure: on 2026-09-25 it sent this investigation after a bug that was
+not there while the four MOSS bodies on stage were perfectly visible. Read a
+real frame.
+
+**A lab that has just restarted has an EMPTY stage.** The roster is not
+rebuilt for you. The teach job's trainee is then the only body on it, and the
+moment the job finishes that trainee is reaped and the stage goes blank again.
+Somebody who looks a minute later sees an empty room and concludes, correctly
+from what is in front of them, that nothing ever ran. `0 ducks on stage` while
+`/teach/status` says `training` is the signature of this, and it means the
+person is being asked to trust your summary of something they were never
+shown — the exact failure the section above exists to prevent.
+
+So, after the POST and before saying "you can watch it":
+
+1. **A real frame carries the trainee** (`scripts/stage_check.py` — read
+   ALL its lines). Finished jobs' trainees are reaped when the next job
+   starts, and a restart brings back only the NEWEST trainee (each one steps
+   a full env in the 50 Hz loop: eight left behind pinned the lab at ~90% of
+   a core, /sim at RTF 0.12). Expect at most one old one beside the live one
+   — the live trainee's id is in `/teach/status`. Clear one by hand with
+   `{"remove_duck": "<id>"}` on the lab websocket.
+2. **Tell them the URL, with the port of the lab you actually launched on.**
+   `http://localhost:63317` reads `127.0.0.1:8788` by default; a scratch lab
+   needs `?lab=127.0.0.1:8799`. A tab left pointing at the other one is a tab
+   that shows an empty stage while a job runs perfectly. A scratch lab (any
+   port but 8788) keeps its own `lab-state-<port>.json` and **exits by itself
+   after 30 min with no viewer and no training** (`--idle-exit MIN`, 0 =
+   never) — one from a filming session ran three days at ~20% of a core, and
+   its `--fresh` had deleted the main lab's roster. Stop what you start.
+3. **Check again while it is still running**, not after. A chain that finishes
+   inside one of your turns was never watched, whatever the log says.
+
+### The training loop is a TOOL, not a conversation
+
+`uv run python scripts/watch_training.py` blocks until the active teach run
+finishes and then prints `scripts/pick_report.py` (picks, can displacement,
+base command, chassis turn, floor dragging, torque saturation, and the
+wrist-vs-axis slope with its p) and `scripts/reward_budget.py` (what every
+reward term is worth per episode). Run it in the BACKGROUND so its exit is
+what brings you back, instead of a human having to ask whether training is
+done — they asked four times on 2026-09-25 and every answer cost a hand-built
+probe that had to be re-derived.
+
+The `.claude/skills/train-loop` skill documents the whole cycle. The one rule
+worth repeating here: **evaluate a policy under the flags it TRAINED with.**
+`moss_env.eval_env_kwargs(run)` reads them off `run.json` — `OBS_FLAGS` for
+what it saw, `DYN_FLAGS` for what it was allowed to do. Getting it wrong does
+not look like a bug, it looks like a finding: an axis-blind policy measured
+0/12 instead of 10/12, a probe missing `publish_size` measured 3 grips instead
+of 63, and a base-locked policy measured 23.7 degrees of chassis turn instead
+of 0.3. The second and third of those happened AFTER the guard existed,
+because it covered some of the flags and read as covering all of them.
+
+### Eight ways a measurement here has lied, and the check for each
+
+The first four happened on 2026-09-25, in one session, to numbers that were
+then reported as findings; the fifth on 2026-09-28, and it cost a 48-seed
+battery; the sixth on 2026-09-29, and it survived one; the seventh was under
+all of them the whole time; the eighth was every number in this file agreeing
+while the robot was being damaged. None was a subtle statistical problem; each
+was an instrument that could not answer the question it was pointed at.
+
+**1. Measuring through your own reimplementation instead of the production
+path.** A probe built `MossPickEnv(...)` directly, so `MICRODUCK_MOSS_PICK_RUNG`
+never reached it — the rung is translated to a kwarg by
+`Body.train_env_kwargs`, one layer up. All three rungs returned BYTE-IDENTICAL
+output and were nearly reported as "the rung knob does nothing". The same
+session invented a `/state` endpoint that does not exist.
+→ *Call the function the trainer calls.* If a probe sets up the world itself,
+it is measuring the probe. And assert the setup took: `assert kw["pick_rung"]
+== rung` costs one line and would have caught it instantly.
+
+**2. Absence read as a value.** A 404 body parsed with `d.get("ducks")`
+returned None and printed "0 ducks on stage" — indistinguishable from an empty
+stage. A dead observation slot reads as a perfectly legitimate `0.000`. An
+assignment to a frozen dataclass silently does nothing, so two A/B arms ran the
+same config and produced a null that measured nothing.
+→ *Make missing look different from zero.* Check the status code, assert the
+key exists, and for anything that is supposed to VARY, assert its standard
+deviation is non-zero rather than reading its mean.
+
+**3. A proxy adjacent to the claim.** "The wrist does not aim" was argued from
+travel (max − min), which cannot distinguish moving a lot from arriving
+anywhere; the honest measure is the angle AT THE GRASP regressed on the target
+(sd 2.6 deg against a can axis spanning 54 deg, slope 0.008 deg/deg). "Shoved
+12.8 cm" was cumulative path length, which counts a can jittering against a
+pad — and it UNDERSTATED the effect, forcing a published "not significant"
+verdict to be retracted once net displacement was used instead.
+→ *Write the claim as a sentence, then check the number is its subject.* If the
+claim is "X tracks Y", the measurement is a correlation or a slope, never a
+range.
+
+**4. Calibrated under different conditions from where it is applied.** A shove
+abort was calibrated on whole-episode displacement but applied only before the
+first grip, so the rung predicted to fire on 15% of episodes fired on 1 of 40 —
+nearly shipping a curriculum whose first rung was decoration.
+→ *Calibrate through the same gate the knob acts behind*, and print the rate it
+actually achieves before trusting the ladder (see `check-a-knobs-reachable-set`
+and the `board_margin` no-op that preceded it).
+
+**And the compatibility trap underneath all of them:** a policy's OBSERVATION
+VARIANT is not in its `.onnx`. Filling slots 28-30 for a policy trained while
+they were dead pins three of thirty-two inputs at the clip bound (the
+normalizer's var there is 3e-10) and it stops working — 10/12 -> 0/12 for the
+shipped leg, and 59/60 -> 0/60 inside a probe written to compare policies,
+which set the flag process-wide. Consumers must ask
+`moss_env.obs_env_kwargs(run)` rather than a process environment variable, and
+`test_a_policy_is_evaluated_in_the_observation_it_TRAINED_on` holds that line.
+
+**5. A SENSOR THAT WAS NEVER SAMPLED, behind an overlay that drew it anyway.**
+MOSS's wrist camera had a detector, a `/sim` view cone and a brain reading it,
+and `world/arena` never called `arm_detector.sample` — so `senses.arm_det` was
+None on every tick. A 48-seed A/B of wrist scanning came back **identical, seed
+for seed**, to not scanning; the unit test passed because it handed the brain
+frames by hand. The cone on the map, drawn from the sensor's SPEC, was the thing
+that made it look alive.
+→ *A null that is EXACTLY zero is a disconnected wire, not a result* — an
+intervention that truly does nothing still moves a chaotic sim off its seed.
+And when a test mocks the input, add one that asks the production world for it
+(`test_in_the_yard_the_brain_is_handed_wrist_camera_frames`).
+→ *Draw the instrument from what it DELIVERS, not from its settings.* The same
+overlay drew a wedge from the lens out to the detector's range, claiming floor
+beside the tracks that is below the camera's vertical view; the map now takes
+the reportable band from the robot.
+
+**6. A NAME THAT READS RIGHT AND MEANS THE OPPOSITE.** `pinch_grip="across"`
+is the obvious setting for "close the jaws across this card", and it is the
+wrong one: measured in the room it put the jaw axis **85-89 deg** from the
+card's long axis on EVERY close, squeezing the 40 mm short side, which lifts
+it 0/15 on the bench. `"along"` — which reads like the opposite — drops the
+error to 1.4 deg. The A/B that shipped on the intuitive reading still came out
++card0, so the mistake survived a 20-seed battery and was only caught by
+measuring the ANGLE itself.
+→ *Measure the geometry the knob controls, not just the outcome it is supposed
+to move.* One probe comparing the commanded jaw axis against the object's true
+long axis would have caught it before the battery, and now guards it
+(`test_the_jaws_close_ALONG_a_wide_flat_things_long_axis`).
+
+**7. A TASK THE HARDWARE CANNOT DO, read as a skill the policy lacks.**
+`moss-yard`'s `card0` was left behind in 47 of 48 runs and absorbed days of
+reward, gate and centring work. It is a 60 x 40 x **4 mm** rigid plate, and
+MOSS's pads shut to an 8 mm gap and are 36 mm tall, so they rest on the floor:
+nothing about that grasp was achievable. Remodelled at the same mass and volume
+as a card that is actually crumpled (30 x 20 x 16 mm) it bins **16/16**, and
+the room gets cleaner because the wasted approaches go elsewhere.
+→ *Before tuning a behaviour, check the task is POSSIBLE* — one bench probe
+IK'ing the gripper onto the object at its best pose answers it in minutes, and
+would have come before every battery here.
+→ And when a prop's own docstring says what it is meant to be ("most real
+litter is crumpled rather than flat"), check the asset actually is that. This
+one said it and shipped a flattened plate.
+
+**8. A task score that is fine while the ACTUATORS are not.** `moss-yard`
+binned 87 of 88 props over eight 300 s seeds, and watched on `/sim` the arm
+looked calm — no flailing, no visible clipping. Sampled every 2 ms physics step
+instead (`scripts/probe_moss_safety.py`), the same runs commanded
+`shoulder_pan` **2.750 rad in one 20 ms tick**, drove joints to 13.6 rad/s
+against a 0.75 rad/s deploy envelope, and held `shoulder_pan` at its full
+2.2 N·m clamp for an unbroken **9.2 s** — a cooked servo on the hardware this
+is a rehearsal for. Every mission metric this repo has ever tracked was blind
+to all three, because they are properties of the CONTROL SIGNAL and the
+actuator, not of the outcome.
+→ *Before a behaviour is allowed near hardware, measure the joints, not the
+score:* longest unbroken stall at the torque clamp, peak per-tick command step,
+peak joint speed, torque duty cycle, and contact force between the arm and the
+robot's own body. Durations, not peaks — a servo dies of holding, not of
+hitting. And sample at the PHYSICS step: a three-substep contact is invisible
+at the 50 Hz control tick, which `world/arena.py` already learned for bump
+sensing.
+→ The corollary that made this cheap: the sim's own `forcerange` and joint
+ranges ARE an envelope, even when no datasheet has been measured against them.
+"How long did a position servo sit pinned at the clamp its model declares" is
+answerable today and needs no hardware.
+→ *And measure the score at a horizon where the task is not yet finished.* The
+rate cap that fixed all of the above looked FREE at the benchmark's 300 s
+(-0.12 +- 0.23 binned per seed) and cost **-1.50 +- 0.60** at 180 s, because by
+five minutes the room is clear either way. A score that saturates cannot see a
+slower robot; a safety change is exactly the kind that makes one.
+→ *And the smooth-it-out fix is not free either.* Two interventions that
+softened a step input — a slew limiter on the command, and ramping into the
+rest pose — each cut the step and each made the STALLS three to four times
+worse, because the stalls are CONTACT stalls: delaying the arm's arrival
+lengthens the window it spends pressed on the bin. Seconds at the clamp is what
+kills a servo, so both were rejected on their own measurement.
+
+**The habit that catches all of it: plant the regression.** Every test added
+that day was run against a deliberately broken version first — the axis
+coverage test against a front camera reporting nothing (0% at rung 2), the
+geometry test against a jaw sliding vertically (yaw span 164.7 -> 0.0 deg). Two
+earlier tests in this repo passed against their own planted breakage and were
+rewritten. A test not yet seen to fail is a comment.
+
+**...and run the UNPLANTED copy as a control.** Planting into a `PYTHONPATH`
+package copy (the discipline for A/Bing a shared checkout) moves
+`__file__`, and `robots/moss.CACHE_DIR` is derived from it — so on 2026-09-29
+one test failed in all four planted copies and was nearly credited with
+catching all four plants, when it was failing on a missing asset cache in any
+copy at all. The control ran green only with `MICRODUCK_MOSS_DIR` pointed back
+at the real checkout. *A plant proves a test bites only if the same copy,
+unplanted, is green.*
+
+### The stage must show the physics the TRAINER is running
+
+The lab builds its preview envs **in its own process** (`lab/robots.slot_env`,
+`viz_server.Duck._make_env`), while the trainer is a **subprocess** that
+imports the env fresh at launch. Change an env or robot module and the two
+disagree immediately: the trainer runs your new code and the stage keeps
+previewing whatever the lab imported when it started. Nothing warns you, and
+the person watching is shown a robot obeying different physics from the one
+being trained — which is worse than showing them nothing, because it looks
+authoritative.
+
+Measured on 2026-09-25: the `:8788` listener had been up since **Sep 15**, ten
+days, across a session that had changed `robots/moss_env.py` repeatedly. The
+attitude slots the trainer had just started filling from two cameras were
+still dead in the preview.
+
+**So: touching anything under `robots/`, `behaviors/`, `world/` or `brain/`
+means restart the backend BEFORE you POST** — and restart it while the lab is
+idle, because the guard refuses once a trainer is live and the trainer is the
+lab's own child process (restarting later kills the run).
+
+```bash
+lsof -ti :8788 | head -1 | xargs -I{} ps -o lstart= -p {}   # how stale is it?
+```
+
+If that start time predates your edit, the stage is lying. Restart, then POST.
+
 ### "Has the trainer finished?" — ask the lab, never the process table
 
 ```bash
@@ -886,6 +1130,31 @@ question — "does the collapse happen because no legal spot exists?" — was
 answerable by drawing placements and calling the planner directly, with no
 outcome in the loop and so no way for selection to bite. Two routes that cannot
 share a bias are worth more than two runs of the route that can.
+
+### A test gated on optional assets SKIPS exactly where it would fail
+
+`test_the_lab_slot_for_an_imitation_run_turns_the_clips_clock` was red on
+`development` and nobody saw it, because it is `@needs_g1`: on a machine that
+never ran `uv run fetch-g1` it skips, and on one that has the assets it fails.
+It was therefore green in CI and in every fresh checkout, and red only for the
+person actually working on the G1 — the one audience it was written for.
+
+**The rule.** When a test is gated on an optional download, ask what it does on
+BOTH sides of the gate, and add a sibling that runs everywhere. The one written
+here fakes the body through the registry, so the seam is covered on any machine;
+the `@needs_g1` test keeps proving the real clock turns. A skip and a pass read
+identically in a summary line, so `-q` output of "15 skipped" is not information
+until you know which 15.
+
+**And check EVERY caller of a hook once you have fixed one.** The bug was
+`except Exception` around `Body.train_env_kwargs`, which refuses with
+`raise SystemExit` — this repo's CLI idiom, and a `BaseException`, so the guard
+did not catch it. Fixing `lab/robots.slot_env` and then grepping the hook's
+other callers found the identical hole in `viz_server._body_env_kwargs`, the
+trainee preview's translation of a stage's knobs. That second one is reachable
+only when a stage carries a `MICRODUCK_` knob — the function returns early when
+none do — so a first probe with an empty stage said it was fine. *A probe that
+takes the early return has not tested the code past it.*
 
 ### A characterisation that silently inherits a default stops characterising anything the day the default moves
 

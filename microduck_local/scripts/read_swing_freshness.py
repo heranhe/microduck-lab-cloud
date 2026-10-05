@@ -6,7 +6,10 @@ would keep and refuse, and the belief's offset from the truth. Reads the rows
     cd microduck_local
     uv run python scripts/read_swing_freshness.py runs/x/gym.jsonl [more.jsonl ...]
 """
-import json, sys, statistics as st
+import json
+import statistics as st
+import sys
+
 
 def q(xs, p):
     xs = sorted(xs); k = (len(xs) - 1) * p; f = int(k); c = min(f + 1, len(xs) - 1)

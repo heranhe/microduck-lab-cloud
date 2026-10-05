@@ -45,6 +45,22 @@ ROBOT_XML = {
 }
 
 
+
+def _prop_contact(pr) -> dict:
+    """A prop's contact: the shape's default friction (condim 6 for anything
+    that rolls — see the ball), a sliding override, and its softness."""
+    from ..physics_contact import contact_softness
+    if pr.shape in ("sphere", "cylinder"):
+        c = {"condim": 6, "friction": [0.5, 0.005, pr.rolling]}
+    else:
+        c = {"priority": 1, "friction": [0.8, 0.005, 0.0001]}
+    if getattr(pr, "friction", None) is not None:
+        c["friction"] = [float(pr.friction)] + c["friction"][1:]
+    soft = contact_softness(getattr(pr, "soft", 0.0))
+    if soft is not None:
+        c["solref"], c["solimp"] = soft
+    return c
+
 def duck_prefix(duck_id: str) -> str:
     return f"{duck_id}/"
 
@@ -476,6 +492,20 @@ def compose(scenario: Scenario) -> mujoco.MjModel:
         spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
         spec.option.iterations = 10
         spec.option.ls_iterations = 20
+    # A BODY may also declare the solver its own contacts were tuned under,
+    # and a room holding one adopts it — `MjSpec.attach` keeps the PARENT's
+    # `<option>`, so a robot attached into a default scene silently loses its
+    # integrator and its friction cone. MOSS declares one (his implicitfast /
+    # elliptic / 80 iterations, `robots/moss.SOLVER_OPTIONS`). ASKED of the
+    # body rather than tabled here, which is the `if robot ==` pattern
+    # `docs/mars-roadmap.md` §6.5 exists to delete; a body that declares no
+    # hook changes nothing, so every duck room compiles to what it always did.
+    for _body_id in dict.fromkeys(d.robot for d in scenario.ducks):
+        if _body_id != DUCK_ROBOT:
+            from ..robots.registry import get as _get_body
+            _apply = getattr(_get_body(_body_id), "apply_solver_options", None)
+            if _apply is not None:
+                _apply(spec)
     w = spec.worldbody
     w.add_light(pos=[0, 0, 3.5], dir=[0, 0, -1],
                 type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL)
@@ -553,6 +583,54 @@ def compose(scenario: Scenario) -> mujoco.MjModel:
         body.add_geom(name=f"{t.id}_geom", type=mujoco.mjtGeom.mjGEOM_BOX, size=half,
                       mass=k["mass"], group=PICKABLE_GROUP, rgba=list(k["rgba"]),
                       priority=1, friction=[0.8, 0.005, 0.0001])
+    # PROPS: geometry the SCENARIO declares (world/scenario.Prop), so a new
+    # thing to look at needs no table here. A prop with mass gets a freejoint
+    # and so streams in `World.objects`; a prop at mass 0 is scenery on the
+    # world body, exactly like a static `Box`, and the page draws it from the
+    # scenario. Rolling friction is applied to SPHERES only, and only there
+    # does the condim-6 contact that reads it get built — see the ball above
+    # for why a condim-3 geom silently ignores the coefficient.
+    for pr in scenario.props:
+        gtype = {"box": mujoco.mjtGeom.mjGEOM_BOX,
+                 "sphere": mujoco.mjtGeom.mjGEOM_SPHERE,
+                 "cylinder": mujoco.mjtGeom.mjGEOM_CYLINDER}[pr.shape]
+        if pr.shape == "sphere":
+            gsize = [pr.size[0], 0.0, 0.0]
+            rest = pr.size[0]
+        elif pr.shape == "cylinder":
+            gsize = [pr.size[0], pr.size[2] / 2, 0.0]
+            rest = pr.size[2] / 2
+        else:
+            gsize = [v / 2 for v in pr.size]
+            rest = pr.size[2] / 2
+        # `pos` is the prop's CENTRE, but a scenario writing `z: 0` means "on
+        # the floor" far more often than "half sunk into it", so a z below the
+        # resting height is lifted to it. Stated rather than silent: a prop
+        # deliberately sunk into the floor is not a thing anyone has wanted,
+        # and a half-buried toy that a brain can see but never reach is a
+        # confusing bug to find from the page.
+        z = max(float(pr.pos[2]), rest + 0.001)
+        if pr.mass > 0:
+            body = w.add_body(name=pr.id, pos=[pr.pos[0], pr.pos[1], z], quat=_yaw_quat(pr.yaw))
+            body.add_freejoint(name=f"{pr.id}_free")
+            body.add_geom(name=f"{pr.id}_geom", type=gtype, size=gsize, mass=pr.mass,
+                          group=0, rgba=list(pr.rgba),
+                          # ANYTHING THAT ROLLS NEEDS condim 6, not just
+                          # spheres. A CYLINDER on its side is a roller with a
+                          # line contact, and MOSS's cans are cylinders: they
+                          # were getting `friction=[0.8, 0.005, 0.0001]` on a
+                          # condim-3 geom, where the rolling entry is ignored
+                          # exactly as the ball's was before 2026-09-06. So a
+                          # knocked can rolled until something stopped it —
+                          # usually the rover's own tracks, which is how a
+                          # human watching the lab found this: "I see it
+                          # rolling over all the time, and that's when it gets
+                          # stuck in the treads."
+                          **_prop_contact(pr))
+        else:
+            w.add_geom(name=f"{pr.id}_geom", type=gtype, size=gsize,
+                       pos=[pr.pos[0], pr.pos[1], z], quat=_yaw_quat(pr.yaw),
+                       group=0, rgba=list(pr.rgba))
     if scenario.basket is not None:
         b = scenario.basket
         bx, by = b.pos

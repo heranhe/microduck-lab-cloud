@@ -97,6 +97,16 @@ HOLD_SECONDS = 2.0
 # no z degree of freedom, so anything above zero means the base body moved
 # in a way the joints alone should not be able to produce.
 WHEELED_JOINT_BAND_RAD = 0.01
+#: Per body, where its own servo is softer than Innate's. MEASURED on MOSS:
+#: the arm settles 0.01039 rad off the commanded HOME at `elbow_flex` and
+#: stays there (identical at 0.5 s and at 10 s), which is not drift and not a
+#: port that went wrong — it is HIS OWN equilibrium. `moss_robot.xml`'s `home`
+#: keyframe records both rows, and its settled `elbow_flex` sits 0.0104 rad
+#: off the ctrl it ships beside it. Reproducing a shipped keyframe to five
+#: decimals is the strongest statement this suite can make about a ported
+#: controller, so the band moves rather than the driver. His servo is kp 70 /
+#: kv 3 with a 2.2 N*m clamp, against Innate's KP 50 at 50 N*m.
+WHEELED_JOINT_BAND_OVERRIDE_RAD = {"moss": 0.02}
 WHEELED_BASE_Z_BAND_M = 0.001
 
 
@@ -742,19 +752,74 @@ def test_an_open_loop_hold_topples_inside_that_window(robot):
         "re-measure and rewrite both.")
 
 
-def _servo_hold(robot_id: str, seconds: float):
+def _driver_hold(robot_id: str, seconds: float, *, dead_servo: bool = False):
+    """Hold a wheeled body at HOME with its OWN driver — the general case.
+
+    `Body.driver()` IS the seam `_servo_hold`'s docstring was waiting for: a
+    wheeled body's reflex tier is a controller, so "hold still" means running
+    it. Any body that answers `driver()` gets this; MARS keeps its own branch
+    below because its numbers are the measured ones in the test's docstring
+    and a rewrite would silently re-baseline them.
+
+    `dead_servo` is the planted regression, and it has to be planted at the
+    MODEL for a body whose arm is held by MuJoCo `position` actuators (MOSS's
+    is — Laurent ships kp 70 / kv 3 on the arm): zeroing the gain and the
+    position bias is what "the servo is off" means there, where for MARS it
+    is a patched module constant.
+    """
+    body = S.get(robot_id)
+    model = _model(robot_id)
+    if dead_servo:
+        model.actuator_gainprm[:, 0] = 0.0     # kp
+        model.actuator_biasprm[:, 1] = 0.0     # -kp on the position error
+        model.actuator_biasprm[:, 2] = 0.0     # -kv on the velocity
+    data = mujoco.MjData(model)
+    driver = body.driver(model, "")
+    driver.spawn(data)
+    targets = driver.arm_targets()
+    assert targets, f"{robot_id}: its driver holds no joints, so there is no hold"
+    adr = {n: int(model.joint(n).qposadr[0]) for n in targets}
+    base = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body.frames().base)
+    assert base >= 0, f"{robot_id}: no {body.frames().base!r} body"
+    planar = [int(model.joint(n).qposadr[0])
+              for n in getattr(_body_module(robot_id), "BASE_JOINTS", ())]
+    start_z = float(data.xpos[base][2])
+    start_planar = data.qpos[planar].copy() if planar else np.zeros(0)
+    worst = dict(joint_err=0.0, ncon=0, nan=False, base_dz=0.0)
+    for _ in range(int(round(seconds / model.opt.timestep))):
+        driver.step(data)
+        mujoco.mj_step(model, data)
+        worst["joint_err"] = max(worst["joint_err"], max(
+            abs(float(data.qpos[adr[n]]) - t) for n, t in targets.items()))
+        worst["ncon"] = max(worst["ncon"], int(data.ncon))
+        worst["base_dz"] = max(worst["base_dz"],
+                               abs(float(data.xpos[base][2]) - start_z))
+        worst["nan"] = worst["nan"] or not (
+            np.isfinite(data.qpos).all() and np.isfinite(data.qvel).all())
+    worst["planar"] = (np.abs(data.qpos[planar] - start_planar) if planar
+                       else np.zeros(3))
+    return worst
+
+
+def _body_module(robot_id: str):
+    """The module a built-in body lives in, for the handful of names a test
+    needs off it (`BASE_JOINTS`). Absent for a body that has none."""
+    import importlib
+    try:
+        return importlib.import_module(f"microduck_local.robots.{robot_id}")
+    except ModuleNotFoundError:
+        return None
+
+
+def _servo_hold(robot_id: str, seconds: float, *, dead_servo: bool = False):
     """Hold a wheeled body at its HOME keyframe with its OWN servo.
 
-    The seam this stands in for is `Body.driver()` (Phase 3): a wheeled
-    body's reflex tier is not a policy, it is a controller, so "hold still"
-    means running that controller rather than loading an ONNX. Until the
-    driver lands, the one wheeled body's servo is named here — the last
-    id-table in this file, and the case's whole point is the numbers, not
-    the lookup.
+    MARS's own servo is named here because the numbers in the case's
+    docstring were measured against `mars.arm_servo` (Innate's PD, KP 50 /
+    KD 1). Every other wheeled body goes through `_driver_hold`.
     """
-    assert robot_id == "mars", (
-        f"no servo hold for {robot_id!r} — give its kind a hold case in "
-        "_servo_hold, or add its driver (docs/mars-roadmap.md Phase 3)")
+    if robot_id != "mars":
+        return _driver_hold(robot_id, seconds, dead_servo=dead_servo)
     from microduck_local.robots import mars
 
     body = S.get(robot_id)
@@ -816,9 +881,10 @@ def test_a_wheeled_body_holds_its_arm_where_it_was_put(robot):
     assert not worst["nan"], f"{robot}: NaN in qpos/qvel during the hold"
     assert worst["ncon"] < CONTACT_CEILING, (
         f"{robot}: {worst['ncon']} contacts — a solver blow-up, not a hold")
-    assert worst["joint_err"] < WHEELED_JOINT_BAND_RAD, (
+    band = WHEELED_JOINT_BAND_OVERRIDE_RAD.get(robot, WHEELED_JOINT_BAND_RAD)
+    assert worst["joint_err"] < band, (
         f"{robot}: the arm drifted {worst['joint_err']:.4f} rad off HOME, "
-        f"band is {WHEELED_JOINT_BAND_RAD}")
+        f"band is {band}")
     assert worst["base_dz"] < WHEELED_BASE_Z_BAND_M, (
         f"{robot}: the base moved {worst['base_dz'] * 1e3:.3f} mm in z — a "
         "planar base has no z degree of freedom, so the model is not the "
@@ -827,10 +893,11 @@ def test_a_wheeled_body_holds_its_arm_where_it_was_put(robot):
         f"{worst['planar'][2]:.2g} rad, which IS allowed: nothing holds an "
         "undriven base against the arm's reaction torque until Phase 3's "
         "station keeping)")
-    assert worst["mimic"] == pytest.approx(
-        mars.MIMIC_JOINT[2] * mars.ARM_HOME[mars.MIMIC_JOINT[1]], abs=1e-3), (
-        f"{robot}: the mimic finger sits at {worst['mimic']:+.5f}, not "
-        "mirroring joint6 — a gripper that opens one blade only")
+    if "mimic" in worst:                     # a gripper with a mimicked blade
+        assert worst["mimic"] == pytest.approx(
+            mars.MIMIC_JOINT[2] * mars.ARM_HOME[mars.MIMIC_JOINT[1]], abs=1e-3), (
+            f"{robot}: the mimic finger sits at {worst['mimic']:+.5f}, not "
+            "mirroring joint6 — a gripper that opens one blade only")
 
 
 @pytest.mark.parametrize("robot", WHEELED)
@@ -845,11 +912,18 @@ def test_a_wheeled_hold_with_a_dead_servo_sags_out_of_the_band(robot):
     """
     from microduck_local.robots import mars
 
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(mars, "KP_JOINT", 0.0)
-        worst = _servo_hold(robot, HOLD_SECONDS)
+    if robot == "mars":
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(mars, "KP_JOINT", 0.0)
+            worst = _servo_hold(robot, HOLD_SECONDS)
+    else:
+        # A body held by MuJoCo `position` actuators has no module constant
+        # to patch: the servo is in the MODEL, so that is where it is killed
+        # (`_driver_hold`).
+        worst = _servo_hold(robot, HOLD_SECONDS, dead_servo=True)
     assert not worst["nan"], f"{robot}: a dead servo produced NaN, not a sag"
-    assert worst["joint_err"] > WHEELED_JOINT_BAND_RAD, (
+    band = WHEELED_JOINT_BAND_OVERRIDE_RAD.get(robot, WHEELED_JOINT_BAND_RAD)
+    assert worst["joint_err"] > band, (
         f"{robot} held HOME to {worst['joint_err']:.4f} rad with KP 0 — the "
         "hold test above is not measuring the servo")
 
@@ -1106,6 +1180,12 @@ def _visual_scene(robot_id: str) -> tuple[dict, int]:
     if robot_id == "mars":
         from microduck_local.robots import mars
         return scene, int(mars.robot_spec().compile().nmesh)
+    if robot_id == "moss":
+        # All 57 of his meshes are VISUAL (group 2, contype 0): the collision
+        # proxies in this model are primitives — boxes and capsules — so
+        # unlike the Menagerie arm below, `nmesh` IS the right yardstick here.
+        from microduck_local.robots import moss
+        return scene, int(moss.robot_spec().compile().nmesh)
     body = S.get(robot_id)
     if getattr(body, "kind", "") == "generic":
         # A level-0 body's model is its own MJCF, so the count comes off that

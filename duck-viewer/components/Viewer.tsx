@@ -12,6 +12,7 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import {
   duckRowKeys,
+  trainingForDuck,
   LabClient,
   fetchScene,
   robotsInFrame,
@@ -125,7 +126,7 @@ function Ducks({
     const job = f.training;
     const jobKey = job?.runName.replace(/-s\d+$/, "");
     if (job?.status === "training" && jobKey && jobKey !== focusedTraining.current) {
-      const idx = f.ducks.findIndex((d) => d.id === "trainee");
+      const idx = f.ducks.findIndex((d) => d.id === (job.trainee ?? "trainee"));
       const trunk = f.ducks[idx]?.bodies[1];
       const orbit = controls as unknown as ControlsLike | null;
       const capture = getCapture();
@@ -135,7 +136,7 @@ function Ducks({
         camera.position.add(target.clone().sub(orbit.target));
         orbit.target.copy(target);
         orbit.update?.();
-        setSelectedDuck("trainee");
+        setSelectedDuck(job.trainee ?? "trainee");
         focusedTraining.current = jobKey;
       }
     }
@@ -514,7 +515,7 @@ export default function Viewer() {
         const training = clientRef.current?.frame?.training;
         // Mirror the HUD-row rules: the server refuses these anyway, but a
         // keypress that silently does nothing reads as broken.
-        if (sel === "trainee" && (training?.status === "training" || training?.status === "stopping" || training?.restarting)) {
+        if (trainingForDuck(clientRef.current?.frame, sel)) {
           pushToast("🎓 the trainee can't be removed while training");
           return;
         }

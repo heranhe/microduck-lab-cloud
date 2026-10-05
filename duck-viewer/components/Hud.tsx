@@ -14,6 +14,7 @@ import {
   type Frame,
   type HfSettings,
   type LabClient,
+  trainingForDuck,
 } from "@/lib/lab";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
@@ -470,7 +471,22 @@ export function Hud({
 
   const stats = frame?.stats;
   const training = frame?.training ?? null;
+  // How many jobs are actually running. Falls back to `training` alone on a
+  // lab that predates concurrency and sends no `trainings`.
+  const liveTrainings = (frame?.trainings ?? (training ? [training] : []))
+    .filter((t) => t.status === "training" || t.status === "stopping" || t.restarting).length;
   const restarting = training?.restarting ?? false;
+  // HELPERS ARE ONE POOL. `helper1`, `helper2`, … belong to no job: the
+  // server caps them on the ROSTER (`spawn_helper_error` counts
+  // `helper_ducks(st.ducks)`) and guards removing one on the global
+  // `st.scaling`. So both helper answers below are global too. Taken from
+  // the newest job instead, the cap read a stale per-job count and the ✕
+  // was disabled because some OTHER job was restarting — under a tooltip
+  // that said "remove this helper". `restarting` is the fallback for a lab
+  // that predates the `scaling` field.
+  const scaling = frame?.scaling ?? restarting;
+  const helperCount = (frame?.ducks ?? []).filter((d) =>
+    d.id.startsWith("helper")).length;
   const rowKeys = frame ? duckRowKeys(frame.ducks) : [];
   const link = linkBadge(connected, stalled);
   // Stage selection (click a duck / a row): the selected row echoes the amber
@@ -557,7 +573,15 @@ export function Hud({
                   m/s
                 </th>
                 <th>t</th>
-                <th>{tr("falls", "跌倒")}</th>
+                <th
+                  title="Episodes that ended badly. A task env can also end
+ an episode by SUCCEEDING — those are counted separately and shown in green.
+ A ✗ marks a task env, where the orange number is failed episodes rather than
+ falls: a wheeled rover cannot fall over, and for the stow it means the can
+ did not end up in the bin."
+                >
+                  {tr("falls", "跌倒")}
+                </th>
                 <th>r̄</th>
                 <th />
               </tr>
@@ -574,15 +598,18 @@ export function Hud({
                 // across a curriculum chain (falling back to per-stage for
                 // single runs) — a per-stage counter here looked like the
                 // run reset at every stage handoff.
+                // ...on the body the SERVER says is training, which is not
+                // always the literal "trainee" (jobs take the next free slot).
+                const liveOn = trainingForDuck(frame, d.id);
                 const name =
-                  d.id === "trainee" && training?.status === "training"
-                    ? `🎓 ${localizeBehavior(training.behavior, locale).title} · ${abbrevSteps(
-                        training.progress.overallSteps ??
-                          training.progress.steps ??
+                  liveOn
+                    ? `🎓 ${localizeBehavior(liveOn.behavior, locale).title} · ${abbrevSteps(
+                        liveOn.progress.overallSteps ??
+                          liveOn.progress.steps ??
                           0,
                       )}/${abbrevSteps(
-                        training.progress.overallTotal ??
-                          training.progress.total ??
+                        liveOn.progress.overallTotal ??
+                          liveOn.progress.total ??
                           0,
                       )}`
                     : d.name;
@@ -595,35 +622,63 @@ export function Hud({
                 // At the helper cap the server refuses the spawn with a toast
                 // that's easy to miss — disable the ＋ so it can't read as
                 // "button does nothing".
-                const helperCap = training?.maxHelpers ?? 6;
-                const atHelperCap = (training?.helpers ?? 0) >= helperCap;
+                // ...of the job training THIS body, not of whichever job
+                // `training` happens to be. With the id hardcoded to
+                // "trainee" the ＋ landed on an idle leftover from a finished
+                // run while the robot actually practising got a ✕ that the
+                // server refuses — reported from the lab as "why can't I add
+                // a helper to this one". Same defect as the row's label, and
+                // it survived the label's fix because it read the id again
+                // rather than the answer the label had already worked out.
+                const helperCap = liveOn?.maxHelpers ?? 6;
+                // The ROSTER's helpers, which is what the server counts.
+                // `liveOn.helpers` is only refreshed on the job that last
+                // spawned one, so on any other row it is stale.
+                const atHelperCap = helperCount >= helperCap;
+                const rowRestarting = liveOn?.restarting ?? false;
                 const action =
-                  d.id === "trainee" && training?.status === "training" ? (
+                  liveOn ? (
                     <RowButton
                       label="＋"
+                      // The same three questions `spawn_helper_error` asks,
+                      // in its order — so the button is enabled exactly when
+                      // the server would honour it, instead of offering a
+                      // click that comes back as a toast.
                       title={
-                        atHelperCap
-                          ? `helper cap (${helperCap})`
-                          : restarting
-                            ? "loading…"
+                        rowRestarting || scaling
+                          ? "loading…"
+                          : atHelperCap
+                            ? `helper cap (${helperCap})`
                             : "add a helper — another viewer of the same live policy (does not change training speed)"
                       }
                       color="#7db8d8"
-                      disabled={restarting || atHelperCap}
-                      onClick={() => clientRef.current?.sendSpawnHelper()}
+                      disabled={rowRestarting || scaling || atHelperCap}
+                      // NAME THE JOB. The ＋ is on every training row now;
+                      // unnamed, the server took its newest job and a click
+                      // on the older row helped the other run.
+                      onClick={() =>
+                        clientRef.current?.sendSpawnHelper(liveOn.runName)
+                      }
                     />
                   ) : (
                     <RowButton
                       label="✕"
+                      // `scaling`, not the newest job's `restarting`:
+                      // `remove_duck_error` refuses a helper on exactly
+                      // this flag, and the two must agree or the tooltip
+                      // offers what the button cannot do. `rowRestarting`
+                      // is always false here — this is the branch where
+                      // `liveOn` is null — so asking it said "remove this
+                      // helper" on a ✕ that was disabled.
                       title={
-                        isHelper && restarting
-                          ? "restarting…"
+                        isHelper && scaling
+                          ? "the lab is adding or removing a helper — try again in a moment"
                           : isHelper
                             ? "remove this helper"
                             : "remove this duck from the lab"
                       }
                       color="#e0a08f"
-                      disabled={isHelper && restarting}
+                      disabled={isHelper && scaling}
                       onClick={() => clientRef.current?.sendRemoveDuck(d.id)}
                     />
                   );
@@ -662,7 +717,22 @@ export function Hud({
                       <SpeedCell d={d} />
                     </td>
                     <td>{(d.step / 50).toFixed(0)}s</td>
-                    <td style={{ color: d.falls ? "#e07a5f" : "#7dd87d" }}>{d.falls}</td>
+                    <td style={{ fontVariantNumeric: "tabular-nums" }}>
+                      {d.wins ? (
+                        <span style={{ color: "#7dd87d" }}>{d.wins}✓ </span>
+                      ) : null}
+                      <span
+                        style={{ color: d.falls ? "#e07a5f" : "#7dd87d" }}
+                        title={
+                          d.wins === undefined
+                            ? undefined
+                            : "Episodes that ended in FAILURE. On a task env this is not a fall — MOSS cannot fall over. For the stow it means the can did not end up in the bin."
+                        }
+                      >
+                        {d.falls}
+                        {d.wins === undefined ? null : "✗"}
+                      </span>
+                    </td>
                     <td
                       style={trick ? { color: "#566072" } : undefined}
                       title={
@@ -720,6 +790,14 @@ export function Hud({
                     ` · ${abbrevElapsed(training.progress.overallElapsed)}`}
                 </span>
               ))}
+            {/* The lab can train several jobs at once now. `training` is the
+                newest of them; this says how many others are going, so a
+                second run is visible without hunting through the roster. */}
+            {liveTrainings > 1 && (
+              <span style={{ color: "#e8b24a" }}>
+                {" "}· {liveTrainings} jobs training
+              </span>
+            )}
           </div>
         )}
       </div>

@@ -14,8 +14,9 @@ import re
 import uuid
 from pathlib import Path
 from threading import RLock
-from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import URLError
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
@@ -96,7 +97,7 @@ def clean_plan(data, behaviors, clean_clip):
         # Pin every base term, not sticky weights from another run.
         w = {t.key: t.weight for t in b.terms}
         w.update(weights(local.get("weights", {})))
-        l = {"behavior": b.id, "steps": integer(local.get("steps"), "训练步数", 100_000, 40_000_000),
+        local = {"behavior": b.id, "steps": integer(local.get("steps"), "训练步数", 100_000, 40_000_000),
              "weights": w, "stageSteps": {}, "stageWeights": {}}
         for field in ("stageSteps", "stageWeights"):
             values = local.get(field, {})
@@ -105,8 +106,8 @@ def clean_plan(data, behaviors, clean_clip):
             for k, v in values.items():
                 if k not in {str(i + 1) for i in range(len(b.curriculum))}:
                     raise ValueError(f"未知课程阶段：{k}")
-                l[field][k] = weights(v) if field == "stageWeights" else integer(v, "阶段步数", 1, 40_000_000)
-        p["local"] = l
+                local[field][k] = weights(v) if field == "stageWeights" else integer(v, "阶段步数", 1, 40_000_000)
+        p["local"] = local
     cloud = data.get("cloud")
     if cloud is not None:
         if not isinstance(cloud, dict) or set(cloud) - {"task", "iterations", "envs", "gpu", "flavor"}:
@@ -295,13 +296,13 @@ def mount_plans(app, *, behaviors, clean_clip, atomic_write, launch_local, launc
         p = read(pid, req.revision)
         validated(p)  # dependencies/clip contract may have changed since save
         if req.compute == "local" and p["local"]:
-            l = p["local"]
+            local = p["local"]
             clip = None
             if p.get("reference"):
                 clip = f"plan-{pid}-v{req.revision}"
                 atomic_write(clip_path(clip), clean_clip(clip, p["reference"]))
-            result = await launch_local(teach_req(text=l["behavior"], robot=p["robot"], clip=clip,
-                steps=l["steps"], weights=l["weights"], stageSteps=l["stageSteps"], stageWeights=l["stageWeights"]))
+            result = await launch_local(teach_req(text=local["behavior"], robot=p["robot"], clip=clip,
+                steps=local["steps"], weights=local["weights"], stageSteps=local["stageSteps"], stageWeights=local["stageWeights"]))
             if not result.get("matched"):
                 raise HTTPException(409, result.get("message", "训练未启动"))
         elif req.compute in ("colab", "hf") and p["cloud"]:

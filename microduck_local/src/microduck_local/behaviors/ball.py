@@ -786,12 +786,103 @@ def _ball_report(env) -> list[str]:
     ]
 
 
+def ghosts_payload(env):
+    """EVERY belief this env wants drawn, as a LIST — the multi-object form.
+
+    `ballGhost` (and MOSS's `ghost_payload`) carry ONE belief per robot, which
+    was enough while a scene held one trainee chasing one thing. It is not:
+    the lab now runs a duck on a ball and a MOSS on a can at the same time,
+    and a robot may track several objects at once (a tidy brain has a toy AND
+    a basket; a pitch has a ball and four posts).
+
+    Each entry is SELF-DESCRIBING so the page needs no lookup table and no id
+    matching against a separate list — the thing that made the /sim version
+    fragile:
+
+        {"id": str,            # stable per object, for React keys
+         "cls": str,           # what the detector calls it
+         "pos": [x, y, z],     # the BELIEF, world frame
+         "truth": [x, y, z]    # ...and where it actually is, or None
+         "conf": 0..1,         # the memory's own decay
+         "seen": 0|1,          # in frame on the last report
+         "shape": "sphere"|"cylinder",
+         "r": float,           # radius to draw it at
+         "halfH": float|None}  # cylinders only
+
+    `truth` rides along per ghost so the error line needs no correlation step.
+
+    Resolution order, most specific first: an env that publishes its own list
+    wins, then a single `ghost_payload` (MOSS's, and the `ballGhost` shape),
+    then this package's ball ghost. An env with none answers `[]`, which is
+    the honest answer for a blind kick or any trick.
+    """
+    own = getattr(env, "ghosts_payload", None)
+    if callable(own):
+        return own() or []
+
+    one = getattr(env, "ghost_payload", None)
+    if callable(one):
+        g = one()
+        if not g:
+            return []
+        # [x, y, z, conf, seen] with an optional 6th half-height (MOSS).
+        half = float(g[5]) if len(g) > 5 else None
+        truth = None
+        mk = getattr(env, "marker_payload", None)
+        if callable(mk):
+            t = mk()
+            if t:
+                truth = [float(t[0]), float(t[1]), float(t[2])]
+        return [{"id": "target", "cls": getattr(env, "ghost_cls", "toy"),
+                 "pos": [float(g[0]), float(g[1]), float(g[2])],
+                 "truth": truth, "conf": float(g[3]), "seen": int(g[4]),
+                 "shape": "cylinder" if half else "sphere",
+                 "r": float(t[3]) if (truth and len(t) > 3) else 0.035,
+                 "halfH": half}]
+
+    from .lastmetre import ball_ghost_payload  # noqa: PLC0415  (cycle at import)
+    g = ball_ghost_payload(env)
+    if not g:
+        return []
+    t = ball_marker_payload(env)
+    return [{"id": "ball", "cls": "ball",
+             "pos": [float(g[0]), float(g[1]), float(g[2])],
+             "truth": None if not t else [float(t[0]), float(t[1]), float(t[2])],
+             "conf": float(g[3]), "seen": int(g[4]),
+             "shape": "sphere", "r": float(t[3]) if t else BALL_RADIUS,
+             "halfH": None}]
+
+
 def ball_marker_payload(env):
-    """What the lab streams for the viewer: [x, y, z, radius] or None."""
+    """What the lab streams for the viewer: [x, y, z, radius] or None.
+
+    TWO kinds of ball, and the lab drew only one of them until 2026-09-24.
+    `find_ball`'s is VIRTUAL — a point the env projects through the camera,
+    with no body in the physics — and lives on `env.ball_pos`. Every
+    ball-scene recipe (`kick_*`, `kick_*_sensed`, `dribble`) has a REAL one:
+    a free body named `ball` in the MJCF. The lab streamed `None` for those,
+    so a dribble trainee was a duck walking at nothing on an empty floor while
+    its own caption read "ball 0.10 m ahead". Both now answer.
+
+    The body id is looked up once and cached on the env; `mj_name2id` returns
+    -1 for a scene without one, which is checked rather than indexed (a -1
+    reads `xpos[-1]`, the LAST body in the model, and would draw a ball
+    wherever that happens to be — the same trap `world/arena.py` documents
+    for detector targets)."""
     pos = getattr(env, "ball_pos", None)
-    if pos is None or getattr(env, "_ball_episode", None) != env.episode_id:
+    # `episode_id` through getattr for the same reason `ball_ghost_payload`
+    # does: a plain `MicroduckWalkEnv` in the lab roster has none. This line
+    # survives today only because `ball_pos` is None first and `and`
+    # short-circuits — which is luck, not a guarantee.
+    if pos is not None and getattr(env, "_ball_episode", None) == getattr(env, "episode_id", None):
+        return [round(float(v), 4) for v in pos] + [BALL_RADIUS]
+    bid = getattr(env, "_marker_ball_body", None)
+    if bid is None:
+        bid = env._marker_ball_body = int(
+            mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, "ball"))
+    if bid < 0:
         return None
-    return [round(float(v), 4) for v in pos] + [BALL_RADIUS]
+    return [round(float(v), 4) for v in env.data.xpos[bid]] + [BALL_RADIUS]
 
 
 _register(Behavior(

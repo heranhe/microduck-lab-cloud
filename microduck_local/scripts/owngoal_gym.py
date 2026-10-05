@@ -34,11 +34,12 @@ def run(seed: int, episodes: int, knobs: str, seconds: float, arm: str) -> list[
         os.environ["MICRODUCK_CHASE"] = knobs
     else:
         os.environ.pop("MICRODUCK_CHASE", None)
-    from kick_gym import gym_scenario                      # noqa: PLC0415
-    from microduck_local.brain import REGISTRY, Senses     # noqa: PLC0415
+    from kick_gym import gym_scenario  # noqa: PLC0415
+
+    from microduck_local.brain import REGISTRY, Senses  # noqa: PLC0415
     from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer  # noqa: PLC0415
-    from microduck_local.brain.team import brain_kwargs    # noqa: PLC0415
-    from microduck_local.world import World                # noqa: PLC0415
+    from microduck_local.brain.team import brain_kwargs  # noqa: PLC0415
+    from microduck_local.world import World  # noqa: PLC0415
 
     sc = gym_scenario(opponents=0)
     infer = onnx_infer(POLICIES_DIR / "alpha_walking.onnx")

@@ -609,3 +609,33 @@ def test_seen_full_stops_a_tall_target_being_taxed_for_its_own_height():
         frac = det._visible(w.data, tgt, origin, R)[4]
         assert frac < 1.0, (rng_m, frac)                  # a linear penalty WOULD bite
         assert min(frac / det.spec.seen_full, 1.0) == 1.0  # `seen_full` spares it
+
+
+def test_explain_says_why_each_target_is_or_is_not_seen():
+    """`Detector.explain` (the /sim camera overlay's "why can't it see that?"):
+    ahead and big is seen, behind is outside, behind a wall is blocked, a
+    ball shrunk to a bottle cap is too small at 1.2 m, beyond the spec range
+    is far — and asking changes nothing the robot detects."""
+    m, d = world([("a", (0, 0, 0)), ("b", (0.6, 0.0, math.pi)), ("c", (-0.6, 0.0, 0.0)),
+                  ("w", (1.4, 0.3, math.pi))],
+                 walls=[Wall((1.0, 0.1), (1.0, 0.6), 0.6)], balls=[Ball((1.2, -0.2))])
+    tg = targets(m, ducks=("b", "c", "w"))
+    tg.append(replace(targets(m, balls=(0,))[0], name="cap", radius=0.0075))
+    spec = replace(NARROW_REF, max_range_m=6.0)
+    det = Detector(m, site="a/head_camera", targets=tg, spec=spec, seed=0)
+    why = {e["name"]: e["why"] for e in det.explain(d)}
+    assert why == {"b": "seen", "c": "outside", "w": "blocked", "cap": "small"}
+    rows = {e["name"]: e for e in det.explain(d)}
+    assert rows["w"]["by"] == "wall0" or "wall" in rows["w"]["by"]
+    some, every = rows["cap"]["near"]
+    assert every < some < 1.2 and abs(some - 0.0075 / math.tan(spec.w_none / 2)) < 0.01
+    det = Detector(m, site="a/head_camera", targets=tg, spec=replace(spec, max_range_m=0.3))
+    assert {e["name"]: e["why"] for e in det.explain(d)}["b"] == "far"
+
+    # Deterministic: the same seed detects the same things with or without it.
+    a = Detector(m, site="a/head_camera", targets=tg, spec=spec, seed=3, noise=DetectorNoise.hostile())
+    b = Detector(m, site="a/head_camera", targets=tg, spec=spec, seed=3, noise=DetectorNoise.hostile())
+    for _ in range(30):
+        b.explain(d)
+        fa, fb = a.capture(d, 0.0), b.capture(d, 0.0)
+        assert [x.as_payload() for x in fa.detections] == [x.as_payload() for x in fb.detections]

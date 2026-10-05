@@ -522,11 +522,36 @@ class Tracker:
         return min(cands, key=lambda tr: (round(tr.age(t), 1), tr.range))
 
     def payload(self, t: float) -> list[dict]:
-        return [{"id": tr.id, "cls": tr.cls, "name": tr.name, "bearing": round(tr.bearing, 3),
-                 "range": round(tr.range, 3), "hits": tr.hits, "age": round(tr.age(t), 2),
-                 **({"xy": [round(tr.xy[0], 3), round(tr.xy[1], 3)],
-                     "vel": [round(tr.vel[0], 2), round(tr.vel[1], 2)]} if tr.xy is not None else {})}
-                for tr in self.tracks]
+        """One entry a track, for the /sim inspector and the GHOST the stage
+        draws beside the real object.
+
+        `xy` is the last MEASUREMENT and `pred` is where the track thinks the
+        thing is NOW — they differ by exactly the staleness, which is the
+        quantity a viewer needs to see and cannot infer from `xy` alone (a
+        ball last measured 1.4 s ago has a `pred` a whole kick away). `sigma`
+        is the 1-sigma radius of `pred`, read off `Track.sigma` rather than
+        recomputed, so the page can never disagree with the controller about
+        what was believed.
+
+        Mind what a sigma ring MEANS: the error is RADIAL, so a circle at 1
+        sigma contains about 39% of the errors and 2 sigma about 86% — not the
+        68/95 a per-axis reading suggests (calibrated in `probe_shot_gate.py`;
+        the roadmap's radial-error item has the workings). A consumer drawing
+        one ring should label it, not imply a confidence it does not carry.
+        """
+        out = []
+        for tr in self.tracks:
+            item = {"id": tr.id, "cls": tr.cls, "name": tr.name, "bearing": round(tr.bearing, 3),
+                    "range": round(tr.range, 3), "hits": tr.hits, "age": round(tr.age(t), 2)}
+            if tr.xy is not None:
+                pred = tr.predict(t)
+                item.update(xy=[round(tr.xy[0], 3), round(tr.xy[1], 3)],
+                            vel=[round(tr.vel[0], 2), round(tr.vel[1], 2)],
+                            sigma=round(tr.sigma(t, self.p.vel_prior, self.p.vel_sig_after_s), 4))
+                if pred is not None:
+                    item["pred"] = [round(pred[0], 3), round(pred[1], 3)]
+            out.append(item)
+        return out
 
 
 __all__ = ["Track", "Tracker", "TrackerParams"]

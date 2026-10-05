@@ -1,0 +1,100 @@
+{
+  "name": "pitch-solo",
+  "seed": 0,
+  "floor": {
+    "size": [
+      3.5,
+      3.0
+    ]
+  },
+  "walls": [
+    {
+      "from": [
+        -1.5,
+        -1.25
+      ],
+      "to": [
+        1.5,
+        -1.25
+      ],
+      "height": 0.3,
+      "thickness": 0.02
+    },
+    {
+      "from": [
+        1.5,
+        -1.25
+      ],
+      "to": [
+        1.5,
+        1.25
+      ],
+      "height": 0.3,
+      "thickness": 0.02
+    },
+    {
+      "from": [
+        1.5,
+        1.25
+      ],
+      "to": [
+        -1.5,
+        1.25
+      ],
+      "height": 0.3,
+      "thickness": 0.02
+    },
+    {
+      "from": [
+        -1.5,
+        1.25
+      ],
+      "to": [
+        -1.5,
+        -1.25
+      ],
+      "height": 0.3,
+      "thickness": 0.02
+    }
+  ],
+  "boxes": [],
+  "balls": [
+    {
+      "pos": [
+        0.35,
+        0.25
+      ],
+      "radius": 0.035,
+      "mass": 0.015,
+      "rolling": 0.002
+    }
+  ],
+  "ducks": [
+    {
+      "id": "d0",
+      "spawn": [
+        -0.9,
+        0.0,
+        0.0
+      ],
+      "policy": "pollen:alpha_walking",
+      "tof": "datasheet",
+      "detector": "datasheet",
+      "brain": "chase",
+      "odom": "ideal",
+      "team": null,
+      "role": null,
+      "robot": "microduck"
+    }
+  ],
+  "persons": [],
+  "pickables": [],
+  "props": [],
+  "basket": null,
+  "goal_width": 0.7,
+  "attacks": {},
+  "collision": "all",
+  "cove": 0.0,
+  "physics_dt": 0.005,
+  "version": 1
+}

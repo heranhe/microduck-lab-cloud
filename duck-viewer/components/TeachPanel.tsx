@@ -20,6 +20,7 @@ import {
   MIN_STEP_BUDGET,
   clampStepBudget,
   fetchLab,
+  displayedTraining,
   isRunPolicy,
   loadTeachRun,
   policyTitle,
@@ -46,7 +47,7 @@ import {
   type HfCloudAccount,
 } from "@/lib/cloudCompute";
 import { bestRunFor } from "@/lib/tricks";
-import { useSelectedDuck } from "@/lib/select";
+import { getSelectedDuck, useSelectedDuck } from "@/lib/select";
 import { modalIsOpen, requestCloudOpen } from "@/lib/ui";
 import { pushToast } from "./Toasts";
 
@@ -710,6 +711,7 @@ function LiveTraining({
   pinned,
   onPinStage,
   onResume,
+  onStop,
   onRecipeSubmit,
   onStageWeights,
   onStartStage,
@@ -729,6 +731,7 @@ function LiveTraining({
   pinned: Record<string, number>;
   onPinStage: (stage: number, steps: number | null) => void;
   onResume: () => Promise<void>;
+  onStop: () => Promise<void>;
   onRecipeSubmit: (
     weights: Record<string, number>,
     fineTune: boolean,
@@ -840,6 +843,11 @@ function LiveTraining({
         {t.stopWarning && <div style={{ color: "#ef957d", marginTop: 5 }}>{t.stopWarning}</div>}
         {resumeError && <div role="alert" style={{ color: "#ef957d", marginTop: 5 }}>{resumeError}</div>}
       </div>}
+      {live && <button onClick={() => void onStop().catch((error) => setResumeError(String(error)))}
+        disabled={t.status === "stopping"}
+        style={{ marginTop: 6, padding: "4px 8px", cursor: "pointer", color: "#dfe5ee", background: "#202b34", border: "1px solid #3a4855", borderRadius: 4 }}>
+        {t.status === "stopping" ? tr("Saving…", "保存中…") : tr("⏸ Save and stop this run", "⏸ 保存并停止此任务")}
+      </button>}
       {t.status === "training" && (
         <div style={{ color: "#8b93a3", fontSize: 10, marginBottom: 4 }}>
           practicing on {t.envs} parallel ducks ({t.helpers} helper{t.helpers === 1 ? "" : "s"})
@@ -1354,9 +1362,9 @@ export function TeachPanel({
     const id = setInterval(() => {
       const frame = clientRef.current?.frame;
       if (!frame) return;
-      const t = frame.training ?? null;
+      const t = displayedTraining(frame, getSelectedDuck());
       setTraining(t);
-      setTraineeSpeed(frame.ducks.find((d) => d.id === "trainee")?.speed ?? null);
+      setTraineeSpeed(frame.ducks.find((d) => d.id === (t?.trainee ?? "trainee"))?.speed ?? null);
       // Pending budget edits belong to the trick on screen: a different one
       // has different stages, and its own remembered budget.
       if (t && t.behavior.id !== behaviorRef.current) {
@@ -1497,7 +1505,7 @@ export function TeachPanel({
   async function launchSelectedTraining() {
     const trimmed = actionText;
     if (!trimmed || cloudBusy || launchPending.current) return;
-    if ((training?.status === "training" || training?.status === "stopping") || activeCloudJobs > 0) {
+    if (activeCloudJobs > 0 || (compute !== "local" && localJobsActive)) {
       setCloudError(tr(
         "A training job is already running. Stop it from the top status bar before starting another.",
         "已有训练任务正在运行，请先使用顶部状态栏停止训练或断开云算力。"
@@ -1583,6 +1591,7 @@ export function TeachPanel({
       // whichever recipe owned a keyword inside the clip's name. The clip
       // rides along explicitly so a retrain/fine-tune trains the same motion.
       text: training.behavior.id,
+      robot: training.robot,
       ...(clip ? { clip } : {}),
       ...(n ? { weights } : {}),
       ...(fineTune ? { initFrom: training.runName } : {}),
@@ -1601,7 +1610,7 @@ export function TeachPanel({
       const res = await fetch(`${LAB_HTTP}/teach/weights`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stageWeights }),
+        body: JSON.stringify({ stageWeights, run: training?.runName }),
       });
       const data = await res.json();
       setMsgs((m) => [
@@ -1634,7 +1643,8 @@ export function TeachPanel({
       { kind: "note", text: `▶ starting “${training.behavior.title}” from stage ${idx}` },
     ]);
     await postTeach({
-      text: training.behavior.title,
+      text: training.behavior.id,
+      robot: training.robot,
       startStage: idx,
       ...(stageWeights ? { stageWeights } : {}),
       ...(pinsDirty ? { stageSteps: pins } : {}),
@@ -1669,7 +1679,12 @@ export function TeachPanel({
     : compute === "hf"
       ? hfAccount.connected && hfAccount.hardware.length > 0 && !!hfFlavor
       : true;
-  const trainingInProgress = (training?.status === "training" || training?.status === "stopping") || activeCloudJobs > 0;
+  const frame = clientRef.current?.frame;
+  const localJobsActive = (frame?.trainings ?? (frame?.training ? [frame.training] : []))
+    .some((t) => t.status === "training" || t.status === "stopping" || t.restarting);
+  const envBudget = frame?.envBudget;
+  const localFull = !!envBudget && envBudget.total - envBudget.used < (envBudget.minJob ?? 8);
+  const trainingInProgress = activeCloudJobs > 0 || (compute === "local" ? localFull : localJobsActive);
   const canLaunch = labOnline === true && !!actionText && !cloudBusy &&
     !trainingInProgress && (compute === "local" || (!!cloudTask && cloudAccountReady));
   // An unsupported cloud action must remain clickable so the user gets the
@@ -1743,7 +1758,7 @@ export function TeachPanel({
             // Also dismiss a FINISHED training card — the farm keeps
             // broadcasting the job payload until told to let go (a running
             // job is protected server-side; stop it first).
-            fetch(`${LAB_HTTP}/teach/clear`, { method: "POST" }).catch(() => {});
+            fetch(`${LAB_HTTP}/teach/clear`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run: training?.runName }) }).catch(() => {});
           }}
           title={tr("clear the conversation and any finished training card", "清空对话和已完成的训练卡片")}
           style={{
@@ -1850,6 +1865,14 @@ export function TeachPanel({
               const data = await response.json();
               if (!response.ok || !data.ok) throw new Error(data.detail || data.message || tr("Resume failed", "续训失败"));
               setTraining(data.job);
+            }}
+            onStop={async () => {
+              const response = await fetch(`${LAB_HTTP}/teach/stop`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ run: training.runName }),
+              });
+              const data = await response.json();
+              if (!response.ok || !data.ok) throw new Error(data.detail || data.message || tr("Stop failed", "停止失败"));
             }}
             onRecipeSubmit={submitRecipe}
             onStageWeights={applyStageWeights}

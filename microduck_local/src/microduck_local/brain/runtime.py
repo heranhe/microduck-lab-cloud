@@ -67,6 +67,17 @@ class Senses:
     # forward kinematics. A learned policy reads the same numbers in
     # `robots/mars.OBS_ARM_QPOS` and closes the same loop by training.
     arm: Mapping[str, float] | None = None
+    #: MOSS only: the wrist and front cameras' readings of the object nearest
+    #: the jaws (`robots/moss_wrist.MossTargetSensors.read`): `att` (cos 2t,
+    #: sin 2t, uprightness) or None, `range` (wrist camera, m) or None, `top`
+    #: (height of its top, m). A pick trained with `publish_attitude` /
+    #: `publish_proximity` / `publish_size` reads them; zeros there were a
+    #: train/deploy mismatch that took the six-shape pick to 4/36 in the yard.
+    target_obs: Mapping[str, object] | None = None
+    #: MOSS only: the WRIST camera's own detection frame (`arm_detector`), in
+    #: that camera's frame. A brain that knows where its arm is can place what
+    #: it sees — `brain/tidy_moss` scans with it while the arm rests.
+    arm_det: DetectionFrame | None = None
 
     def fresh_lidar(self, max_age: float) -> LidarFrame | None:
         return self.lidar if (self.lidar is not None and self.lidar_age is not None

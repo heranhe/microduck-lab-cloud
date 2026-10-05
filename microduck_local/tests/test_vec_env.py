@@ -329,6 +329,40 @@ def test_env_var_selects_the_backend(monkeypatch):
         venv.close()
 
 
+def test_large_episode_infos_do_not_block_the_completion_barrier():
+    """A pipe-sized terminal info must finish, including packed workers."""
+    import subprocess
+    import sys
+    script = '''
+import gymnasium as gym
+import numpy as np
+from microduck_local.vec_env import ForkVecEnv
+class TerminalEnv(gym.Env):
+    observation_space = gym.spaces.Box(-1, 1, (4,), dtype=np.float32)
+    action_space = gym.spaces.Box(-1, 1, (2,), dtype=np.float32)
+    def reset(self, **kwargs):
+        return np.zeros(4, np.float32), {}
+    def step(self, action):
+        return np.zeros(4, np.float32), 1.0, True, False, {"blob": b"x" * (1 << 20)}
+for packed in (1, 2):
+    v = ForkVecEnv([TerminalEnv] * 4, envs_per_worker=packed,
+                   spaces=(TerminalEnv.observation_space, TerminalEnv.action_space))
+    try:
+        v.reset()
+        for _ in range(3):
+            obs, reward, done, infos = v.step(np.zeros((4, 2), np.float32))
+            assert done.all() and len(infos) == 4
+            assert all(len(info["blob"]) == (1 << 20) for info in infos)
+    finally:
+        v.close()
+print("OK")
+'''
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                            text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK" in result.stdout
+
+
 def test_train_modules_do_not_import_torch():
     """The trainers fork workers at import-of-make_vec_env time. If importing
     the CLI modules already pulled torch, the parent would be multi-threaded

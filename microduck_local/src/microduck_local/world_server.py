@@ -89,6 +89,7 @@ import os
 import re
 import time
 import traceback
+import zlib
 from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -348,7 +349,7 @@ def list_scenarios() -> list[dict]:
     for name, sc in builtin_scenarios().items():
         out.append({"name": name, "builtin": True, "ducks": len(sc.ducks),
                     "robots": _robot_counts(sc),
-                    "objects": len(sc.walls) + len(sc.boxes) + len(sc.balls),
+                    "objects": len(sc.walls) + len(sc.boxes) + len(sc.balls) + len(sc.props),
                     "modified": None})
     d = scenarios_dir()
     if d.exists():
@@ -360,7 +361,7 @@ def list_scenarios() -> list[dict]:
             out.append({"name": p.stem, "builtin": p.stem in BUILTIN_NAMES,
                         "ducks": len(sc.ducks),
                         "robots": _robot_counts(sc),
-                        "objects": len(sc.walls) + len(sc.boxes) + len(sc.balls),
+                        "objects": len(sc.walls) + len(sc.boxes) + len(sc.balls) + len(sc.props),
                         "modified": p.stat().st_mtime})
     return out
 
@@ -576,6 +577,8 @@ class WorldState:
         lidar = getattr(d, "lidar", None)
         lf = None if lidar is None else lidar.last
         arm_fn = getattr(d, "arm_qpos", None)
+        target_obs = self._moss_target_obs(d)
+        arm_det = (getattr(d, "sensors", None) or {}).get("arm_detector")
         return Senses(t=w.t, tof=tof, tof_age=tof_age,
                       det=det, det_age=None if det is None else w.t - det.t,
                       lidar=lf, lidar_age=None if lf is None else w.t - lf.t,
@@ -585,7 +588,57 @@ class WorldState:
                       # (`Senses.arm`): a commanded pose is not the pose, and
                       # the 28.5 mm that costs is on that field.
                       arm=None if arm_fn is None else arm_fn(w.data),
-                      holding=d.holding is not None, skill=d.skill, bumped=w.bumped(d))
+                      holding=d.holding is not None, skill=d.skill, bumped=w.bumped(d),
+                      target_obs=target_obs,
+                      arm_det=None if arm_det is None else arm_det.last)
+
+    def _moss_target_obs(self, d):
+        """MOSS's wrist/front-camera readings of the object nearest its jaws
+        (`robots/moss_wrist`), or None for any other body."""
+        w = self.world
+        ts = getattr(d, "_moss_sensors", None)
+        if ts is None:
+            from .robots import moss_wrist
+            prefix = getattr(d, "prefix", "")
+            if not moss_wrist.MossTargetSensors.fits(w.model, prefix):
+                d._moss_sensors = False
+                return None
+            ts = moss_wrist.MossTargetSensors(w.model, prefix,
+                                              seed=zlib.crc32(prefix.encode()))
+            props = [p for p in (self.scenario.props if self.scenario else [])
+                     if getattr(p, "cls", "") == "toy" and p.mass > 0]
+            ts.candidates = [(w.model.body(p.id).id, moss_wrist.geom_of(p))
+                             for p in props]
+            d._moss_sensors = ts
+        if ts is False:
+            return None
+        # which object: during a scripted pinch, the one the brain is going
+        # for (its fix, base frame) — the pinch aims at what the camera reports
+        hint = None
+        brain = self.brains.get(d.id)
+        fix = getattr(brain, "_fix", None)
+        if getattr(brain, "state", None) == "pinch":
+            locked = getattr(brain, "pinch_target_world", None)
+            if locked is not None:
+                # the pinch's LOCKED spot, in the brain's odometry frame —
+                # the head camera's fix jumps to another toy as a small thing
+                # leaves its view, and aimed the wrist camera there too
+                ox, oy, oyaw = locked
+                x, y, yaw = d.driver.pose(w.data)
+                bo = brain._odom
+                if bo is not None:
+                    c0, s0 = math.cos(-bo[2]), math.sin(-bo[2])
+                    bx = (ox - bo[0]) * c0 - (oy - bo[1]) * s0
+                    by = (ox - bo[0]) * s0 + (oy - bo[1]) * c0
+                    c, s = math.cos(yaw), math.sin(yaw)
+                    hint = (x + bx * c - by * s, y + bx * s + by * c)
+            elif fix is not None:
+                x, y, yaw = d.driver.pose(w.data)
+                c, s = math.cos(yaw), math.sin(yaw)
+                hint = (x + float(fix[0]) * c - float(fix[1]) * s,
+                        y + float(fix[0]) * s + float(fix[1]) * c)
+        ts.tick(w.data, d.driver, ts.candidates, hint=hint)
+        return ts.read()
 
     def drive(self, cmd: np.ndarray, mode: str) -> None:
         """Set every duck's command for this tick. A possessed person takes
@@ -1025,7 +1078,11 @@ def tof_payload(w: World, d) -> dict | None:
                         # the viewer can draw the scan from the aperture and
                         # not from the chassis origin — 76 mm apart on MARS.
                         "mount": (None if f.mount_pos is None
-                                  else [round(float(v), 4) for v in f.mount_pos])}
+                                  else [round(float(v), 4) for v in f.mount_pos]),
+                        # The body the rays leave from, unprefixed, so the
+                        # overlay draws from the right aperture: MARS's
+                        # `base_laser`, MOSS's RealSense (`moss_camera`).
+                        "body": lidar.mount.split("/")[-1]}
     gripper = gripper_payload(w, d)
     if gripper is not None:
         out["gripper"] = gripper
@@ -1052,7 +1109,33 @@ def tof_payload(w: World, d) -> dict | None:
                       # draws — the same body the detector refuses to detect.
                       "selfBody": getattr(d, "camera_housing_body", _no_housing)(),
                       "items": [x.as_payload() for x in f.detections]}
+        # WHY each object is or is not seen (`Detector.explain`), for the /sim
+        # camera overlay. Once per camera frame, not per stream frame: it
+        # casts rays. Not on a DUCK: a pitch of six ducks would carry six
+        # rosters of rows every frame for an overlay drawn for the arm bodies,
+        # and a duck's frame is pinned field for field (test_world_server).
+        if getattr(d, "robot", DUCK_ROBOT) != DUCK_ROBOT:
+            out["det"]["why"] = _explain_cached(w, d.detector, f.t)
+        arm_det = (getattr(d, "sensors", None) or {}).get("arm_detector")
+        if arm_det is not None:
+            out["det"]["wrist"] = {"fov": [arm_det.spec.fov_h_deg, arm_det.spec.fov_v_deg],
+                                   "range": arm_det.spec.max_range_m}
     return out or None
+
+
+def _explain_cached(w, det, t: float) -> list[dict]:
+    """`det.explain` for the frame captured at `t`, computed once, as
+    rows `[name, why, p, x, y, z, radius, near_some, near_all, blocked_by]`."""
+    cache = getattr(det, "_why_cache", None)
+    if cache is None or cache[0] != t:
+        # Compact rows, [name, why, p, x, y, z, radius, near_some, near_all,
+        # blocked_by]: a room's worth of dicts was 1.1 kB on EVERY frame.
+        cache = (t, [[e["name"], e["why"], e["p"],
+                      *(round(v, 3) for v in e["xyz"]), e["r"], *e["near"],
+                      e.get("by")]
+                     for e in det.explain(w.data)])
+        det._why_cache = cache
+    return cache[1]
 
 
 # -- requests --------------------------------------------------------------------

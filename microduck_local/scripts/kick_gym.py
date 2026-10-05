@@ -321,7 +321,33 @@ def _place(w: World, rng: np.random.Generator, spread: float):
 # 58% of episodes at 4 s, 94% at 6 s and 94% at 8 s. Below 6 s a "nobody
 # touched it" is mostly the clock; at 6 s it is the contest, which is the only
 # reading that makes `first touch` an outcome of the duel.
-DUEL_S = 6.0                 # the contest window: one duel, start to resolution
+#
+# 6.0 -> 8.0 on 2026-09-24, and the 94%-at-6 s above is now HISTORY: it was
+# measured on 2026-09-10 (bd23c3c), five days before `approach_keepout: 0.20`
+# began shipping ON as part of the F.2 own-goal pack (16664ee, 2026-09-15).
+# The keep-out radius holds the unopposed duck off the ball, so the same
+# control now reads, paired by seed over 32 episodes x 6 seeds:
+#
+#     shipped (keep-out ON)      86.5% mean, 75% worst seed
+#     approach_keepout=0.0       93.8% mean, 84% worst seed   <- the old 94%
+#     paired delta              -7.3% +/- 2.8% SE, worse on 5/6 seeds
+#
+# At 6 s that leaves ~13% of UNOPPOSED episodes unresolved, which is a floor of
+# "our duck never got there" under every contested arm — exactly what this
+# window exists to keep out of the numbers. Re-swept under the shipped pack
+# (32 episodes x 5 seeds): 6 s 86.9%, 7 s 94.4%, **8 s 96.2%**, 9 s 94.4%.
+#
+# The sweep is NOT monotone in the window, because `run_duel` runs its episodes
+# back-to-back in ONE `World` — a longer window moves every later episode's
+# starting state. Read it as five samples of a noisy surface, not a curve.
+#
+# The window is widened rather than the pack disabled in the control, because
+# the contested arms run the shipped pack too: a control with `approach_keepout`
+# pinned to 0.0 would pass while leaving that 13% floor inside the very numbers
+# it certifies. This does NOT hide the pack's effect — the pack's cost to a
+# CONTESTED duel is what the gym measures, and it is still measured; what the
+# window guarantees is only that the clock is not the thing deciding.
+DUEL_S = 8.0                 # the contest window: one duel, start to resolution
 DUEL_MINE = (0.35, 0.60)     # our duck's range to the ball — close enough to be going for it
 DUEL_THEIRS = (0.10, 0.30)   # the opponent's — strictly nearer, and inside `duel_near`
 DUEL_APART = 0.30            # two trunks closer than this at spawn is an overlap, not a placement
@@ -526,6 +552,29 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                 bx, by = float(w.data.qpos[q]), float(w.data.qpos[q + 1])
                 dx, dy = bx - float(p[0]), by - float(p[1])
                 joints = np.asarray(w.data.qpos[d.adr.joint_qpos], float)
+                # THE HANDOVER STATE, for a spawn that samples it (roadmap 12aw).
+                # Everything else on this row describes the swing well enough
+                # to EXPLAIN a whiff; these columns are what it takes to
+                # RE-SPAWN this handover in a behavior env. All in the duck's
+                # own yaw frame, so they read like `ahead`/`side` above and
+                # like `lastmetre`'s spawn knobs. Recorded, never reconstructed:
+                # a replay that recomputes a pose from a summary spawns the
+                # summary, not the state (AGENTS.md, "mark a number that a
+                # reconstruction produced").
+                jvel = np.asarray(w.data.qvel[d.adr.joint_qvel], float)
+                rv = np.asarray(w.data.qvel[d.adr.root_qvel:d.adr.root_qvel + 6], float)
+                _cy, _sy = math.cos(yaw), math.sin(yaw)
+                _bvx, _bvy = float(w.data.qvel[v]), float(w.data.qvel[v + 1])
+                # The trunk's own pose, with the WORLD YAW TAKEN OUT — a replay
+                # spawns at the env's own random yaw, so a world quaternion
+                # would fight it. What is left is roll and pitch, which is the
+                # part that matters: a duck mid-stride is leaning, and setting
+                # 5 rad/s of joint velocity onto a level standing trunk is a
+                # state the walker never occupies.
+                _qw = np.asarray(w.data.qpos[d.adr.root_qpos + 3:d.adr.root_qpos + 7], float)
+                _qyi = np.array([math.cos(-yaw / 2), 0.0, 0.0, math.sin(-yaw / 2)])
+                _qrel = np.zeros(4)
+                mujoco.mju_mulQuat(_qrel, _qyi, _qw)
                 swing = {
                     "ep": ep, "foot": "push" if pushed else str(d.skill), "touch": "push" if pushed else "kick",
                     "t": round(w.t - t0, 2),
@@ -541,6 +590,30 @@ def run(seed: int, episodes: int, spread: float, opponents: int = 0, ball_out_s:
                     if "head_pitch" in C.JOINT_NAMES else None,
                     "neck_pitch": float(joints[C.JOINT_NAMES.index("neck_pitch")])
                     if "neck_pitch" in C.JOINT_NAMES else None,
+                    "head_yaw": float(joints[C.JOINT_NAMES.index("head_yaw")])
+                    if "head_yaw" in C.JOINT_NAMES else None,
+                    # The whole configuration and its velocity: the 14 joints
+                    # in contract order, so a spawn can set qpos/qvel outright
+                    # instead of laddering a window per axis.
+                    "joints": [round(float(x), 4) for x in joints],
+                    "joint_vel": [round(float(x), 3) for x in jvel],
+                    # The trunk's own motion at the swing. The bench spawns a
+                    # STANDING duck (kick_gym's own docstring calls that out as
+                    # "no walk-in, no settle, no gait phase"), so this is the
+                    # axis the hand-drawn spawn cannot express at all.
+                    "body_vx": round(float(rv[0] * _cy + rv[1] * _sy), 4),
+                    "body_vy": round(float(-rv[0] * _sy + rv[1] * _cy), 4),
+                    "body_wz": round(float(rv[5]), 4),
+                    "body_vz": round(float(rv[2]), 4),
+                    "body_wx": round(float(rv[3] * _cy + rv[4] * _sy), 4),
+                    "body_wy": round(float(-rv[3] * _sy + rv[4] * _cy), 4),
+                    "root_z": round(float(w.data.qpos[d.adr.root_qpos + 2]), 4),
+                    "root_quat_rel": [round(float(x), 5) for x in _qrel],
+                    # ...and the ball's, signed. `ball_speed` above is a
+                    # magnitude, and "rolling toward the foot" and "rolling
+                    # away from it" are not the same spawn.
+                    "ball_vx": round(float(_bvx * _cy + _bvy * _sy), 4),
+                    "ball_vy": round(float(-_bvx * _sy + _bvy * _cy), 4),
                     "ball0": (bx, by),
                     # THE FALL COLUMN (2026-09-10, after 12ai's ledger read falls
                     # 4 -> 9 on 24 seeds and could not resolve them): the kicking

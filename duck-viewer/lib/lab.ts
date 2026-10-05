@@ -38,6 +38,22 @@ export interface Scene {
   vertScale?: number;
 }
 
+export interface LabGhost {
+  id: string;
+  cls: string;
+  /** the BELIEF, world frame */
+  pos: [number, number, number];
+  /** ...and where it actually is; null when the env has no truth to offer */
+  truth: [number, number, number] | null;
+  /** the memory's own decay, 1.0 on a fresh sighting */
+  conf: number;
+  /** 1 while the last report had it in frame */
+  seen: number;
+  shape: "sphere" | "cylinder";
+  r: number;
+  halfH: number | null;
+}
+
 export interface DuckFrame {
   id: string; // stable identity ("d0".."dN", "trainee", "helper1"…) — survives renames
   name: string; // mutable display label (tracks the assigned policy)
@@ -52,6 +68,13 @@ export interface DuckFrame {
    *  — those rosters are all ducks. */
   robot?: RobotId;
   falls: number;
+  /** Episodes that ended by SUCCEEDING, which a task env does as readily as
+   *  it does by failing: MOSS's pick env terminates on `knocked or picked`,
+   *  so counting every termination as a fall showed a policy measured at 20
+   *  picks out of 20 as a red 921. Absent on a lab that predates the field
+   *  and on any env that does not report `info["success"]` — the row then
+   *  shows `falls` alone, exactly as before. */
+  wins?: number;
   step: number;
   rew: number;
   /** The mouth servo as an opening fraction, 0 shut to 1 wide — the /sim
@@ -83,11 +106,42 @@ export interface DuckFrame {
    *  `handoff` names the brain taking it. */
   handed?: boolean;
   handoff?: string | null;
-  /** The ball a 🔎 find_ball duck is looking for — [x, y, z, radius] in the
-   *  duck's own world frame, like `bodies`. It lives in the env, not the
-   *  physics, so it is streamed here rather than as a body. null/absent for
-   *  every other brain. */
+  /** The ball this trainee is working on — [x, y, z, radius] in the duck's
+   *  own world frame, like `bodies`. TWO kinds answer here: find_ball's is
+   *  VIRTUAL (it lives in the env, not the physics), and every ball-scene
+   *  recipe (kick_*, dribble) has a real free body. null for a recipe with
+   *  no ball at all.
+   *
+   *  A FIFTH number means the prop is not a ball: it is the cylinder's
+   *  half-height, and the viewer draws a cylinder of `[r, halfHeight]`
+   *  instead of a sphere of `r`. A MOSS trainee practises on a 66 x 115 mm
+   *  can, and drawn as a sphere you cannot see it topple. Four numbers is
+   *  the duck's ball, unchanged. (A TENTH makes it a box — `Duck.tsx` reads
+   *  `length >= 10` as [x, y, z, sx, sy, sz, qw, qx, qy, qz].) */
   ball?: number[] | null;
+  /** WHERE THE POLICY THINKS THE BALL IS — [x, y, z, conf, seen].
+   *
+   *  A sensed recipe acts on this and never on `ball`: it is the four head
+   *  slots' own belief, a camera projection held and dead-reckoned by
+   *  odometry while nothing is reported. `conf` is that memory's decay (1.0
+   *  on a fresh sighting, fading) and `seen` is 1 while the last report had
+   *  the ball in frame. Drawn beside the truth because the GAP is the thing
+   *  — a trainee walking confidently at nothing is explained by nothing else.
+   *  null for a recipe that writes no such slots (the blind kicks, tricks).
+   *
+   *  A SIXTH number, like `ball`'s fifth: the prop's half-height, so the
+   *  belief is drawn as the same shape as the thing it is a belief about.
+   *  Five numbers is the duck's ball ghost, unchanged. */
+  ballGhost?: number[] | null;
+  /** THE LONG GOAL — [x, y, z, reachRadius, reachedCount].
+   *
+   *  Where the ball is being taken, in the duck's own world frame. A dribble
+   *  commanded only as a DIRECTION has no destination and so nothing to draw;
+   *  this is the destination, the radius that counts as arrived, and how many
+   *  have been reached this episode (the task's real score — a count of
+   *  outcomes rather than a ratio of distances). null for every recipe
+   *  without one. */
+  dribbleTarget?: number[] | null;
   /** Where this slot stands on the lab floor, MuJoCo XY metres. The SERVER
    *  lays the grid out (viz_server.lab_slot_offsets) because the pitch is a
    *  property of the robot — RobotSpec.lab_spacing_m, 0.65 m for a 25 cm duck
@@ -181,6 +235,12 @@ export interface TrainingPayload {
   stopWarning?: string | null;
   runName: string;
   status: "training" | "stopping" | "done" | "stopped" | "failed";
+  /** Which duck id on stage is the one practising. Jobs are handed the next
+   *  FREE slot (trainee, trainee2, trainee3, ...), so this is not always
+   *  "trainee" — reading that literal decorated an idle leftover instead of
+   *  the body being trained. Optional: labs older than this field send none,
+   *  and the caller falls back to "trainee". */
+  trainee?: string | null;
   behavior: BehaviorCard;
   progress: TrainingProgress;
   /** null/absent = single-run job; set while a curriculum chain trains. */
@@ -217,6 +277,21 @@ export interface Frame {
   events?: string[]; // one-shot toast lines (each appears in a single frame)
   stats?: SystemStats;
   training?: TrainingPayload | null;
+  /** A helper spawn/remove is in flight on the server (`LabState.scaling`).
+   *  GLOBAL, because the server's own guard is: `remove_duck_error` refuses
+   *  a helper while any scale is in flight, whichever job caused it. The
+   *  viewer had to guess this from the newest job's `restarting` and so
+   *  disabled a helper's ✕ because some OTHER job was restarting. Absent on
+   *  a lab that predates the field. */
+  scaling?: boolean;
+  /** EVERY live teach job, newest last. The lab used to hold exactly one and
+   *  refuse a second /teach — a software limit, not a machine one: a 32-env
+   *  job measures ~463% CPU, about 4.6 of an 18-core machine, so several fit
+   *  side by side and they now share one env budget instead of a slot.
+   *  `training` remains the newest of these, so anything reading that alone
+   *  behaves as before. Absent on a lab that predates the field. */
+  trainings?: TrainingPayload[];
+  envBudget?: { used: number; total: number; minJob?: number };
 }
 
 export interface Policy {
@@ -569,6 +644,42 @@ export function duckRowKeys(ducks: { id: string }[]): string[] {
   });
 }
 
+/** The job training `duckId`, or null — the one rule for "is this row the
+ *  robot that is practising right now".
+ *
+ *  Jobs are handed the next FREE roster slot (trainee, trainee2, trainee3,
+ *  ...), so the training body is NOT reliably the one called "trainee". Two
+ *  separate places in the HUD hardcoded that id and both pointed at whatever
+ *  idle leftover happened to hold the first slot: the 🎓 progress label
+ *  decorated the wrong robot, and the ＋ (add helper) sat on a finished run
+ *  while the one actually training offered a ✕ the server refuses. Both were
+ *  reported from the lab, the second only after the first was fixed — because
+ *  the fix read the id again instead of this answer.
+ *
+ *  Falls back to "trainee" only when the payload names nobody, which is a lab
+ *  older than the `trainee` field rather than a licence to guess. */
+export function trainingForDuck(
+  frame: Frame | null | undefined,
+  duckId: string,
+): TrainingPayload | null {
+  if (!frame) return null;
+  const live = (frame.trainings ?? (frame.training ? [frame.training] : []))
+    .filter((t) => t && (t.status === "training" || t.status === "stopping" || t.restarting));
+  return live.find((t) => (t.trainee ?? "trainee") === duckId) ?? null;
+}
+
+/** The selected job, else the newest live one, with legacy frame fallback. */
+export function displayedTraining(
+  frame: Frame | null | undefined,
+  duckId?: string | null,
+): TrainingPayload | null {
+  if (!frame) return null;
+  const jobs = frame.trainings ?? (frame.training ? [frame.training] : []);
+  const selected = duckId ? jobs.find((t) => (t.trainee ?? "trainee") === duckId) : null;
+  return selected ?? jobs.findLast((t) => t.status === "training" || t.status === "stopping" || t.restarting)
+    ?? frame.training ?? null;
+}
+
 /** WebSocket with auto-reconnect; latest frame lands in a mutable ref. */
 export class LabClient {
   frame: Frame | null = null;
@@ -659,9 +770,15 @@ export class LabClient {
   /** Add a helper duck (+2 training envs; warm-restarts the trainer).
    *  Server refusals (no training / cap reached / no snapshot yet / restart
    *  in flight) come back as one-shot event toasts. */
-  sendSpawnHelper() {
+  /** Add a helper to the job named by `run`: another viewer of the same
+   *  live.onnx snapshot. Omitting the name means the NEWEST live job, which
+   *  is what this meant when the lab could only train one — and what made
+   *  it wrong once it could train several, because the ＋ now sits on every
+   *  training row and unnamed it joined whichever job happened to be newest
+   *  rather than the one whose row was clicked. */
+  sendSpawnHelper(run?: string) {
     if (this.ws?.readyState === WebSocket.OPEN)
-      this.ws.send(JSON.stringify({ spawn_helper: true }));
+      this.ws.send(JSON.stringify({ spawn_helper: run ? { run } : true }));
   }
   /** Remove any duck by id. The server guards the edge cases (trainee while
    *  training, helpers during a trainer restart) and refuses via event toasts. */

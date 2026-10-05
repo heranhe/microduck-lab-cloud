@@ -52,6 +52,7 @@ import {
   detectionRay,
   headCameraPose,
   tofZonePoints,
+  wristCamera,
   CAM_FOV_DEG,
   OVERLAY_LAYER,
   SELF_LAYER,
@@ -59,6 +60,7 @@ import {
   SIM_SPEEDS,
   SIM_SPEED_DEFAULT,
   speedLabel,
+  detLabel,
   speedShortfall,
   stepSpeed,
   teamColor,
@@ -73,8 +75,11 @@ import {
 import { rangeChannel, sensorOverlayLabel } from "@/lib/lidar";
 import { camAspect, renderInset } from "@/lib/inset";
 import { buildBodyGeometries, Duck, type BodyGeometry } from "./Duck";
+import { SimGhosts } from "./SimGhosts";
 import { RobotBody } from "./SimStage";
 import { ArmBlock, GripperBlock, LidarOverlay, LidarPlot } from "./SimLidar";
+import { CamOverlay } from "./SimCamView";
+import { MossMapOverlay } from "./SimMossMap";
 import { robotCount, robotLook } from "@/lib/robots";
 import CameraKeys from "./CameraKeys";
 import { useTruckSwipe } from "./useTruckSwipe";
@@ -278,6 +283,27 @@ const CORNER_ZONES = [0, 7, 56, 63];
 // InsetRender reads its rectangle every frame). Module state on purpose: no
 // React state per frame.
 const camInset: { el: HTMLDivElement | null; duckId: string | null } = { el: null, duckId: null };
+// The wrist-camera inset's box, the same way (WristInset owns it).
+const wristInset: { el: HTMLDivElement | null; duckId: string | null } = { el: null, duckId: null };
+
+/** The robot whose wrist camera the wrist inset shows: the selected one if it
+ *  has a wrist camera, else the first that does. Null in a room without one. */
+function wristRobot(f: SimFrame | null, duckId: string | null, robotScenes: Record<string, Scene>) {
+  if (!f) return null;
+  const withCam = (d: SimDuck) => {
+    const w = d.robot ? wristCamera(robotScenes[d.robot]?.bodies) : null;
+    const pose = w ? d.bodies[w.idx] : undefined;
+    return w && pose && pose.length === 7 ? { d, pose, fov: w.fov } : null;
+  };
+  const sel = f.ducks.find((x) => x.id === duckId);
+  const picked = sel ? withCam(sel) : null;
+  if (picked) return picked;
+  for (const d of f.ducks) {
+    const w = withCam(d);
+    if (w) return w;
+  }
+  return null;
+}
 
 /** The duck whose senses the inspector shows: the selected one, else the first with a detector. */
 function sensedDuck(f: SimFrame | null, duckId: string | null): SimDuck | undefined {
@@ -290,10 +316,13 @@ function sensedDuck(f: SimFrame | null, duckId: string | null): SimDuck | undefi
  *  a scissored second pass possible without a render target and a
  *  readback: the inset is pixels in the same canvas, the DOM box over it
  *  is just a border and the detection boxes. */
-function InsetRender({ scene, client, enabled }: { scene: Scene; client: SimClient; enabled: boolean }) {
+function InsetRender({ scene, client, robotScenes, enabled }: { scene: Scene; client: SimClient; robotScenes: Record<string, Scene>; enabled: boolean }) {
   const { gl, scene: three, camera, size } = useThree();
   const jawIdx = useMemo(() => scene.bodies.indexOf("jaw_soft"), [scene]);
   const cam = useMemo(() => new THREE.PerspectiveCamera(CAM_FOV_DEG[1], 1.35, 0.03, 20), []);
+  // Its own camera: the wrist works 10-60 cm from what it looks at, so a
+  // nearer near plane (the jaws are ~9 cm from the lens).
+  const wristCam = useMemo(() => new THREE.PerspectiveCamera(55, 70 / 55, 0.01, 20), []);
   useEffect(() => {
     camera.layers.enable(OVERLAY_LAYER);
     // The orbit view keeps the housing the inset hides — you are looking AT
@@ -306,9 +335,23 @@ function InsetRender({ scene, client, enabled }: { scene: Scene; client: SimClie
   useFrame(() => {
     gl.setScissorTest(false);
     gl.render(three, camera);
+    if (!enabled) return;
+    // The wrist camera, when a robot in the room has one: its mount body's
+    // pose as streamed, x forward and z up — nothing to hide, it sits behind
+    // and above the jaws it looks at.
+    const wel = wristInset.el;
+    const w = wel ? wristRobot(client.frame, wristInset.duckId, robotScenes) : null;
+    if (wel && w) {
+      const { origin, forward, up } = capturePose(w.pose);
+      wristCam.position.set(origin[0], origin[2], -origin[1]);
+      wristCam.up.set(up[0], up[2], -up[1]);
+      wristCam.lookAt(origin[0] + forward[0], origin[2] + forward[2], -(origin[1] + forward[1]));
+      wristCam.fov = w.fov[1];
+      renderInset(gl, three, wristCam, wel.getBoundingClientRect(), gl.domElement.getBoundingClientRect(), size);
+    }
     const el = camInset.el;
     const f = client.frame;
-    if (!enabled || !el || !f || jawIdx < 0) return;
+    if (!el || !f || jawIdx < 0) return;
     const d = sensedDuck(f, camInset.duckId);
     const jaw = d?.bodies[jawIdx];
     if (!d || !jaw) return;
@@ -425,7 +468,7 @@ function CamInset({ client, duckId, top, belowRef, hidden, enabled, open, onTogg
           b.style.borderStyle = it.name ? "solid" : "dashed";
           const label = b.firstChild as HTMLElement | null;
           if (label) {
-            label.textContent = `${it.name ? it.cls : "ghost"} ${it.range.toFixed(2)} m`;
+            label.textContent = detLabel(it);
             label.style.background = color;
           }
           n++;
@@ -440,7 +483,10 @@ function CamInset({ client, duckId, top, belowRef, hidden, enabled, open, onTogg
         else if (!det) meta.current.textContent = `${d.id} · head camera · no detector`;
         else {
           const fresh = freshness(det.age, DET_FRESH_MS);
-          const text = `${d.id} · head camera ${fov[0]}°×${fov[1]}° · ${det.items.length} det · ${fresh.text}`;
+          // Round for the LABEL only (cam.fov above keeps the exact value): a
+          // body whose lens comes from a calibration, not a round constant, wrote
+          // `115.91201339570063°×83.839…` across the strip — MARS's fx/fy do.
+          const text = `${d.id} · head camera ${Math.round(fov[0])}°×${Math.round(fov[1])}° · ${det.items.length} det · ${fresh.text}`;
           if (meta.current.textContent !== text) meta.current.textContent = text;
           meta.current.title = fresh.title;
           meta.current.style.color = fresh.color;
@@ -457,6 +503,7 @@ function CamInset({ client, duckId, top, belowRef, hidden, enabled, open, onTogg
     return (
       <div
         ref={box}
+        data-inset="head"
         style={{ position: "absolute", top: 0, left: PAD, width: CAM_W, border: "1px solid #2b313b", borderRadius: 6, boxSizing: "border-box", zIndex: 20, overflow: "hidden", display: "none", background: "rgba(16,18,22,0.86)" }}
       >
         <button
@@ -477,6 +524,7 @@ function CamInset({ client, duckId, top, belowRef, hidden, enabled, open, onTogg
   return (
     <div
       ref={box}
+      data-inset="head"
       title="what the head camera sees, at the detector's field of view; boxes are the detections (bearing, elevation, apparent width) - all a brain gets"
       style={{ position: "absolute", top: 0, left: PAD, width: CAM_W, height: Math.round(CAM_W / camAspect(CAM_FOV_DEG)), border: "1px solid #2b313b", borderRadius: 6, boxSizing: "border-box", zIndex: 20, overflow: "hidden", pointerEvents: "none", display: "none" }}
     >
@@ -504,6 +552,120 @@ function CamInset({ client, duckId, top, belowRef, hidden, enabled, open, onTogg
           <span style={{ position: "absolute", left: -1.5, top: -14, fontSize: 9, lineHeight: "12px", padding: "0 3px", color: "#101216", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap", borderRadius: 2 }} />
         </div>
       ))}
+      <div ref={meta} style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "2px 6px", fontSize: 10, fontFamily: "ui-monospace, Menlo, monospace", color: "#9aa5b1", background: "rgba(16,18,22,0.7)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} />
+    </div>
+  );
+}
+
+/** The wrist-camera inset: the head camera's twin for a robot with a camera
+ *  on its gripper (MOSS). Docks under the head camera, drags, minimizes to a
+ *  bar and re-docks on double-click the same way; InsetRender draws into it.
+ *  Picture only — a room streams no wrist detections (lib/sim WRIST_CAMERAS).
+ *  Absent altogether in a room with no wrist camera. */
+function WristInset({ client, duckId, robotScenes, top, belowRef, hidden, enabled, open, onToggle }: {
+  client: SimClient;
+  duckId: string | null;
+  robotScenes: Record<string, Scene>;
+  top: number;
+  belowRef: React.RefObject<HTMLDivElement | null>;
+  hidden: boolean;
+  enabled: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const meta = useRef<HTMLDivElement>(null);
+  const drag = useDrag("simWristPos", box, top, PAD);
+  useEffect(() => {
+    wristInset.el = enabled && open && !hidden ? box.current : null;
+    wristInset.duckId = duckId;
+    return () => {
+      wristInset.el = null;
+    };
+  }, [enabled, open, hidden, duckId]);
+  useEffect(() => {
+    if (!enabled) return;
+    let raf = 0;
+    const paint = () => {
+      raf = requestAnimationFrame(paint);
+      const el = box.current;
+      if (!el) return;
+      const w = wristRobot(client.frame, duckId, robotScenes);
+      el.style.display = hidden || !w ? "none" : "block";
+      if (!w) return;
+      // Where the user put it, else under the head camera (wherever that is),
+      // else under the scoreboard or the top bar.
+      const custom = drag.posRef.current;
+      let y = top;
+      let x = PAD;
+      if (custom) {
+        ({ x, y } = custom);
+      } else {
+        const head = document.querySelector<HTMLElement>('[data-inset="head"]');
+        const hr = head && head.style.display !== "none" ? head.getBoundingClientRect() : null;
+        const under = belowRef.current?.getBoundingClientRect();
+        if (hr && hr.height > 0) {
+          y = hr.bottom + GAP;
+          x = hr.left;
+        } else if (under) y = under.bottom + GAP;
+      }
+      el.style.top = `${Math.round(y)}px`;
+      el.style.left = `${Math.round(x)}px`;
+      el.style.width = `${CAM_W}px`;
+      el.style.height = open ? `${Math.round(CAM_W / camAspect(w.fov))}px` : "";
+      if (open && meta.current) {
+        const text = `${w.d.id} · wrist camera ${w.fov[0]}°×${w.fov[1]}°`;
+        if (meta.current.textContent !== text) meta.current.textContent = text;
+      }
+    };
+    raf = requestAnimationFrame(paint);
+    return () => cancelAnimationFrame(raf);
+  }, [client, duckId, robotScenes, top, belowRef, hidden, enabled, open, drag.posRef]);
+  if (!enabled) return null;
+  if (!open)
+    return (
+      <div
+        ref={box}
+        style={{ position: "absolute", top: 0, left: PAD, width: CAM_W, border: "1px solid #2b313b", borderRadius: 6, boxSizing: "border-box", zIndex: 20, overflow: "hidden", display: "none", background: "rgba(16,18,22,0.86)" }}
+      >
+        <button
+          onPointerDown={drag.onPointerDown}
+          onDoubleClick={drag.reset}
+          onClick={(e) => {
+            if (!consumeDragged(e.currentTarget)) onToggle();
+          }}
+          title="expand the wrist camera · drag to move · double-click to re-dock"
+          aria-label="expand the wrist camera"
+          style={{ ...HANDLE, display: "flex", alignItems: "center", width: "100%", background: "none", border: "none", color: "#9aa5b1", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 10, padding: "4px 6px", pointerEvents: "auto" }}
+        >
+          <span style={{ flex: 1, textAlign: "left" }}>wrist camera</span>
+          <span style={{ fontSize: 12, lineHeight: 1 }}>+</span>
+        </button>
+      </div>
+    );
+  return (
+    <div
+      ref={box}
+      title="what the wrist camera sees, from its mount on the gripper frame (robots/moss.py ARM_CAMERA_POS / _AIM). Picture only — the room runs no wrist detector."
+      style={{ position: "absolute", top: 0, left: PAD, width: CAM_W, height: Math.round(CAM_W / camAspect([70, 55])), border: "1px solid #2b313b", borderRadius: 6, boxSizing: "border-box", zIndex: 20, overflow: "hidden", pointerEvents: "none", display: "none" }}
+    >
+      <div
+        onPointerDown={drag.onPointerDown}
+        onDoubleClick={drag.reset}
+        title="drag to move · double-click to re-dock"
+        style={{ ...HANDLE, position: "absolute", top: 0, left: 0, right: 0, height: 18, zIndex: 1, pointerEvents: "auto", background: "linear-gradient(rgba(16,18,22,0.75), rgba(16,18,22,0))" }}
+      >
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onToggle}
+          title="minimize the wrist camera"
+          aria-label="minimize the wrist camera"
+          style={{ position: "absolute", top: 2, right: 2, background: "rgba(16,18,22,0.7)", border: "none", borderRadius: 3, color: "#9aa5b1", cursor: "pointer", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, lineHeight: 1, padding: "2px 5px" }}
+        >
+          —
+        </button>
+      </div>
+      <div style={{ position: "absolute", left: "50%", top: "50%", width: 10, height: 10, marginLeft: -5, marginTop: -5, border: "1px solid rgba(233,237,241,0.5)", borderRadius: "50%" }} />
       <div ref={meta} style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "2px 6px", fontSize: 10, fontFamily: "ui-monospace, Menlo, monospace", color: "#9aa5b1", background: "rgba(16,18,22,0.7)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} />
     </div>
   );
@@ -1306,6 +1468,10 @@ export default function SimViewer() {
   const loadInFlight = useRef(false);
   const [driving, setDriving] = useState(false);
   const [showTof, setShowTof] = useState(true);
+  // THE GHOST overlay (components/SimGhosts.tsx): each brain's believed
+  // position for every thing it is tracking, beside the real one. Off by
+  // default — it is a debugging eye, not part of the room.
+  const [showGhosts, setShowGhosts] = useState(false);
   const [showMap, setShowMap] = useState(true);
   const [showCam, setShowCam] = useState(() => loadJSON("simCam", true));
   // Floating duck name labels. The flag itself lives in the shared ui store,
@@ -1355,6 +1521,7 @@ export default function SimViewer() {
   const [lessonOpen, setLessonOpen] = useState(() => loadJSON("simControlsOpen", false));
   const [inspectorOpen, setInspectorOpen] = useState(() => loadJSON("simInspectorOpen", true));
   const [camOpen, setCamOpen] = useState(() => loadJSON("simCamOpen", true));
+  const [wristOpen, setWristOpen] = useState(() => loadJSON("simWristOpen", true));
   // The score panel (pitch or tidy — a world has at most one) collapses to its
   // headline: minimizing a scoreboard should not cost you the score, only the
   // per-minute table under it, which is what covers the near half of the room.
@@ -1407,6 +1574,7 @@ export default function SimViewer() {
   useEffect(() => saveJSON("simScoreOpen", scoreOpen), [scoreOpen]);
   useEffect(() => saveJSON("simGraphOpen", graphOpen), [graphOpen]);
   useEffect(() => saveJSON("simCamOpen", camOpen), [camOpen]);
+  useEffect(() => saveJSON("simWristOpen", wristOpen), [wristOpen]);
   useEffect(() => saveJSON("simBrainMenuAll", allBrains), [allBrains]);
 
   // Measure the top bar (it grows a row at a time as the window narrows) and
@@ -1830,10 +1998,15 @@ export default function SimViewer() {
           {/* …and the same toggle draws the planar scan for a body that has
               one instead of a ToF (components/SimLidar.tsx). */}
           {client && <LidarOverlay client={client} robotScenes={robotScenes} enabled={showTof} />}
+          {/* …and what the cameras can and cannot see, and why (components/SimCamView.tsx). */}
+          {client && <CamOverlay client={client} robotScenes={robotScenes} enabled={showTof} />}
           {scene && client && <DetOverlay scene={scene} client={client} enabled={showTof} />}
           {client && <ChaseOverlay client={client} enabled={showTof} />}
+          {client && <SimGhosts client={client} enabled={showGhosts} />}
           {client && <MapOverlay client={client} duckId={selected} enabled={showMap} />}
-          {scene && client && <InsetRender scene={scene} client={client} enabled={showCam} />}
+          {/* …and MOSS's own model of the room — what it believes (components/SimMossMap.tsx). */}
+          {client && <MossMapOverlay client={client} enabled={showMap} />}
+          {scene && client && <InsetRender scene={scene} client={client} robotScenes={robotScenes} enabled={showCam} />}
         </group>
         {client && <SimTargets client={client} />}
         <OrbitControls
@@ -1963,10 +2136,17 @@ export default function SimViewer() {
         <button style={{ ...BTN, borderColor: showTof ? "#43c2b8" : BTN_BORDER }} onClick={() => setShowTof((v) => !v)} title="T">
           {sensorOverlayLabel(overlayChan)}
         </button>
-        <button style={{ ...BTN, borderColor: showCam ? "#43c2b8" : BTN_BORDER }} onClick={() => setShowCam((v) => !v)} title="V: the selected duck's head camera, with the detector's boxes">
+        <button
+          style={{ ...BTN, borderColor: showGhosts ? "#43c2b8" : BTN_BORDER }}
+          onClick={() => setShowGhosts((v) => !v)}
+          title="G: where each brain BELIEVES things are, beside where they are — a translucent blob at the tracked position, a ring at its 1σ radius (a radial error, so ~39% of errors are inside it, not 68%), and a line to the truth. With a duck selected, only that duck's beliefs."
+        >
+          👻 {tr("ghosts", "感知估计")}
+        </button>
+        <button style={{ ...BTN, borderColor: showCam ? "#43c2b8" : BTN_BORDER }} onClick={() => setShowCam((v) => !v)} title="V: the selected duck's head camera, with the detector's boxes — and its wrist camera, on a robot that has one">
           {tr("cam", "相机")}
         </button>
-        <button style={{ ...BTN, borderColor: showLabels ? "#43c2b8" : BTN_BORDER }} onClick={() => setShowLabels((v) => !v)} title="L: the floating d0 · policy labels over the ducks">
+        <button style={{ ...BTN, borderColor: showLabels ? "#43c2b8" : BTN_BORDER }} onClick={() => setShowLabels((v) => !v)} title="L: every label that floats in the 3-D scene — the ducks' d0 · policy names, and the head camera's 'MOSS sees …' tags. The overlay's rings, sight lines and floor wedge are geometry, not labels, and stay with T.">
           🏷 {tr("labels", "标签")}
         </button>
         <button
@@ -2290,6 +2470,7 @@ export default function SimViewer() {
       </div>
       {client && <DuckVoices client={client} sound={sound} />}
       {client && <CamInset client={client} duckId={selected} top={inspectorTop} belowRef={pitchRef} hidden={!!editor} enabled={showCam} open={camOpen} onToggle={() => setCamOpen((v) => !v)} />}
+      {client && <WristInset client={client} duckId={selected} robotScenes={robotScenes} top={inspectorTop} belowRef={pitchRef} hidden={!!editor} enabled={showCam} open={wristOpen} onToggle={() => setWristOpen((v) => !v)} />}
       {/* The states the selected duck's brain moves through, with the moves
           it has actually made drawn between them (components/SimGraph). */}
       {client && !editor && (

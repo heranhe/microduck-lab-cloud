@@ -59,3 +59,25 @@ A screenshot is one instant. For *what happened over a minute* — a fall, a
 stall, a scrum — use the `record-world` skill instead: it runs the same
 scenario headless under a seed and writes an mp4, a contact sheet and an
 events log; no browser or running lab needed.
+
+3. **Film the page**, when the thing you want is the PAGE and not the physics
+   — the room's textures, the camera insets, the LiDAR fan, the brain's map
+   panel. `record-world` renders raw MuJoCo and none of that is in it, so a
+   clip for the README comes from here:
+
+   ```
+   node .claude/skills/sim-smoke/film.mjs --url http://localhost:63317/sim \
+        --out /tmp/film --w 1280 --h 863 --reset moss-yard --skip 37000 --seconds 21
+   ffmpeg -framerate 60 -t 19 -i /tmp/film/f%05d.jpg \
+        -vf "setpts=PTS/4,fps=15,scale=720:-1,palettegen=max_colors=64" -y /tmp/p.png
+   ffmpeg -framerate 60 -t 19 -i /tmp/film/f%05d.jpg -i /tmp/p.png \
+        -lavfi "setpts=PTS/4,fps=15,scale=720:-1[x];[x][1:v]paletteuse" -y out.gif
+   ```
+
+   CDP `Page.startScreencast` at ~60 fps, so `setpts=PTS/4` is a true 4x and
+   not dropped frames. `--reset <scenario>` POSTs `/world/load` AFTER the page
+   is up, so `--skip` is measured from t = 0 and a window scouted with
+   `record-world` on the same seed lands in the same place. **`--h` is the
+   WINDOW, not the viewport**: Chrome's own chrome eats 143 px, so 863 gives
+   720 — ask for 720 and you get a 2.11:1 clip where the rest of the README
+   is 16:9. `docs/media/sim-moss-tidy.gif` was made with exactly the above.

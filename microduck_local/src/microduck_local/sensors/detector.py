@@ -466,6 +466,23 @@ class Target:
     # left the 48 deg vertical frustum (the capsule's centre leaves it at
     # 1.2 m); the part in view is what is reported. 0: a point-like thing.
     height: float = 0.0
+    # What a DETECTOR should invert this target's apparent width with, when
+    # the scenario knows the object better than its class does.
+    #
+    # `range_est` is `rad / tan(width/2)` where `width` is synthesized from
+    # the target's TRUE radius and `rad` is `NOMINAL_RADIUS[cls]` — a real
+    # detector infers range from an assumed class size, and that asymmetry is
+    # the point of the model. But a class constant sized on one object is
+    # WRONG for every other object in the class, and silently: MEASURED on a
+    # 66 x 115 mm drinks can declared `"toy"` (nominal 0.02 m), the reported
+    # range was 0.259 m while the can stood at 0.491 m, and MOSS's pick brain
+    # shut its jaws on air seven times in 180 s without a single clue why.
+    #
+    # None keeps the class constant, so every duck, ball, person and basket
+    # measured before this field existed is bit-for-bit unchanged. A scenario
+    # that declares a prop's own size can pass it and get a detector that is
+    # wrong by its noise model rather than by a table lookup.
+    nominal_radius: float | None = None
     # A FIXED world position instead of a body: the goal posts of a pitch,
     # which are a line the World scores and not geometry in the model
     # (roadmap Track 4 s6 C.2). `body` is ignored (pass -1) and the target
@@ -837,6 +854,99 @@ class Detector:
         others = [c for c in TEAM_COLORWAYS if c != tgt.color]
         return str(self.rng.choice(others)) if others else None
 
+    # -- explanation -------------------------------------------------------
+    def explain(self, data: mujoco.MjData) -> list[dict]:
+        """WHY each target is or is not a detection right now, for the /sim
+        camera overlay — the question "why can't it see that cap?" answered
+        by the same geometry `measure` uses, without its noise.
+
+        One entry per target (own body excluded): its world centre and
+        radius, and `why`:
+
+          seen      big enough to be found on every frame (before `miss_p`)
+          marginal  found on a fraction `p` of frames — the size ramp between
+                    `w_none` and `w_full`, times any partial visibility
+          small     in view and unblocked, but narrower than `w_none`: never
+          blocked   centre in the frustum, but occluded or cut off
+          outside   not in the field of view
+          far       beyond `max_range_m`
+
+        Plus `near` = [sometimes, every frame]: the range, m, inside which a
+        target this size is found at all, and on every frame. A blocked one
+        carries `by`: what the ray to its centre hits first.
+
+        Deterministic: ray casts and angles only, no draws from `self.rng`,
+        so calling it does not change what the robot detects.
+        """
+        s = self.spec
+        origin, R = self.lens(data)
+        R2 = None
+        if s.bottom_pitch_deg > 0.0:
+            th = np.deg2rad(s.bottom_pitch_deg)
+            c, sn = float(np.cos(th)), float(np.sin(th))
+            R2 = R @ np.array([[c, 0.0, sn], [0.0, 1.0, 0.0], [-sn, 0.0, c]])
+        half_h = np.deg2rad(s.fov_h_deg) / 2
+        half_v = np.deg2rad(s.fov_v_deg) / 2
+        out: list[dict] = []
+        for tgt in self.targets:
+            if tgt.body >= 0 and int(self.model.body_rootid[tgt.body]) == self.own_root:
+                continue
+            pos = (np.asarray(tgt.pos, dtype=np.float64) if tgt.pos is not None
+                   else np.asarray(data.xpos[tgt.body], dtype=np.float64))
+            e = {"name": tgt.name, "cls": tgt.cls,
+                 "xyz": [round(float(v), 4) for v in pos],
+                 "r": round(float(tgt.radius), 4)}
+            vis = self._visible(data, tgt, origin, R)
+            if vis is None and R2 is not None:
+                vis = self._visible(data, tgt, origin, R, R_frustum=R2)
+            if vis is not None:
+                width, seen_frac = vis[2], vis[4]
+                p_find = float(np.clip((width - s.w_none) / (s.w_full - s.w_none), 0.0, 1.0))
+                p_find *= min(seen_frac / s.seen_full, 1.0) if s.seen_full > 0 else 1.0
+                e["p"] = round(p_find, 3)
+                e["why"] = ("seen" if p_find >= 0.999 else
+                            "small" if p_find <= 0.0 else "marginal")
+            else:
+                d = pos - origin
+                rng = float(np.linalg.norm(d))
+                inview = False
+                for Rf in ((R,) if R2 is None else (R, R2)):
+                    loc = Rf.T @ d
+                    if loc[0] > 0:
+                        b = float(np.arctan2(loc[1], loc[0]))
+                        el = float(np.arctan2(loc[2], np.hypot(loc[0], loc[1])))
+                        inview |= abs(b) < half_h and abs(el) < half_v
+                e["why"] = ("far" if rng > s.max_range_m else
+                            "blocked" if inview else "outside")
+                e["p"] = 0.0
+                if e["why"] == "blocked":
+                    e["by"] = self._blocker(data, origin, d, rng, tgt)
+            # How near it has to come to be found: sometimes, and every frame.
+            e["near"] = [round(float(tgt.radius / np.tan(s.w_none / 2)), 2),
+                         round(float(tgt.radius / np.tan(s.w_full / 2)), 2)]
+            out.append(e)
+        return out
+
+    def _blocker(self, data: mujoco.MjData, origin: np.ndarray, p: np.ndarray,
+                 rng: float, tgt: "Target") -> str:
+        """What the ray to a blocked target's centre hits first: "own body"
+        (the robot's own arm, mostly), another target's name, or the geom's."""
+        gid = np.zeros(1, dtype=np.int32)
+        vec = np.ascontiguousarray(p / rng, dtype=np.float64)
+        dist = mujoco.mj_ray(self.model, data, origin, vec, self._geomgroup, 1,
+                             self.exclude_body, gid)
+        if dist < 0 or gid[0] < 0:
+            return "edge of view"
+        body = int(self.model.geom_bodyid[gid[0]])
+        root = int(self.model.body_rootid[body])
+        if root == self.own_root:
+            return "own body"
+        for t in self.targets:
+            if t.body >= 0 and int(self.model.body_rootid[t.body]) == root and t is not tgt:
+                return t.name
+        name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, int(gid[0])) or ""
+        return name.split("/")[-1] or "something"
+
     # -- measurement -------------------------------------------------------
     def lens(self, data: mujoco.MjData) -> tuple[np.ndarray, np.ndarray]:
         """(origin, rotation) of the mount frame — the site's, or the body's
@@ -886,7 +996,8 @@ class Detector:
             if nz.width_sigma_frac:
                 width *= float(np.clip(1.0 + g.normal(0.0, nz.width_sigma_frac), 0.3, 3.0))
             conf = p_find * float(g.uniform(nz.conf_floor, 1.0))
-            rad = NOMINAL_RADIUS.get(tgt.cls, tgt.radius)
+            rad = (tgt.nominal_radius if tgt.nominal_radius is not None
+                   else NOMINAL_RADIUS.get(tgt.cls, tgt.radius))
             range_est = rad / max(np.tan(width / 2), 1e-4)
             out.append(Detection(tgt.cls, tgt.name, bearing, elev, width, float(range_est), conf,
                                  self._color(tgt, float(range_est))))

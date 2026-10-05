@@ -19,8 +19,10 @@ from . import airflip as _airflip
 from . import backflip as _backflip
 from . import ball as _ball
 from . import core as _core
+from . import dribble as _dribble
 from . import env as _envm
 from . import g1_tasks as _g1_tasks
+from . import gazewalk as _gazewalk
 from . import getup as _getup
 from . import headstand as _headstand
 from . import imitate as _imitate
@@ -28,10 +30,13 @@ from . import kick as _kick
 from . import lastmetre as _lastmetre
 from . import locomotion as _locomotion
 from . import mars_tasks as _mars_tasks
+from . import moss_tasks as _moss_tasks
 from . import poses as _poses
 
-_SUBMODULES = [_core, _poses, _headstand, _backflip, _airflip, _imitate, _kick,
+_SUBMODULES = [_core, _poses, _headstand, _backflip, _airflip, _imitate, _kick, _dribble,
+               _gazewalk,
                _getup, _locomotion, _ball, _lastmetre, _g1_tasks, _mars_tasks,
+               _moss_tasks,
                _envm]
 
 # The BARE submodule names. `from . import core as _core` binds `_core` here

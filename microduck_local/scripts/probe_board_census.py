@@ -44,8 +44,6 @@ import argparse
 from collections import defaultdict
 from dataclasses import replace
 
-import numpy as np
-
 from microduck_local.brain import REGISTRY, Senses
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
 from microduck_local.brain.team import brain_kwargs, kickoff_brains

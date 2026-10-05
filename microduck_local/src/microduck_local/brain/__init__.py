@@ -7,6 +7,9 @@ from .controllers import Follow, FollowParams, Script, Wander, WanderParams, wan
 from .runtime import REGISTRY, Brain, Intent, Senses
 from .tidy import Tidy, TidyParams
 from .tidy_arm import TidyArm, TidyArmParams
+from .tidy_moss import TidyMoss, TidyMossParams
 
 __all__ = ["Brain", "Follow", "FollowParams", "Intent", "REGISTRY", "Script", "Senses",
-           "Tidy", "TidyArm", "TidyArmParams", "TidyParams", "Wander", "WanderParams", "wander_from_tof"]
+           "Tidy", "TidyArm",
+    "TidyMoss", "TidyArmParams",
+    "TidyMossParams", "TidyParams", "Wander", "WanderParams", "wander_from_tof"]

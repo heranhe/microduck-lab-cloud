@@ -113,7 +113,10 @@ accepts:
                            trick arc instead of only a standing start — a
                            no-op for policies without a curriculum behind them
   {"spawn_helper": true}   add a helper duck: another viewer of the same
-                           live.onnx snapshot. Helpers do NOT add trainer
+                           live.onnx snapshot. {"spawn_helper": {"run": …}}
+                           names WHICH live job to join; bare `true` means
+                           the newest, as it did when the lab held one.
+                           Helpers do NOT add trainer
                            workers — measured live-lab, 16 envs ran at
                            10.0k steps/s and 26 envs (5 helpers × +2) at
                            6.8k, because the extra processes fight the
@@ -268,6 +271,24 @@ def load_hf_token() -> dict | None:
 # ENVS_PER_HELPER is kept at 0 so TrainingJob.scale() / payload arithmetic
 # cannot quietly grow --envs if a helper spawn ever calls it again.
 BASE_ENVS = 32          # train_behavior's own --envs default
+#: How many envs may be training across ALL jobs at once. Derived from the
+#: measurement rather than typed: a 32-env job draws ~4.6 of this machine's
+#: usable cores, so ~7 envs ride on a core. Budgeting to two thirds of the
+#: cores leaves the 50 Hz lab loop, the viewer and the user's own work a
+#: third of the machine, which is the difference between three jobs training
+#: and three jobs crawling — this repo has already measured that trading
+#: throughput away costs reward-per-step, not just wall-clock.
+ENVS_PER_CORE = 7.0
+TRAINER_CORE_SHARE = 2.0 / 3.0
+#: Never fewer than this for a job: a handful of envs is not a training run.
+MIN_JOB_ENVS = 8
+
+
+def env_budget() -> int:
+    """Total envs the machine will run at once, from ITS cores."""
+    from .machine import usable_cores
+    return max(BASE_ENVS,
+               int(usable_cores() * TRAINER_CORE_SHARE * ENVS_PER_CORE))
 ENVS_PER_HELPER = 0
 # Numbered checkpoints a teach run keeps, so a stop is not "only the last
 # overwrite". train.py has its own CheckpointCallback; this flag is for
@@ -430,6 +451,9 @@ class Duck:
         # or neither (a zero-infer trainee before its first snapshot).
         self.policy_id = policy_id
         self.onnx_path = onnx_path
+        #: When this roster slot was made — how a restart tells the newest
+        #: trainee from the finished ones (`restore_ducks`).
+        self.created_at = time.time()
         # True while this duck runs a chain-level "whole trick" assign — its
         # env rehearses full-arc spawns (see showcase_env_kwargs). Persisted
         # so a restart doesn't silently demote the duck to standing starts
@@ -451,6 +475,7 @@ class Duck:
         self._hold_yaw = None   # heading-hold anchor (see set_cmd)
         self._settle = 0        # ticks since handoff (see _recenter_wz)
         self.falls = 0
+        self.wins = 0
         self.reward_ema = 0.0
         # Rolling window of heading-frame forward speeds (see sample_speed).
         self.speed_hist: deque[float] = deque(maxlen=SPEED_WINDOW)
@@ -505,7 +530,14 @@ class Duck:
             kw.get("actuator_force")
             or os.environ.get("MICRODUCK_ACTUATOR", kw.get("actuator", "xml"))
         ).strip().lower()
-        scope = (nullcontext() if actuator == "bam"
+        # A PREVIEW THAT MIRRORS THE TRAINER MAY RANDOMISE, and domain
+        # randomisation WRITES to the model — so such a duck takes a private
+        # compile, exactly as BAM does and for the same reason. This is what
+        # lets the watched trainee run the trainer's real settings instead of
+        # a sanitised copy of them: the shared model was the reason the
+        # preview pinned `domain_rand=False`, and a private one removes it.
+        writes_model = bool(kw.get("domain_rand"))
+        scope = (nullcontext() if (actuator == "bam" or writes_model)
                  else shared_model_scope(exclusive=False))
         with scope:
             if self.robot != "microduck":
@@ -523,10 +555,15 @@ class Duck:
                 kw["actuator_force"] = "xml"
                 return lab_robots.slot_env(self.robot, seed,
                                            {**common, **kw})
+            # MERGED, not double-splatted: `kw` may now carry keys `common`
+            # also sets (a trainee mirroring the trainer's `domain_rand`),
+            # and `f(**common, **kw)` raises on a duplicate where a merge
+            # simply lets the caller win — which is the intent.
+            merged = {**common, **kw}
             if behavior_id:
                 return behaviors_mod.BehaviorEnv(
-                    behavior_id, standing_spawns=standing, **common, **kw)
-            return MicroduckWalkEnv(**common, **kw)
+                    behavior_id, standing_spawns=standing, **merged)
+            return MicroduckWalkEnv(**merged)
 
     def set_cmd(self, cmd: np.ndarray) -> None:
         # A body with no drive channel is not steered rather than crashed:
@@ -635,6 +672,7 @@ class Duck:
         self.policy_id = policy_id
         self.onnx_path = onnx_path
         self.falls = 0
+        self.wins = 0
         self.reward_ema = 0.0
         self.speed_hist.clear()  # the old brain's speed is not this one's
         # Handoff state belongs to the OUTGOING brain. Left standing, a duck
@@ -751,11 +789,23 @@ class Duck:
             action = Duck._walker_infer(self.obs)
         else:
             action = (self.handoff_infer if self.handed else self.infer)(self.obs)
-        self.obs, reward, terminated, truncated, _ = self.env.step(action)
+        self.obs, reward, terminated, truncated, info = self.env.step(action)
         self.reward_ema = 0.98 * self.reward_ema + 0.02 * float(reward)
         self.sample_speed()
         if terminated:
-            self.falls += 1
+            # A TERMINATION IS NOT A FALL. It is for a walking duck, where
+            # the only way an episode ends early is on the floor, and the
+            # counter was named for that. A task env ends early when it
+            # SUCCEEDS too: MOSS's pick env terminates on `knocked or
+            # picked`, so the lab showed `moss-pick-v1` a red 921 falls for
+            # what was measured at 20 picks out of 20 — a perfect score
+            # displayed as a catastrophe. An env that knows the difference
+            # says so in `info["success"]`; one that does not is unchanged,
+            # and every termination still counts as a fall.
+            if info.get("success"):
+                self.wins += 1
+            else:
+                self.falls += 1
             self.reset()
         elif truncated:
             self.reset()
@@ -1151,14 +1201,23 @@ def training_run_names(st: "LabState") -> set[str]:
     stage's dir, so deleting an already-finished stage mid-chain would break
     the launch of the next one; the whole chain is off limits until the job
     stops."""
-    job = getattr(st, "job", None)
-    if job is None or job.status not in ("training", "stopping"):
+    # EVERY training job, not just the newest. With one job these are the
+    # same set; with several concurrent ones, guarding only the active job
+    # would let a delete pull the run dir out from under another live
+    # trainer mid-chain.
+    jobs = [j for j in getattr(st, "jobs", []) if j.status in ("training", "stopping", "restarting")]
+    if not jobs:
         return set()
-    base = job._base_name
-    return {job.run_name, base} | {
-        d.name for d in ([] if not RUNS_DIR.exists() else RUNS_DIR.iterdir())
-        if d.is_dir() and (m := _CHAIN_RE.match(d.name)) and m.group(1) == base
-    }
+    dirs = [] if not RUNS_DIR.exists() else list(RUNS_DIR.iterdir())
+    names: set[str] = set()
+    for job in jobs:
+        base = job._base_name
+        names |= {job.run_name, base} | {
+            d.name for d in dirs
+            if d.is_dir() and (m := _CHAIN_RE.match(d.name))
+            and m.group(1) == base
+        }
+    return names
 
 
 def delete_runs(names: list[str], st: "LabState | None" = None) -> dict:
@@ -1294,6 +1353,11 @@ class TrainingJob:
     """One logical teach job: a `train-behavior` subprocess chain + its
     progress/snapshot state.
 
+    `trainee_id` is a CLASS attribute as well as a constructor argument
+    because `adopt()` builds a job without running `__init__`: an adopted
+    run seats itself in the panel and owns no preview duck, so the historic
+    "trainee" is the right answer for it.
+
     A behavior with a curriculum trains as a SEQUENCE of stages — run names
     `teach-<id>-<hash>-s1`, `-s2`, … — where each stage `--init-from`s the
     previous stage's dir (a cross-dir fine-tune: fresh step budget) under its
@@ -1316,6 +1380,10 @@ class TrainingJob:
     one snapshot interval. The `restarting` flag covers the gap for the UI.
     """
 
+    #: Which trainee duck on the stage is this job's window (see the class
+    #: docstring for why it is a class attribute too).
+    trainee_id: str = "trainee"
+
     def __init__(self, behavior_id: str, helpers: int = 0,
                  steps: int | None = None, snap_steps: int | None = None,
                  weights: dict[str, float] | None = None,
@@ -1325,7 +1393,9 @@ class TrainingJob:
                  stage_init_from: Path | None = None,
                  extra_env: dict[str, str] | None = None,
                  budget: int | None = None,
-                 stage_budgets: dict | None = None):
+                 stage_budgets: dict | None = None,
+                 envs: int | None = None,
+                 trainee_id: str = "trainee"):
         self.behavior = behaviors_mod.BEHAVIORS[behavior_id]
         # Run-scoped knobs that are not stage knobs — currently the reference
         # CLIP an imitation run tracks, so a user can author several motions
@@ -1379,7 +1449,15 @@ class TrainingJob:
         self.dir = RUNS_DIR / self.run_name
         self.dir.mkdir(parents=True, exist_ok=True)
         self.helpers = helpers
-        self.envs = BASE_ENVS + ENVS_PER_HELPER * helpers
+        #: This job's slice of `env_budget()`. Concurrent jobs share the
+        #: machine, so the second and third get what is left rather than
+        #: another full `BASE_ENVS` each.
+        self.base_envs = int(envs) if envs else BASE_ENVS
+        self.envs = self.base_envs + ENVS_PER_HELPER * helpers
+        #: Which trainee duck on the lab stage is THIS job's window. One job
+        #: per duck: with several training at once a single well-known
+        #: "trainee" would have them all writing over each other's preview.
+        self.trainee_id = trainee_id
         # Set by stop(); scale() honours it instead of relaunching (see stop()).
         self.stop_requested = False
         self.total_steps = self.stage_steps[self.stage_idx]  # ACTIVE stage's budget
@@ -1521,6 +1599,7 @@ class TrainingJob:
                 self.budget = saved.get("budget")
                 self.stage_budgets = self._clamp_stage_budgets(saved.get("stageBudgets"))
                 self._refresh_extra_keys()
+        self.base_envs = self.envs
         return self
 
     def _clamp_stage_budgets(self, stage_budgets: dict | None) -> dict[int, int]:
@@ -1800,7 +1879,7 @@ class TrainingJob:
         try:
             self._terminate_tree()
             self.helpers = helpers
-            self.envs = BASE_ENVS + ENVS_PER_HELPER * helpers
+            self.envs = self.base_envs + ENVS_PER_HELPER * helpers
             # Old-process rates would otherwise keep showing as trainFps while
             # the new trainer boots (venv spawn + PPO.load take seconds) —
             # null is the honest reading until two fresh lines land.
@@ -2052,6 +2131,16 @@ class TrainingJob:
             "canResume": reason is None,
             "resumeReason": reason,
             "stopWarning": getattr(self, "stop_warning", None),
+            # WHICH BODY ON STAGE THIS IS. Without it the viewer had to guess,
+            # and it guessed the literal id "trainee" — which is the FIRST
+            # slot, not the one a job actually got. `next_trainee_slot` hands
+            # out trainee2, trainee3, ... as jobs come and go, so after the
+            # first run of a session the 🎓 decoration landed on an idle
+            # leftover while the body actually practising rendered as an
+            # ordinary policy row. A human watching the lab reported "I don't
+            # see any runs in flight" repeatedly, and was right: nothing on
+            # the stage said which robot was training.
+            "trainee": self.trainee_id,
             "behavior": self._behavior_card(),
             "weights": self.effective_weights(),
             # Per-stage fields stay exactly as streamed (existing consumers);
@@ -2158,6 +2247,55 @@ def lab_state_path() -> Path:
     return Path(env) if env else RUNS_DIR.parent / "lab-state.json"
 
 
+#: The lab the viewer, /teach and every skill talk to. Any other port is a
+#: SCRATCH lab (filming, A/Bs, a review) — see `scratch_state_path` and
+#: `idle_exit_minutes`.
+DEFAULT_LAB_PORT = 8788
+#: Minutes a scratch lab stays up with nobody watching and nothing training.
+SCRATCH_IDLE_EXIT_MIN = 30.0
+#: How often the idle watch looks.
+IDLE_POLL_S = 30.0
+
+
+def scratch_state_path(port: int) -> Path | None:
+    """The roster file a SCRATCH lab uses when LAB_STATE_PATH is unset.
+
+    Before this, a second port fell through to the real lab's
+    `lab-state.json`: `duck-lab --port 8799 --fresh ...` (the filming
+    recipe) DELETED the main lab's roster and then saved its own over it.
+    None for the default port, and whenever LAB_STATE_PATH already says.
+    """
+    if port == DEFAULT_LAB_PORT or os.environ.get("LAB_STATE_PATH"):
+        return None
+    return RUNS_DIR.parent / f"lab-state-{port}.json"
+
+
+def idle_exit_minutes(port: int, flag: float | None) -> float:
+    """`--idle-exit`, resolved: what the flag says, else never on the default
+    port and `SCRATCH_IDLE_EXIT_MIN` on any other. MEASURED 2026-09-28: a
+    scratch lab from a filming session was still stepping its roster three
+    days later at ~20% of a core, with no viewer and no job."""
+    if flag is not None:
+        return max(0.0, float(flag))
+    return 0.0 if port == DEFAULT_LAB_PORT else SCRATCH_IDLE_EXIT_MIN
+
+
+class IdleWatch:
+    """True once `busy` has been False for `limit_s` without a break."""
+
+    def __init__(self, limit_s: float):
+        self.limit_s = float(limit_s)
+        self.since: float | None = None
+
+    def update(self, busy: bool, now: float) -> bool:
+        if busy:
+            self.since = None
+            return False
+        if self.since is None:
+            self.since = now
+        return now - self.since >= self.limit_s
+
+
 def teach_weights_path() -> Path:
     return lab_state_path().with_name("teach-weights.json")
 
@@ -2254,7 +2392,9 @@ def save_lab_state(ducks: list[Duck]) -> None:
          "onnxPath": d.onnx_path,
          "robot": getattr(d, "robot", "microduck"),
          # getattr: tests build rosters from bare namespaces without the flag
-         "showcase": bool(getattr(d, "showcase", False))}
+         "showcase": bool(getattr(d, "showcase", False)),
+         **({"createdAt": d.created_at}
+            if getattr(d, "created_at", None) is not None else {})}
         for d in ducks
     ]}
     # ~11 call sites, one of them inside the sim loop — the writer that most
@@ -2262,13 +2402,43 @@ def save_lab_state(ducks: list[Duck]) -> None:
     _atomic_write_json(lab_state_path(), state)
 
 
+def _newest_trainee_only(state: dict, path: Path) -> list[dict]:
+    """The saved roster with every trainee but the NEWEST dropped — and the
+    file rewritten to match, so they stay dropped.
+
+    Training dies with the server, so each trainee a restart finds belongs to
+    a finished job, and each one would step a full MuJoCo env in the 50 Hz
+    loop. `reap_trainee_ducks` cannot clear them (no job claims a restored
+    duck, on purpose), so they piled up one per job: on 2026-09-27 eight
+    finished MOSS trainees pinned the lab at ~90% of a core and /sim ran at
+    RTF 0.12. The newest is kept, as `reap_trainee_ducks` keeps the newest
+    job's: its finished card is still looked at after a restart, and a G1 job
+    once needed a restored trainee to guess its body. Newest by `createdAt`;
+    files from before it go by list order (a trainee joins the roster when
+    its job starts).
+    """
+    entries = list(state.get("ducks", []))
+    tr = [(i, e) for i, e in enumerate(entries) if is_trainee(str(e.get("id")))]
+    if len(tr) <= 1:
+        return entries
+    keep = max(tr, key=lambda ie: (ie[1].get("createdAt") is not None,
+                                   ie[1].get("createdAt") or 0.0, ie[0]))[0]
+    gone = {i for i, _ in tr} - {keep}
+    print(f"[lab] not restoring {len(gone)} finished trainee(s): "
+          + ", ".join(str(entries[i].get("id")) for i in sorted(gone)))
+    entries = [e for i, e in enumerate(entries) if i not in gone]
+    _atomic_write_json(path, {**state, "ducks": entries})
+    return entries
+
+
 def restore_ducks(path: Path) -> list[Duck]:
     """Rebuild the roster from lab-state.json. Training jobs die with the
     server, so a trainee/helper comes back frozen at its last live.onnx
     snapshot; entries whose brain can't be loaded any more are skipped."""
     state = json.loads(path.read_text())
+    entries = _newest_trainee_only(state, path)
     ducks: list[Duck] = []
-    for i, entry in enumerate(state.get("ducks", [])):
+    for i, entry in enumerate(entries):
         try:
             if entry.get("policy"):
                 infer = load_policy_infer(entry["policy"])
@@ -2311,6 +2481,8 @@ def restore_ducks(path: Path) -> list[Duck]:
                   f"{type(e).__name__}: {e}")
             continue
         duck.showcase = skw is not None
+        if entry.get("createdAt") is not None:
+            duck.created_at = float(entry["createdAt"])
         ho = handoff_for(run_path) if skw is not None else None
         duck.handoff_infer, duck.handoff_label = ho if ho else (None, None)
         ducks.append(duck)
@@ -2357,6 +2529,17 @@ class TeachReq(BaseModel):
     # initFrom.
     startStage: int | None = None
     initFrom: str | None = None               # run name under runs/ to fine-tune
+    #: Environment knobs for THIS job's trainer, `{"MICRODUCK_MOSS_PICK_RUNG":
+    #: "2"}`. Only `MICRODUCK_*` keys are accepted, because this reaches a
+    #: subprocess environment and nothing else here needs to.
+    #:
+    #: It exists for the case a curriculum cannot express: an `initFrom`
+    #: fine-tune has no stage, so it inherits the LAB's own environment and
+    #: therefore every env's DEFAULT rung. Continuing MOSS's shipped pickup —
+    #: which is 12/12 at rung 2 — would have retrained it at rung 0 and put
+    #: exactly the competence worth keeping at risk. A staged chain is
+    #: unaffected: `_stage_env` is merged last and still wins.
+    env: dict[str, str] | None = None
     # Which body to teach, as the panel's robot switch says. None = the old
     # rule (the trainee's body, else a one-robot roster, else the duck).
     robot: str | None = None
@@ -2377,6 +2560,7 @@ class StageWeightsReq(BaseModel):
     """POST /teach/weights — live per-stage weight edits on the ACTIVE job.
     Same shape as TeachReq.stageWeights; sent in full (it replaces the map)."""
     stageWeights: dict[str, dict[str, float]]
+    run: str | None = None
 
 
 class LoadRunReq(BaseModel):
@@ -2386,6 +2570,30 @@ class LoadRunReq(BaseModel):
     "ckpt:<name>@Nk") or a bare run name under runs/. Refused while a job is
     actively training."""
     policy: str
+
+
+def teach_env_knobs(requested: dict | None) -> dict[str, str]:
+    """A teach job's own env knobs — `MICRODUCK_*` and nothing else.
+
+    An ALLOW-LIST rather than a passthrough, because this dict lands in the
+    environment of a process this server spawns: a request must not be able
+    to set `PATH` or `PYTHONPATH` for it.
+
+    It exists for the one thing a curriculum cannot express. An `initFrom`
+    fine-tune has no stage, so it inherits the LAB's environment and with it
+    every env's DEFAULT rung — continuing MOSS's shipped pickup, which is
+    12/12 at rung 2, would have retrained it at rung 0 and put exactly the
+    competence worth keeping at risk. A staged chain is untouched: the
+    stage's own env is merged last and still wins.
+    """
+    out: dict[str, str] = {}
+    for k, v in (requested or {}).items():
+        if not str(k).startswith("MICRODUCK_"):
+            raise HTTPException(
+                422, f"env key {k!r} is not allowed — a teach job may set "
+                     "MICRODUCK_* knobs and nothing else")
+        out[str(k)] = str(v)
+    return out
 
 
 def resolve_stage_init(behavior_id: str, start_stage: int) -> Path:
@@ -2492,13 +2700,51 @@ class LabState:
         self.override: np.ndarray | None = None
         self.override_until = 0.0
         self.script_t = 0.0
-        self.job: TrainingJob | None = None
+        #: EVERY live teach job. The lab used to hold exactly one, and a
+        #: second /teach was refused outright — which was a software limit
+        #: rather than a machine one: MEASURED, one 32-env job costs 463% CPU,
+        #: about 4.6 of this machine's 18 usable cores, so two more fit
+        #: alongside it with room to spare. What is actually scarce is ENVS,
+        #: and `ENV_BUDGET` is what gets divided.
+        self.jobs: list[TrainingJob] = []
         # Bounded: events are drained only when a client is attached, so a
         # headless lab (a long training chain with no browser open) grew
         # this forever while only the last few are ever sent.
         self.events: deque[str] = deque(maxlen=200)  # one-shot toast lines for the UI
         self.scaling = False  # a spawn/remove scale is in flight — hold others
         self.stats: dict = {}
+
+    @property
+    def job(self) -> "TrainingJob | None":
+        """The NEWEST job, or None.
+
+        A property rather than a field so that every caller written when the
+        lab could only hold one job keeps working unchanged and keeps meaning
+        what it meant: with a single job this is that job. Callers that must
+        see all of them read `st.jobs`.
+        """
+        return self.jobs[-1] if self.jobs else None
+
+    @job.setter
+    def job(self, value: "TrainingJob | None") -> None:
+        if value is None:
+            if self.jobs:
+                self.jobs.pop()
+        elif (self.jobs and not self.jobs[-1].owns_preview_ducks
+              and self.jobs[-1].status not in ("training", "stopping", "restarting")):
+            # An inactive seat without preview ownership can be replaced.
+            # Keep launched cards so their ducks retain an owner.
+            # Appending unconditionally meant every /teach/load — the panel
+            # fires one on each duck selection — left another dead job behind.
+            self.jobs[-1] = value
+        else:
+            self.jobs.append(value)
+
+    def training_jobs(self) -> list["TrainingJob"]:
+        return [j for j in self.jobs if j.status in ("training", "stopping", "restarting")]
+
+    def envs_in_use(self) -> int:
+        return sum(j.envs for j in self.training_jobs())
 
     def duck(self, duck_id: str) -> Duck | None:
         return next((d for d in self.ducks if d.id == duck_id), None)
@@ -2513,6 +2759,102 @@ def helper_ducks(ducks: list[Duck]) -> list[Duck]:
     return [d for d in ducks if d.id.startswith("helper")]
 
 
+def helpers_for_job(st: "LabState", job: "TrainingJob") -> list[Duck]:
+    """Route helpers by their persisted live-policy path, including stage handoffs."""
+    out = []
+    match = _CHAIN_RE.match(job._base_name)
+    job_base = match.group(1) if match else job._base_name
+    for helper in helper_ducks(st.ducks):
+        path = getattr(helper, "onnx_path", None)
+        if not path:
+            # Legacy unassigned helpers follow the newest card only.
+            if job is st.job:
+                out.append(helper)
+            continue
+        name = Path(path).parent.name
+        match = _CHAIN_RE.match(name)
+        base = match.group(1) if match else name
+        if base == job_base:
+            out.append(helper)
+    return out
+
+
+def remove_job_preview(st: "LabState", job: "TrainingJob") -> None:
+    """Remove only a launched job's own preview, preserving concurrent runs."""
+    if not job.owns_preview_ducks:
+        return
+    doomed = {d.id for d in helpers_for_job(st, job)} | {job.trainee_id}
+    st.ducks = [d for d in st.ducks if d.id not in doomed]
+    save_lab_state(st.ducks)
+
+
+def is_trainee(duck_id: str) -> bool:
+    """Is this duck some job's training window?
+
+    There used to be exactly one, called "trainee", and a dozen places tested
+    for that literal. With several jobs training at once each needs its own
+    duck or they write over each other's preview, so the later ones are
+    "trainee2", "trainee3", … and every one of those tests goes through here.
+    """
+    return duck_id == "trainee" or bool(re.fullmatch(r"trainee\d+", duck_id))
+
+
+def next_trainee_slot(ducks: list[Duck], jobs: "list[TrainingJob]" = ()) -> str:
+    """The lowest free trainee id, so ids stay stable as jobs come and go.
+
+    A job CLAIMS its id at construction and only creates the duck afterwards,
+    so the ducks alone are not the full picture: asked twice in a row this
+    handed two concurrent jobs the same slot, and they would have written
+    over each other's preview window. The live jobs' claims count as used.
+    """
+    used = {d.id for d in ducks} | {
+        j.trainee_id for j in jobs
+        if j.status in ("training", "stopping", "restarting")}
+    if "trainee" not in used:
+        return "trainee"
+    n = 2
+    while f"trainee{n}" in used:
+        n += 1
+    return f"trainee{n}"
+
+
+def reap_trainee_ducks(st: "LabState") -> list[str]:
+    """Drop trainee ducks whose OWN job has finished, and those jobs with them.
+
+    When the lab held one job it reused one duck called "trainee" forever.
+    Per-job ids allocate a fresh one each time and nothing removed the old:
+    after nine starts the stage carried nine trainees, six of them identical
+    copies of a stopped approach run, each still stepping a full MuJoCo env
+    in the 50 Hz loop — the roster filled up and the CPU went with it.
+
+    A duck is reaped only when a job in `st.jobs` CLAIMS it and that job has
+    finished. A trainee duck that no job claims is left alone, because it is
+    almost certainly a restored one: after a lab restart `st.jobs` is empty
+    while `restore_ducks` has legitimately brought the roster back, and a
+    sweep that went by name alone deleted it — the same trap `teach_clear`
+    documents, which this walked into and which cost a G1 test its trainee
+    (the body guess then fell back to the duck and the job trained the wrong
+    robot).
+
+    The newest job keeps its duck whatever its status, so a finished run's
+    card can still be looked at and cleared by hand.
+    """
+    live = {j.trainee_id for j in st.jobs
+            if j.status in ("training", "stopping", "restarting")}
+    keep = live | ({st.job.trainee_id} if st.job else set())
+    # Only ids some job in the list actually claims are candidates.
+    claimed = {j.trainee_id for j in st.jobs} - keep
+    gone = [d.id for d in st.ducks if d.id in claimed]
+    if gone:
+        st.ducks[:] = [d for d in st.ducks if d.id not in gone]
+    # The finished jobs go too, except the newest — otherwise the list grows
+    # without bound and `envs_in_use` walks ever more dead entries.
+    newest = st.job
+    st.jobs[:] = [j for j in st.jobs
+                  if j.status in ("training", "stopping", "restarting") or j is newest]
+    return gone
+
+
 def next_helper_slot(ducks: list[Duck]) -> int:
     """Smallest free helper number — reusing freed slots keeps ids stable for
     the UI when helpers come and go out of order."""
@@ -2523,15 +2865,40 @@ def next_helper_slot(ducks: list[Duck]) -> int:
     return n
 
 
-def spawn_helper_error(st: LabState) -> str | None:
-    """Why {"spawn_helper": true} can't be honored right now (None = go)."""
-    if st.job is None or st.job.status not in ("training", "stopping"):
+def spawn_helper_job(st: LabState, run: str | None):
+    """The job a helper should join: the one NAMED, else the newest training.
+
+    The ＋ button sits on EVERY training row now that the lab runs several
+    jobs at once, but the message carried no name and the server took
+    `st.job` — the newest. Clicking ＋ on the older row silently added a
+    helper to the other run. Resolving by name here is what makes the two
+    rows mean different things; `None` keeps the old meaning for a caller
+    written when the lab held a single job.
+    """
+    live = [j for j in st.training_jobs() if j.status == "training"]
+    if run is None:
+        return live[-1] if live else None
+    return next((j for j in live if j.run_name == run), None)
+
+
+def spawn_helper_error(st: LabState, run: str | None = None) -> str | None:
+    """Why {"spawn_helper": ...} can't be honored right now (None = go)."""
+    # A job that is actually TRAINING, not merely the newest — the newest is
+    # often a finished one once the lab runs several at a time.
+    live = st.training_jobs()
+    if not live:
         return "no active training for a helper to join"
+    job = spawn_helper_job(st, run)
+    if job is None:
+        return f"no job named {run!r} is training"
     if st.scaling:
         return "trainer is mid-restart — try again in a moment"
+    # The cap is on the ROSTER, not on one job: helper ducks are a single
+    # pool (`helper1`, `helper2`, …) that no job owns. The viewer counts the
+    # same ducks, so the button's enabled state matches this answer.
     if len(helper_ducks(st.ducks)) >= MAX_HELPERS:
         return f"helper cap reached ({MAX_HELPERS})"
-    if not (st.job.dir / "model.zip").exists():
+    if not (job.dir / "model.zip").exists():
         return "helpers can join after the first training snapshot — moments away"
     return None
 
@@ -2546,7 +2913,14 @@ def remove_duck_error(st: LabState, duck_id: str) -> str | None:
     window. Helpers additionally wait out an in-flight trainer restart."""
     if st.duck(duck_id) is None:
         return f"no duck {duck_id}"
-    if duck_id == "trainee" and st.job and st.job.status in ("training", "stopping"):
+    # Is THIS duck's own job training? Asking whether the NEWEST job is
+    # refused every trainee duck on the stage the moment anything trained,
+    # including the orphans left behind by jobs that had already stopped —
+    # so the one pile the user most wanted to clear was the unclearable one.
+    if is_trainee(duck_id) and any(
+            getattr(j, "trainee_id", "trainee") == duck_id
+            and j.status in ("training", "stopping", "restarting")
+            for j in st.jobs):
         return "can't remove the trainee while it's training — stop the run first"
     if duck_id.startswith("helper") and st.scaling:
         return "trainer is mid-restart — try again in a moment"
@@ -2582,6 +2956,50 @@ def env_kwargs_for_behavior(b) -> dict:
     return kw
 
 
+def _body_env_kwargs(b, stage_env: dict[str, str] | None) -> dict:
+    """Ask the BODY to translate a stage's env knobs into env kwargs.
+
+    The trainer subprocess gets this for nothing: it inherits the variables
+    and `robots/<body>.train_env_kwargs` reads them. The preview runs
+    in-process, so they are staged into `os.environ` for the length of the
+    call and put back. Returns {} for a body with no such translation, which
+    is every body that has no ladder.
+    """
+    knobs = {k: v for k, v in (stage_env or {}).items()
+             if k.startswith("MICRODUCK_")}
+    if not knobs:
+        return {}
+    try:
+        from .robots import registry
+        body = registry.get(getattr(b, "robot", "microduck"))
+    except Exception:
+        return {}
+    fn = getattr(body, "train_env_kwargs", None)
+    if fn is None:
+        return {}
+    import types
+    prev = {k: os.environ.get(k) for k in knobs}
+    try:
+        os.environ.update(knobs)
+        return dict(fn(types.SimpleNamespace(task=getattr(b, "task", None))))
+    except (SystemExit, Exception):  # noqa: BLE001
+        # `SystemExit`, not just `Exception`: `train_env_kwargs` is the
+        # TRAINER's hook and a missing CLI flag is fatal THERE, spelled
+        # `raise SystemExit` (the G1's does it for `--task imitate` with no
+        # `--clip`). It is a `BaseException`, so `except Exception` let it out
+        # of a PREVIEW builder — reachable on any stage that carries a
+        # MICRODUCK_ knob, since the early return above skips this call when
+        # none do. Same fix and same reason as `lab/robots.slot_env`; found by
+        # checking every caller of the hook after fixing that one.
+        return {}
+    finally:
+        for k, old_v in prev.items():
+            if old_v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old_v
+
+
 def trainee_env_kwargs(b, stage_env: dict[str, str] | None = None) -> dict:
     """The 🎓 trainee's preview physics: the behavior's OWN env class (spawn
     families included) under the active curriculum stage's spawn knobs — the
@@ -2600,7 +3018,10 @@ def trainee_env_kwargs(b, stage_env: dict[str, str] | None = None) -> dict:
         # is simply that env, and the trainer's own knobs (command mix) are
         # its defaults. `task` is read by Duck._make_env.
         kw = {"task": b.task,
-              "max_episode_s": float(getattr(b, "episode_s", 10.0))}
+              "max_episode_s": float(getattr(b, "episode_s", 10.0)),
+              # Same rule as the duck below: the trainee previews the task
+              # the trainer is actually scoring, randomisation included.
+              "domain_rand": True, "obs_noise": True}
         # An imitation task tracks the SAME clip the trainer was handed, and
         # is judged at the same strictness rung (robots/g1_imitate).
         if (stage_env or {}).get("MICRODUCK_CLIP"):
@@ -2610,6 +3031,18 @@ def trainee_env_kwargs(b, stage_env: dict[str, str] | None = None) -> dict:
                 kw["lift_min_got"] = float(stage_env["MICRODUCK_G1_LIFT_MIN"])
             except ValueError:
                 pass
+        # ...AND EVERY OTHER KNOB THE BODY KNOWS HOW TO READ. The two special
+        # cases above were the only ones mirrored, so a stage or a /teach
+        # `env` dict that set anything else trained one task and PREVIEWED
+        # another — MOSS's curriculum trains rung 2 and the watched trainee
+        # ran the default rung 0, silently, because both look plausible.
+        # Found by a peer session hitting the same thing on the duck.
+        #
+        # `train_env_kwargs` is the body's OWN translation from environment
+        # variable to env kwarg, which the trainer subprocess gets for free
+        # by inheriting the environment. The preview is in-process, so the
+        # variables have to be staged around the call.
+        kw.update(_body_env_kwargs(b, stage_env))
         return kw
     overrides = dict(stage_env or {})
     probs_env = overrides.get("MICRODUCK_SPAWN_FAMILY_PROBS")
@@ -2626,6 +3059,15 @@ def trainee_env_kwargs(b, stage_env: dict[str, str] | None = None) -> dict:
                 "0.85" if p == max(probs) else f"{0.15 * p / rest:.3f}"
                 for p in probs)
     kw = {**env_kwargs_for_behavior(b), "behavior_id": b.id,
+          # MIRROR THE TRAINER, including the things that make the task hard.
+          # The preview used to inherit `common`'s domain_rand=False /
+          # obs_noise=False, so the watched duck practised a sanitised task:
+          # MOSS's can spawned upright EVERY episode while the trainer saw a
+          # 50/50 upright/lying mix, and the person watching reasonably
+          # concluded the robot only ever met one case. Three separate knobs
+          # were found wrong this way in one session, each patched by name;
+          # this is the rule instead of the third patch.
+          "domain_rand": True, "obs_noise": True,
           # The trainee/showcase preview mirrors the TRAINER's spawns, so it
           # drops the standing pin a plain assign carries.
           "standing_spawns": False,
@@ -2656,21 +3098,95 @@ def trainee_env_kwargs(b, stage_env: dict[str, str] | None = None) -> dict:
     return kw
 
 
-def on_stage_handoff(st: "LabState") -> None:
+def on_stage_handoff(st: "LabState", job: "TrainingJob | None" = None) -> None:
     """A curriculum stage just advanced: narrate it ("Training …" so the
     teach panel's event filter folds it into the chat) and re-mirror the
     trainee's preview env onto the NEW stage's spawn knobs — the trainer
     subprocess gets them via its environment, but the lab's in-process
-    preview needs them per instance or it keeps rehearsing the old stage."""
-    sp = st.job.stage_payload()
+    preview needs them per instance or it keeps rehearsing the old stage.
+
+    `job` names WHICH job advanced; it defaults to the newest for callers
+    written when there was only one. With several training at once the
+    newest is usually not the one that moved, and re-mirroring on its behalf
+    would rebuild another run's preview onto the wrong stage."""
+    job = job or st.job
+    if job is None:
+        return
+    sp = job.stage_payload()
     st.events.append(
         f"Training stage {sp['idx']}/{sp['count']} — {sp['label']}")
-    kw = trainee_env_kwargs(st.job.behavior, st.job.stage_env())
-    trainee = st.trainee()
+    kw = trainee_env_kwargs(job.behavior, job.stage_env())
+    trainee = st.duck(job.trainee_id)
     if trainee is not None:
         trainee.rebuild_env(kw)
-    for h in helper_ducks(st.ducks):  # helpers rehearse the same stage
+    for h in helpers_for_job(st, job):  # only this run's helpers change stage
         h.rebuild_env(kw)
+
+
+def poll_job(st: "LabState", job: "TrainingJob",
+             on_snapshot=None) -> None:
+    """Advance ONE job by a tick: poll it, narrate a stage handoff, relabel
+    its duck when it ends.
+
+    Split out of the lab loop so the loop can do this for every job and so
+    the behaviour is testable. The loop used to poll `st.job` alone — the
+    newest — and `TrainingJob.poll()` is what launches a chain's next stage,
+    so any other job stranded the moment its current stage finished: a stow
+    chain sat reading "training" with no trainer alive, stage 1 complete and
+    stage 2 never launched, because a later job had taken over `st.job`.
+    """
+    prev_status = job.status
+    prev_stage = job.stage_idx
+    _, snap = job.poll()
+    if snap and on_snapshot is not None:
+        on_snapshot(job)
+    if job.stage_idx != prev_stage:
+        on_stage_handoff(st, job)
+    if job.status != prev_status and job.status in ("done", "stopped",
+                                                    "failed"):
+        # THIS job's own duck: with several training at once `st.trainee()`
+        # is some other run's window, and relabelling it would put a
+        # finished run's name on a duck that is still practising.
+        t = st.duck(job.trainee_id)
+        if t is not None:
+            short = job.run_name.removeprefix("teach-")
+            mark = {"done": "✔", "stopped": "■", "failed": "✗"}[job.status]
+            checkpoint = job.progress.get("lastCheckpointStep")
+            suffix = f" @{checkpoint:,}" if checkpoint is not None else ""
+            t.label = f"{job.behavior.emoji} {short}{suffix} {mark}"
+            # Preview goes back to ordinary standing spawns once the run
+            # ends — mid-trick drops mirror TRAINING; a finished trick shows
+            # off from its feet.
+            t.rebuild_env(env_kwargs_for_behavior(job.behavior))
+            save_lab_state(st.ducks)
+        st.events.append(f"training {job.status} — saved as {job.run_name}")
+
+
+def snapshot_targets(st: "LabState", job: "TrainingJob") -> list:
+    """The ducks that should receive THIS job's latest snapshot.
+
+    Its own preview duck, plus only the helpers assigned to this run. It used to be every duck whose id looked
+    like a trainee, fed from the NEWEST job — so with two jobs training, one
+    run's brain was loaded into the other run's window and a stow trainee
+    could be watched practising the approach policy.
+    """
+    mine = st.duck(job.trainee_id)
+    targets = list(helpers_for_job(st, job))
+    if mine is not None:
+        targets.append(mine)
+    return targets
+
+
+def poll_all(st: "LabState", on_snapshot=None) -> None:
+    """Advance EVERY live job by a tick.
+
+    The lab loop called this for `st.job` alone, and since
+    `TrainingJob.poll()` is what launches a chain's next stage, every other
+    job stranded the moment its stage finished. `list(...)` because a poll
+    can retire a job.
+    """
+    for job in list(st.jobs):
+        poll_job(st, job, on_snapshot=on_snapshot)
 
 
 def env_kwargs_for_task_run(run: Path) -> dict:
@@ -2856,7 +3372,7 @@ def is_trick_duck(d: Duck) -> bool:
     them drive commands, and the UI surfaces them as non-steerable (a fully
     decluttered roster of trick ducks once made WASD look broken: every
     command was correctly ignored by everyone)."""
-    if d.id == "trainee" or d.id.startswith("helper"):
+    if is_trainee(d.id) or d.id.startswith("helper"):
         # trainee/helpers mirror the ACTIVE job; the loop already sends drive
         # commands to locomotion behaviors via the env.behavior check.
         return True
@@ -3362,7 +3878,7 @@ def origin_allowed(origin: str | None) -> bool:
     return origin is None or bool(LOCAL_ORIGIN_RE.fullmatch(origin))
 
 
-def make_app(ducks: list[Duck]):
+def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
     scene = extract_scene()
     st = LabState(ducks)
     stats = StatsSampler()
@@ -3380,11 +3896,11 @@ def make_app(ducks: list[Duck]):
             training_lock.release()
 
     @contextmanager
-    def training_slot():
+    def training_slot(*, allow_local: bool = False):
         # Reserve before any provider network request. Browser state can be
         # stale or two tabs can submit at once; only the server can arbitrate.
         with submission_slot():
-            if ((st.job and st.job.status in ("training", "stopping")) or
+            if ((not allow_local and st.training_jobs()) or
                     any(job.get("released") is not True for job in cloud.list()) or
                     any(job.get("released") is not True for job in list(hf_cloud.jobs.values()))):
                 raise HTTPException(409, "Stop the current training job and confirm cloud release first")
@@ -3393,6 +3909,28 @@ def make_app(ducks: list[Duck]):
     # Ducks apply_snapshot has already refused to re-brain, so the reason is
     # said once instead of at every snapshot. Cleared when a new job starts.
     snapshot_skipped: set[str] = set()
+
+    async def idle_watch(limit_s: float) -> None:
+        """`--idle-exit`: shut the lab down once nobody has watched /lab or
+        /sim and nothing has trained for `limit_s`. SIGTERM, so uvicorn runs
+        the lifespan's shutdown like a Ctrl-C would."""
+        import signal
+        watch = IdleWatch(limit_s)
+        polled = time.monotonic()
+        while True:
+            await asyncio.sleep(min(IDLE_POLL_S, limit_s))
+            now = time.monotonic()
+            # An HTTP request counts as someone using the lab: an agent that
+            # drives /world/load and /world/speed and reads results over REST
+            # never opens a socket, and must not be shut down mid-experiment.
+            busy = bool(st.clients or world.clients or st.training_jobs()
+                        or app.state.last_request > polled)
+            polled = now
+            if watch.update(busy, now):
+                print(f"[lab] nobody watching and nothing training for "
+                      f"{limit_s / 60:g} min — exiting (--idle-exit)", flush=True)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -3413,17 +3951,19 @@ def make_app(ducks: list[Duck]):
                       "sent. Restart the lab.", flush=True)
 
         task.add_done_callback(_loop_died)
+        idle_task = (asyncio.create_task(idle_watch(idle_exit_s))
+                     if idle_exit_s > 0 else None)
         try:
             yield
         finally:
             task.cancel()
+            if idle_task is not None:
+                idle_task.cancel()
             try:
                 world.stop()
-                if st.job:
-                    st.job.stop(force=True)
+                for j in st.jobs:
+                    j.stop(force=True)
             finally:
-                # Attempt BOTH providers even if one fails. Pending releases
-                # remain recorded so the next lab session can retry them.
                 results = await asyncio.gather(
                     asyncio.to_thread(cloud.shutdown),
                     asyncio.to_thread(hf_cloud.stop_all, load_hf_token()),
@@ -3437,6 +3977,13 @@ def make_app(ducks: list[Duck]):
 
     app = FastAPI(title="Duck lab", lifespan=lifespan)
     app.state.lab = st  # the roster/job the handlers close over, for tests
+    #: When the last HTTP request arrived — `--idle-exit`'s evidence of use.
+    app.state.last_request = time.monotonic()
+
+    @app.middleware("http")
+    async def _stamp_request(request, call_next):
+        app.state.last_request = time.monotonic()
+        return await call_next(request)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     # LOCAL origins only. This was allow_origins=["*"], which was harmless
     # while every route was a read or a duck nudge — but the lab now owns
@@ -3542,20 +4089,15 @@ def make_app(ducks: list[Duck]):
         # deleted dir, and its \u2728 fine-tune launched against nothing.
         for gone in result["deleted"]:
             _TRICK_DUCK_CACHE.pop(gone, None)
-        if st.job is not None and st.job.run_name in set(result["deleted"]):
-            owned = st.job.owns_preview_ducks
-            st.job = None
-            # ...and its preview ducks go with it — but ONLY if this card
-            # actually built them. A seated card (teach/load, fired by mere
-            # duck selection) may be showing run B while the trainee and
-            # helpers on the pitch belong to run A and still preview it; those
-            # must survive B's deletion. Same ownership rule teach_clear uses.
-            if owned:
-                kept = [d for d in st.ducks
-                        if d.id != "trainee" and not d.id.startswith("helper")]
-                if len(kept) != len(st.ducks):
-                    st.ducks = kept
-                    save_lab_state(st.ducks)
+        # Find the job whose run was deleted — ANY of them, not just the
+        # newest. With several jobs the card left streaming for a deleted dir
+        # was as likely to be an older one, and its fine-tune then launched
+        # against nothing.
+        hit = next((j for j in st.jobs
+                    if j.run_name in set(result["deleted"])), None)
+        if hit is not None:
+            remove_job_preview(st, hit)
+            st.jobs.remove(hit)
         mb = result["freedBytes"] / 1e6
         st.events.append(
             f"\U0001f5d1 deleted {name}"
@@ -4016,14 +4558,28 @@ def make_app(ducks: list[Duck]):
 
     @app.post("/teach")
     async def teach(req: TeachReq) -> dict:
-        if st.job and st.job.status in ("training", "stopping"):
-            return {"matched": False,
-                    "message": f"Already teaching “{st.job.display_title()}” — stop it first.",
-                    "busy": True}
-        with training_slot():
+        with training_slot(allow_local=True):
             return await start_local_training(req)
 
     async def start_local_training(req: TeachReq) -> dict:
+        # CONCURRENCY, not a single slot. The lab used to refuse any second
+        # /teach outright; what it refuses now is a job it has no envs for.
+        # One 32-env job measured 463% CPU of this machine's 18 usable cores,
+        # so the limit that matters is the env budget, not a count of jobs.
+        # Clear out finished jobs and their ducks first: their slots are free
+        # and their envs are not in use, so the budget below sees the truth.
+        reaped = reap_trainee_ducks(st)
+        if reaped:
+            st.events.append(f"Cleared {len(reaped)} finished trainee(s)")
+        live = st.training_jobs()
+        free = env_budget() - st.envs_in_use()
+        if live and free < MIN_JOB_ENVS:
+            busy = ", ".join(f"“{j.display_title()}”" for j in live)
+            return {"matched": False,
+                    "message": f"No room to train: {busy} already using "
+                               f"{st.envs_in_use()} of {env_budget()} envs. "
+                               "Stop one first.",
+                    "busy": True}
         # Pick up recipe edits without a server restart: the training
         # subprocess always imports behaviors.py fresh, so reloading here keeps
         # the card/sliders in step with what the run will actually train.
@@ -4063,9 +4619,15 @@ def make_app(ducks: list[Duck]):
         # Duck recipes name duck joints, duck feet and the 61-obs command
         # slots — they are not portable, so the registry is filtered rather
         # than the trainer being asked to cope.
-        trainee = st.trainee()
+        # The body guess follows the duck of a job that is actually TRAINING,
+        # not the one literally called "trainee" — with several jobs running
+        # that duck may belong to someone else's run and would offer the
+        # wrong body's tasks.
+        live_jobs = st.training_jobs()
+        trainee = (st.duck(live_jobs[-1].trainee_id) if live_jobs
+                   else st.trainee())
         robots = {getattr(d, "robot", "microduck") for d in st.ducks
-                  if d.id != "trainee"}
+                  if not is_trainee(d.id)}
         robot = (getattr(trainee, "robot", None)
                  or (robots.pop() if len(robots) == 1 else "microduck"))
         # The panel's robot switch is an explicit choice and beats the guess
@@ -4185,6 +4747,7 @@ def make_app(ducks: list[Duck]):
                        else prev_sticky["weights"] or None)
         stage_weights = (req.stageWeights if req.stageWeights is not None
                          else prev_sticky["stageWeights"] or None)
+        job_env = teach_env_knobs(req.env)
         # Same "same as I had it" rule for the practice budget.
         budget = req.steps if req.steps is not None else prev_sticky["steps"]
         stage_budgets = (req.stageSteps if req.stageSteps is not None
@@ -4193,10 +4756,16 @@ def make_app(ducks: list[Duck]):
         # can run tiny jobs without touching the behavior library's budgets.
         steps = os.environ.get("TEACH_STEPS_OVERRIDE")
         snap = os.environ.get("TEACH_SNAP_OVERRIDE")
+        protected = {h.id for j in st.training_jobs()
+                     for h in helpers_for_job(st, j)}
+        available_helpers = [h for h in helper_ducks(st.ducks) if h.id not in protected]
         st.job = TrainingJob(
             b.id,
+            # What is left of the budget, capped at a full-size job.
+            envs=max(MIN_JOB_ENVS, min(BASE_ENVS, free)),
+            trainee_id=next_trainee_slot(st.ducks, st.jobs),  # after the reap
             # Helpers already on the lab pitch in from step one.
-            helpers=len(helper_ducks(st.ducks)),
+            helpers=len(available_helpers),
             steps=int(steps) if steps else None,
             snap_steps=int(snap) if snap else None,
             weights=weights,
@@ -4204,7 +4773,8 @@ def make_app(ducks: list[Duck]):
             stage_weights=stage_weights,
             start_stage=start_stage,
             stage_init_from=stage_init,
-            extra_env=({"MICRODUCK_CLIP": clip} if clip else None),
+            extra_env={**({"MICRODUCK_CLIP": clip} if clip else {}),
+                       **job_env},
             budget=budget,
             stage_budgets=stage_budgets,
         )
@@ -4233,13 +4803,20 @@ def make_app(ducks: list[Duck]):
         # the ACTIVE stage's spawn knobs (see requirement A / _spawn_knob).
         ekw = trainee_env_kwargs(b, st.job.stage_env())
         zero = _zero_infer_for(b.robot)
-        if st.trainee() is None:
-            st.ducks.append(Duck("trainee", label, zero, seed=97,
+        # THIS job's duck, not `st.trainee()`. That helper answers the duck
+        # literally called "trainee", so a second concurrent job — whose own
+        # duck is "trainee2" — reconfigured the FIRST job's window instead:
+        # set_robot, rebuild_env and swap_policy all landed on another run's
+        # preview, which is how you get one duck showing another job's body
+        # and brain while its own run is invisible.
+        mine = st.duck(st.job.trainee_id)
+        if mine is None:
+            st.ducks.append(Duck(st.job.trainee_id, label, zero, seed=97,
                                  onnx_path=live, env_kwargs=ekw, robot=b.robot))
         else:
-            st.trainee().set_robot(b.robot)
-            st.trainee().rebuild_env(ekw)
-            st.trainee().swap_policy(label, zero, onnx_path=live)
+            mine.set_robot(b.robot)
+            mine.rebuild_env(ekw)
+            mine.swap_policy(label, zero, onnx_path=live)
         # Helpers are clones of the trainee, so they follow it to the job's
         # BODY exactly as it does — set_robot, rebuild, re-brain. This used
         # to skip every helper unless the job was a duck's ("rebuilding a
@@ -4248,7 +4825,7 @@ def make_app(ducks: list[Duck]):
         # brain in the same breath is what makes it safe. Skipping left a
         # 61-obs helper on the roster of a 99-obs run — stepping the previous
         # job's ONNX, and first in line for that run's snapshots.
-        for h in helper_ducks(st.ducks):
+        for h in available_helpers:
             h.set_robot(b.robot)
             h.rebuild_env(ekw)  # helpers mirror the stage from step one too
             # ...and the BRAIN too, like the trainee above. Rebuilding only
@@ -4284,14 +4861,9 @@ def make_app(ducks: list[Duck]):
 
         Poll this instead: `running` is the one field a waiter needs.
         """
-        j = st.job
-        if j is None:
-            return {"running": False, "status": "idle", "job": None}
-        prog = j.progress or {}
-        return {
-            "running": j.status in ("training", "stopping"),
-            "status": j.status,          # training | done | stopped | failed
-            "job": {
+        def payload(j) -> dict:
+            prog = j.progress or {}
+            return {
                 "behavior": j.behavior.id,
                 "title": j.display_title(),
                 "runName": j.run_name,
@@ -4301,7 +4873,26 @@ def make_app(ducks: list[Duck]):
                 "total": prog.get("total"),
                 **{key: j.payload()["progress"].get(key) for key in
                    ("lastCheckpointStep", "nextSnapStep", "etaSeconds", "sps")},
-            },
+                "status": j.status,
+                "envs": j.envs,
+                "trainee": j.trainee_id,
+            }
+
+        live = st.training_jobs()
+        budget = {"used": st.envs_in_use(), "total": env_budget()}
+        j = st.job
+        if j is None:
+            return {"running": False, "status": "idle", "job": None,
+                    "jobs": [], "envBudget": budget}
+        # `running` and `job` keep their old single-job meaning — a waiter
+        # written against them still works — and `jobs` is every live job,
+        # because the lab can now train several at once.
+        return {
+            "running": bool(live),
+            "status": j.status,          # training | done | stopped | failed
+            "job": payload(j),
+            "jobs": [payload(x) for x in st.jobs],
+            "envBudget": budget,
         }
 
     @app.get("/health")
@@ -4310,60 +4901,93 @@ def make_app(ducks: list[Duck]):
         return {"ok": True, "service": "duck-lab", "port": 8788}
 
     @app.post("/teach/stop")
-    async def teach_stop(force: bool = False) -> dict:
-        if st.job and st.job.status in ("training", "stopping"):
-            st.job.stop(force=force)
-            st.events.append("Training force terminated" if force else "Training saving checkpoint")
-        return {"ok": True, "status": st.job.status if st.job else "idle"}
+    async def teach_stop(req: dict | None = None, force: bool = False) -> dict:
+        """Stop training. Every job by default, or one named by `run`.
+
+        Stopping everything is what this did when the lab held a single job,
+        and a caller that has not heard of concurrency still means that.
+        """
+        want = (req or {}).get("run")
+        every = bool((req or {}).get("all"))
+        live = st.training_jobs()
+        # An UNNAMED stop with several jobs training refuses rather than
+        # guessing. It used to mean "stop the one job", and when the lab
+        # gained concurrency that silently became "stop everything": the
+        # viewer's stop button sends no name, so one click on one card
+        # killed all three live runs, one of them another session's work.
+        if want is None and not every and len(live) > 1:
+            names = ", ".join(f"{j.run_name} (“{j.display_title()}”)"
+                              for j in live)
+            return {"ok": False, "stopped": [],
+                    "message": f"{len(live)} jobs are training: {names}. "
+                               'Name one with {"run": ...}, or pass '
+                               '{"all": true} to stop every one.'}
+        hit = [j for j in st.jobs if want is None or j.run_name == want]
+        if want is not None and not hit:
+            return {"ok": False, "message": f"no job named {want!r}"}
+        for j in hit:
+            j.stop(force=force)
+        if hit:
+            st.events.append(
+                "Training stopped" if want is None
+                else f"Stopped “{hit[0].display_title()}”")
+        return {"ok": True, "stopped": [j.run_name for j in hit],
+                "status": st.job.status if st.job else "idle"}
 
     @app.post("/teach/resume")
     async def teach_resume(req: ResumeReq) -> dict:
-        with training_slot():
-            if st.job is None or st.job.run_name != req.runName:
+        with training_slot(allow_local=True):
+            job = next((j for j in st.jobs if j.run_name == req.runName), None)
+            adopted = job is None
+            if adopted:
                 try:
                     run_dir(req.runName)
                     job = TrainingJob.adopt(req.runName)
                 except (ValueError, OSError) as e:
                     raise HTTPException(422, str(e))
-            else:
-                job = st.job
+            reason = job.resume_reason()
+            if reason:
+                raise HTTPException(409, reason)
+            if st.envs_in_use() + job.envs > env_budget():
+                raise HTTPException(409, "No room to resume: stop another local job first")
+            needs_preview = not job.owns_preview_ducks or st.duck(job.trainee_id) is None
+            if needs_preview:
+                job.trainee_id = next_trainee_slot(st.ducks, st.jobs)
             reason = job.resume()
             if reason:
                 raise HTTPException(409, reason)
-            st.job = job
+            if not adopted:
+                st.jobs.remove(job)
+            st.jobs.append(job)
+            if needs_preview:
+                live = job.dir / "live.onnx"
+                infer = _onnx_infer(live) if live.is_file() else _zero_infer_for(job.behavior.robot)
+                st.ducks.append(Duck(
+                    job.trainee_id, f"🎓 {job.display_title()}", infer, seed=97,
+                    onnx_path=str(live), robot=job.behavior.robot,
+                    env_kwargs=trainee_env_kwargs(job.behavior, job.stage_env())))
+                job.owns_preview_ducks = True
+            preview = trainee_env_kwargs(job.behavior, job.stage_env())
+            st.duck(job.trainee_id).rebuild_env(preview)
+            for helper in helpers_for_job(st, job):
+                helper.rebuild_env(preview)
+            save_lab_state(st.ducks)
             st.events.append(f"Training resumed from checkpoint — {job.run_name}")
             return {"ok": True, "job": job.payload()}
 
     @app.post("/teach/clear")
-    async def teach_clear() -> dict:
-        """Dismiss a FINISHED (or stopped/failed) training card.
-
-        The teach panel's 🗑 cleared only the chat; the finished-run card kept
-        coming back because every frame carries the job payload for as long as
-        st.job exists ("when I hit the trash can it should clear out the
-        spin"). A running job is deliberately NOT cleared — stop it first.
-        """
-        if st.job is None:
-            # Deliberately does NOT sweep trainee/helper ducks here: after a
-            # lab restart st.job is always None while restore_ducks has legit-
-            # imately brought those ducks back, and 🗑 is always rendered — so
-            # purging on this path silently deleted a restored roster. The
-            # genuine orphan case (DELETE /runs clearing a seated card) is
-            # handled where it happens, in the delete route.
+    async def teach_clear(req: dict | None = None) -> dict:
+        """Dismiss a finished card and only the preview that card owns."""
+        want = (req or {}).get("run")
+        job = (next((j for j in st.jobs if j.run_name == want), None)
+               if want is not None else st.job)
+        if job is None:
             return {"ok": True, "cleared": False}
-        if st.job.status in ("training", "stopping", "restarting"):
+        if job.status in ("training", "stopping", "restarting"):
             return {"ok": False, "cleared": False,
                     "message": "still training — stop it first"}
-        owned = st.job.owns_preview_ducks
-        st.job = None
-        if owned:
-            # The trainee/helper ducks are this job's artifacts; they go with
-            # it. A merely SEATED run (teach/load, which the panel fires on
-            # duck selection) owns nothing and leaves the roster alone.
-            st.ducks = [d for d in st.ducks
-                        if d.id != "trainee" and not d.id.startswith("helper")]
-            # Persist, like every other roster mutation (assign/spawn/remove).
-            save_lab_state(st.ducks)
+        remove_job_preview(st, job)
+        st.jobs.remove(job)
         st.events.append("Training card cleared")
         return {"ok": True, "cleared": True}
 
@@ -4372,9 +4996,10 @@ def make_app(ducks: list[Duck]):
         """Pull a finished run's recipe up in the teach panel (see LoadRunReq).
         The viewer calls this when a duck running a teach-run policy is
         selected, or a policy chip is dropped on the teach panel."""
-        if st.job and st.job.status in ("training", "stopping"):
+        live = st.training_jobs()
+        if live:
             return {"ok": False,
-                    "message": f"Already teaching “{st.job.display_title()}” — "
+                    "message": f"Already teaching “{live[-1].display_title()}” — "
                                "stop it first."}
         # "run:<name>" / "ckpt:<name>@123k" / bare name → the run dir name.
         name = req.policy.split(":", 1)[-1].split("@", 1)[0]
@@ -4409,15 +5034,13 @@ def make_app(ducks: list[Duck]):
         except Exception as e:
             return {"ok": False, "message": f"behaviors.py didn't load: {e}"}
         _TRICK_DUCK_CACHE.clear()
-        # Carry ownership across the swap: the OUTGOING job may have created
-        # the trainee/helpers still on the roster, and seating a different run
-        # (which the panel does on mere duck selection) must not orphan them
-        # beyond the reach of 🗑.
-        inherited = st.job is not None and st.job.owns_preview_ducks
         try:
-            st.job = TrainingJob.adopt(name)
-            if inherited:
-                st.job.owns_preview_ducks = True
+            existing = next((j for j in st.jobs if j.run_name == name), None)
+            if existing is not None:
+                st.jobs.remove(existing)
+                st.jobs.append(existing)
+            else:
+                st.job = TrainingJob.adopt(name)
         except ValueError as e:
             return {"ok": False, "message": str(e)}
         except OSError:
@@ -4438,10 +5061,13 @@ def make_app(ducks: list[Duck]):
         count is exactly that restart (terminate, relaunch --init-from the
         stage's own snapshot, or its inherited warm start before the first
         snapshot lands)."""
-        job = st.job
+        job = (next((j for j in st.jobs if j.run_name == req.run), None)
+               if req.run is not None else st.job)
         if job is None or not job.stages:
             return {"ok": False,
                     "message": "no staged training job to set stage weights on"}
+        if job.status == "stopping":
+            return {"ok": False, "message": "training is saving — wait before editing weights"}
         if st.scaling:
             return {"ok": False,
                     "message": "trainer is mid-restart — try again in a moment"}
@@ -4499,12 +5125,18 @@ def make_app(ducks: list[Duck]):
                     for d in st.ducks:
                         d.reset()
                         d.falls = 0
+                        d.wins = 0
                 if "assign" in msg:
                     a = msg["assign"]
                     asyncio.create_task(do_assign(str(a.get("duck")), str(a.get("policy")),
                                                   showcase=bool(a.get("showcase"))))
                 if msg.get("spawn_helper"):
-                    asyncio.create_task(do_spawn_helper())
+                    sh = msg["spawn_helper"]
+                    # `true` still means the newest job, which is what a
+                    # viewer written before concurrency means by it.
+                    _run = sh.get("run") if isinstance(sh, dict) else None
+                    asyncio.create_task(do_spawn_helper(
+                        str(_run) if _run else None))
                 if "remove_duck" in msg:
                     rd = msg["remove_duck"]
                     duck_id = rd.get("duck") if isinstance(rd, dict) else rd
@@ -4583,15 +5215,19 @@ def make_app(ducks: list[Duck]):
                          + (f" ({run_name})" if label != run_name else ""))
         save_lab_state(st.ducks)
 
-    async def do_spawn_helper() -> None:
-        err = spawn_helper_error(st)
+    async def do_spawn_helper(run: str | None = None) -> None:
+        err = spawn_helper_error(st, run)
         if err:
             st.events.append(f"spawn_helper ignored: {err}")
             return
         st.scaling = True
         n = next_helper_slot(st.ducks)
         try:
-            job = st.job
+            # The job the click NAMED, not `st.job` — see `spawn_helper_job`.
+            job = spawn_helper_job(st, run)
+            if job is None:          # raced with that run ending
+                st.events.append("helper not spawned: that run just ended")
+                return
             # WHICH BODY — the job's, same as the 🎓 trainee's. A helper is a
             # clone of the trainee, and without this it was built as a duck
             # whatever was being taught: for a G1 task `trainee_env_kwargs`
@@ -4609,7 +5245,7 @@ def make_app(ducks: list[Duck]):
                 # races us, the helper idles until the next snapshot lands.
                 # _zero_infer_for, not _zero_infer: the latter emits 14 floats
                 # for every body and a 29-joint env rejects that outright.
-                infer, onnx_path = _zero_infer_for(robot), None
+                infer, onnx_path = _zero_infer_for(robot), str(live)
             # Same stage-mirrored preview env as the trainee: helpers rehearse
             # the same run, and a helper standing calmly next to a trainee
             # dropped mid-roll reads as "the helpers didn't get the fixes"
@@ -4739,13 +5375,18 @@ def make_app(ducks: list[Duck]):
     app.state.do_spawn_robot = do_spawn_robot
     app.state.do_spawn_helper = do_spawn_helper
 
-    async def apply_snapshot() -> None:
-        job = st.job
+    async def apply_snapshot(job: "TrainingJob | None" = None) -> None:
+        job = job or st.job
         if not job:
             return
-        # The trainee and every helper track the same latest snapshot.
-        targets = [d for d in st.ducks
-                   if d.id == "trainee" or d.id.startswith("helper")]
+        # THIS job's own preview duck, plus the helpers. It used to take the
+        # newest job and fan its snapshot onto every duck whose id looked
+        # like a trainee — so with two jobs training, one run's brain was
+        # loaded into the other run's window and a stow trainee would be
+        # seen practising the approach policy. The helpers still follow the
+        # job that owns them (they are clones of its trainee); with several
+        # jobs only the newest has any, because `/teach` re-mirrors them.
+        targets = snapshot_targets(st, job)
         if not targets:
             return
         try:
@@ -4787,7 +5428,7 @@ def make_app(ducks: list[Duck]):
             # rebuilding from the generic recipe name here quietly renamed the
             # duck back to "Copy the animation" at the first snapshot.
             label = (f"🎓 学员 · {job.display_title()} · 快照 @{job.progress.get('lastCheckpointStep', steps):,}"
-                     if d.id == "trainee" and job.status in ("training", "stopping")
+                     if is_trainee(d.id) and job.status in ("training", "stopping")
                      else d.label)
             d.swap_policy(label, infer, onnx_path=live)
         st.events.append(f"Trainee updated to {steps // 1000}k steps")
@@ -4826,7 +5467,7 @@ def make_app(ducks: list[Duck]):
                 st.script_t = 0.0
                 for d in st.ducks:
                     d.reset()
-            training = bool(st.job and st.job.status in ("training", "stopping"))
+            training = bool(st.training_jobs())
             doomed: list[Duck] = []
             for d in st.ducks:
                 # Trick policies (trainee/helpers, and anything assigned from a
@@ -4871,41 +5512,25 @@ def make_app(ducks: list[Duck]):
                 doomed.clear()
             tick += 1
             if tick % 50 == 0:  # ~1 Hz: training poll + system stats
-                if st.job:
-                    prev_status = st.job.status
-                    prev_stage = st.job.stage_idx
-                    _, snap = st.job.poll()
-                    if snap:
-                        asyncio.create_task(apply_snapshot())
-                    if st.job.stage_idx != prev_stage:
-                        # Narrate the handoff + re-mirror the trainee's
-                        # preview env onto the new stage's spawn knobs.
-                        on_stage_handoff(st)
-                    if st.job.status != prev_status and st.job.status in (
-                        "done", "stopped", "failed"
-                    ):
-                        # 🎓 means "actively training" — a finished trainee
-                        # relabels to its run hash so the row matches the
-                        # palette entry (a user read the lingering 🎓 label
-                        # as a live-but-stuck run).
-                        t = st.trainee()
-                        if t is not None:
-                            short = st.job.run_name.removeprefix("teach-")
-                            mark = {"done": "✔", "stopped": "■", "failed": "✗"}[
-                                st.job.status]
-                            checkpoint = st.job.progress.get("lastCheckpointStep")
-                            suffix = f" @{checkpoint:,}" if checkpoint is not None else ""
-                            t.label = f"{st.job.behavior.emoji} {short}{suffix} {mark}"
-                            # Preview goes back to ordinary standing spawns
-                            # once the run ends — mid-trick drops mirror
-                            # TRAINING; a finished trick shows off from its
-                            # feet.
-                            t.rebuild_env(
-                                env_kwargs_for_behavior(st.job.behavior))
-                            save_lab_state(st.ducks)
-                        st.events.append(
-                            f"training {st.job.status} — saved as {st.job.run_name}")
-                st.stats = stats.sample(st.job)
+                # EVERY job, not just the newest. `TrainingJob.poll()` is
+                # what launches a chain's next stage, so polling only
+                # `st.job` left every other job stranded the moment its
+                # current stage finished: a stow chain sat at "training"
+                # with no trainer alive, stage 1 complete and stage 2 never
+                # started, because a later job had taken over `st.job`.
+                # EVERY job's snapshot goes to ITS OWN duck: gating this on
+                # `j is st.job` meant a second job's preview never updated at
+                # all, and the snapshot it did get belonged to another run.
+                poll_all(st, on_snapshot=lambda j: asyncio.create_task(
+                    apply_snapshot(j)))
+                # The stats strip reports ONE job's steps/s, and it has to be
+                # one that is actually TRAINING. Reporting the newest said
+                # "train ✔ done" while another job was mid-chain — a user
+                # reasonably read that as nothing running and asked whether
+                # training was broken. Prefer a live job; fall back to the
+                # newest so a finished run still shows its result.
+                live = st.training_jobs()
+                st.stats = stats.sample(live[0] if live else st.job)
             if tick % SEND_EVERY == 0 and st.clients:
                 # Stage layout, once per frame — every slot pitched by its own
                 # robot. The viewer draws what this says and only falls back to
@@ -4916,7 +5541,20 @@ def make_app(ducks: list[Duck]):
                     "cmd": [round(float(v), 3) for v in cmd],
                     "mode": mode,
                     "stats": st.stats,
+                    # `training` stays the NEWEST job, so a viewer written
+                    # when the lab held one keeps working unchanged;
+                    # `trainings` is every live job, for one that knows the
+                    # lab can now train several at once.
                     "training": st.job.payload() if st.job else None,
+                    "trainings": [j.payload() for j in st.jobs],
+                    "envBudget": {"used": st.envs_in_use(), "total": env_budget(),
+                                  "minJob": MIN_JOB_ENVS},
+                    # A spawn/remove scale is in flight. GLOBAL, because
+                    # `remove_duck_error`'s helper guard is global: without
+                    # it the viewer had to guess from the newest job's own
+                    # `restarting`, and disabled a helper's ✕ because some
+                    # OTHER job was restarting.
+                    "scaling": st.scaling,
                     "events": list(st.events)[-5:],
                     "ducks": [{
                         "id": d.id,
@@ -4932,6 +5570,7 @@ def make_app(ducks: list[Duck]):
                         # run into the teach panel (POST /teach/load).
                         "policy": d.policy_id,
                         "falls": d.falls,
+                        "wins": d.wins,
                         # `steers()` FIRST: a trick policy is one a duck
                         # ignores commands on, but an arm env and a
                         # kinematic idle have no command channel at all, so
@@ -4959,7 +5598,45 @@ def make_app(ducks: list[Duck]):
                         # Task objects that live in the env, not the
                         # physics: the find_ball ball as [x, y, z, r] so
                         # the viewer can draw what the duck is looking for.
-                        "ball": behaviors_mod.ball_marker_payload(d.env),
+                        # An env may answer for its OWN object: a MOSS
+                        # trainee is practising on a can, not a ball, and the
+                        # viewer's field is the same either way ([x, y, z, r]
+                        # in the trainee's world frame). Asked of the env
+                        # rather than branched on the body here, so a fifth
+                        # robot's object needs no edit in this file.
+                        "ball": (d.env.marker_payload()
+                                 if hasattr(d.env, "marker_payload")
+                                 else behaviors_mod.ball_marker_payload(d.env)),
+                        # ...and WHERE THE POLICY THINKS IT IS, as
+                        # [x, y, z, conf, seen] — the four head slots' own
+                        # belief, so the lab draws truth and belief together
+                        # while the thing is still training. A sensed recipe
+                        # acts on the belief and never on the ball, and the
+                        # gap between them is the only thing that explains a
+                        # policy walking confidently at nothing. None for a
+                        # recipe with no such slots (the blind kicks, every
+                        # trick), which is the honest answer rather than a
+                        # ghost sitting on the truth.
+                        "ballGhost": (d.env.ghost_payload()
+                                      if hasattr(d.env, "ghost_payload")
+                                      else behaviors_mod.ball_ghost_payload(d.env)),
+                        # ...and THE LONG GOAL: where the ball is being
+                        # taken — [x, y, z, reach radius, targets reached so
+                        # far]. Without it the page shows a duck pushing a
+                        # ball at nothing, which is exactly what a DIRECTION
+                        # command looks like when it has no destination. The
+                        # count is the task's real score: outcomes reached,
+                        # not a ratio of distances.
+                        # EVERY belief this body wants drawn, self-describing
+                        # (behaviors/ball.ghosts_payload). `ballGhost` above
+                        # is the single-object form and stays for one release
+                        # so nothing breaks mid-refactor; this is what a page
+                        # should read. A scene now holds a duck on a ball AND
+                        # a MOSS on a can, and one robot may track several
+                        # things at once — a tidy brain has a toy and a
+                        # basket, a pitch has a ball and four posts.
+                        "ghosts": behaviors_mod.ghosts_payload(d.env),
+                        "dribbleTarget": behaviors_mod.dribble_target_payload(d.env),
                         "bodies": d.pose_payload(),
                     } for i, d in enumerate(st.ducks)],
                 })
@@ -4996,14 +5673,29 @@ def main() -> None:
     ap.add_argument("policies", nargs="*", help="run dirs and/or .onnx paths")
     ap.add_argument("--checkpoints", default=None,
                     help="run dir: add one duck per training checkpoint")
-    ap.add_argument("--port", type=int, default=8788)
+    ap.add_argument("--port", type=int, default=DEFAULT_LAB_PORT)
     ap.add_argument("--world", default=None, metavar="SCENARIO",
                     help="preload a /sim world (a built-in or scenarios/<name>.json); "
                          "with --world the roster may be empty")
     ap.add_argument("--fresh", action="store_true",
                     help="delete lab-state.json and seed the roster from the "
                          "CLI args instead of restoring it")
+    ap.add_argument("--idle-exit", type=float, default=None, metavar="MIN",
+                    help="exit after MIN minutes with no viewer on /lab or /sim "
+                         f"and no training (0 = never). Default: never on "
+                         f"{DEFAULT_LAB_PORT}, {SCRATCH_IDLE_EXIT_MIN:g} on any "
+                         "other port, so a scratch lab cannot outlive its session")
     args = ap.parse_args()
+
+    scratch = scratch_state_path(args.port)
+    if scratch is not None:
+        os.environ["LAB_STATE_PATH"] = str(scratch)
+        print(f"[lab] scratch port {args.port}: roster file {scratch.name} "
+              "(the main lab's lab-state.json is not touched)")
+    idle_min = idle_exit_minutes(args.port, args.idle_exit)
+    if idle_min > 0:
+        print(f"[lab] exits after {idle_min:g} min with no viewer and no "
+              "training (--idle-exit 0 to keep it up)")
 
     state_path = lab_state_path()
     if args.fresh:
@@ -5019,7 +5711,7 @@ def main() -> None:
     print(f"[lab] {len(ducks)} ducks: {', '.join(d.label for d in ducks)}")
 
     import uvicorn
-    app = make_app(ducks)
+    app = make_app(ducks, idle_exit_s=60.0 * idle_min)
     if args.world:
         app.state.world.preload(args.world)
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

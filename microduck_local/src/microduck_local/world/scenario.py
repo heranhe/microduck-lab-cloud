@@ -36,6 +36,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from ..sensors.detector import DETECT_CLASSES
+
 SCENARIO_VERSION = 1
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DUCK_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
@@ -291,6 +293,68 @@ class Pickable:
     yaw: float = 0.0
 
 
+# What shape a prop is. Deliberately three primitives and no mesh: a prop is
+# a thing to LOOK AT and reason about, and the detector models it as a sphere
+# of a given radius whatever it is drawn as, so a mesh would buy fidelity the
+# sensing never reads. A mesh prop is a separate change with its own reason.
+PROP_SHAPES = ("box", "sphere", "cylinder")
+
+
+@dataclass
+class Prop:
+    """An object the room contains that nobody hard-coded.
+
+    `Ball` and `Pickable` are the two objects this repo grew for the two tasks
+    that needed them, and each keeps its task's physics in PYTHON: the ball
+    its hollow-sphere inertia and rolling coefficient, a toy its row of
+    `PICKABLE_KINDS`. A Prop is the general case — shape, size, mass, colour
+    and DETECTOR CLASS all declared by the scenario — so adding something to
+    look at is a JSON entry and not a table edit in this file.
+
+    `cls` is the field that matters and the one a reader will get wrong. It is
+    what the DETECTOR reports this prop as (`sensors.detector.DETECT_CLASSES`),
+    which is what makes a prop visible to a BRAIN rather than only to the
+    renderer: declared `"ball"` it is chased by `chase`, declared `"toy"` it is
+    tidied by `tidy`, and declared as a class no brain reads it is furniture
+    that shows up in the inspector's track list and nothing else. It does NOT
+    have to match `shape` — a cube declared `"ball"` is a legitimate thing to
+    ask for (it is how you ask "what does the chase brain do when the thing it
+    is chasing does not roll"), and this is why the two are separate fields.
+
+    `mass` 0 makes it static scenery with no freejoint, like `Box`.
+
+    Props are detector targets with a sphere radius taken from the LARGEST
+    half-extent, which over-reports a flat object's apparent width. Stated
+    because a prop is the easiest way to accidentally characterise a detector
+    on geometry it does not model.
+    """
+
+    id: str
+    pos: tuple[float, float, float]
+    shape: str = "box"
+    # FULL extents (x, y, z) in metres for a box; a sphere reads size[0] as
+    # its radius, a cylinder size[0] as radius and size[2] as full height.
+    size: tuple[float, float, float] = (0.04, 0.04, 0.04)
+    mass: float = 0.02
+    yaw: float = 0.0
+    rgba: tuple[float, float, float, float] = (0.78, 0.80, 0.86, 1.0)
+    cls: str = "toy"
+    # Rolling resistance against the floor, as `Ball.rolling` — which see for
+    # the measured roll-out table and why a condim-3 geom ignores it. Only
+    # applied when the prop is a SPHERE, the one shape it means anything for.
+    rolling: float = 0.002
+    #: sliding friction override (None = the shape's default) and contact
+    #: SOFTNESS 0..1 (`physics_contact`): a cigarette butt is a filter.
+    friction: float | None = None
+    soft: float = 0.0
+
+    def radius(self) -> float:
+        """The sphere radius the DETECTOR models this prop as."""
+        if self.shape == "sphere":
+            return float(self.size[0])
+        return max(float(v) / 2 for v in self.size)
+
+
 @dataclass
 class Basket:
     """A low tray the duck drops things into: four thin walls on a floor
@@ -311,6 +375,7 @@ class Scenario:
     ducks: list[Duck] = field(default_factory=list)
     persons: list[Person] = field(default_factory=list)
     pickables: list[Pickable] = field(default_factory=list)
+    props: list[Prop] = field(default_factory=list)
     basket: Basket | None = None
     goal_width: float = 0.0            # > 0: a pitch — goals on both short walls this wide (World counts them)
     # Which goal MOUTH each team attacks ({"cream": "right"}), for a pitch
@@ -587,6 +652,36 @@ def validate_scenario(raw: dict) -> Scenario:
                                   _num(q.get("yaw", 0.0), f"pickables[{i}].yaw", -2 * math.pi, 2 * math.pi)))
     if len(pickables) > 40:
         raise ScenarioError("more than 40 pickables")
+    props = []
+    for i, q in enumerate(raw.get("props", []) or []):
+        if not isinstance(q, dict):
+            raise ScenarioError(f"props[{i}] must be an object")
+        pid = q.get("id", f"p{i}")
+        if not isinstance(pid, str) or not DUCK_ID_RE.match(pid) or pid in seen:
+            raise ScenarioError(f"props[{i}].id {pid!r} bad or duplicate")
+        seen.add(pid)
+        shape = q.get("shape", "box")
+        if shape not in PROP_SHAPES:
+            raise ScenarioError(f"props[{i}].shape must be one of {list(PROP_SHAPES)}")
+        cls = q.get("cls", "toy")
+        if cls not in DETECT_CLASSES:
+            raise ScenarioError(f"props[{i}].cls must be one of {sorted(DETECT_CLASSES)}")
+        props.append(Prop(
+            pid,
+            _vec(q.get("pos"), 3, f"props[{i}].pos", -bound, bound),
+            shape,
+            _vec(q.get("size", [0.04, 0.04, 0.04]), 3, f"props[{i}].size", 0.004, 1.0),
+            _num(q.get("mass", 0.02), f"props[{i}].mass", 0.0, 20.0),
+            _num(q.get("yaw", 0.0), f"props[{i}].yaw", -2 * math.pi, 2 * math.pi),
+            _vec(q.get("rgba", list(Prop.rgba)), 4, f"props[{i}].rgba", 0.0, 1.0),
+            cls,
+            _num(q.get("rolling", Prop.rolling), f"props[{i}].rolling", 0.0, 0.1),
+            (None if q.get("friction") is None else
+             _num(q.get("friction"), f"props[{i}].friction", 0.05, 3.0)),
+            _num(q.get("soft", 0.0), f"props[{i}].soft", 0.0, 1.0),
+        ))
+    if len(props) > 40:
+        raise ScenarioError("more than 40 props")
     basket = None
     braw = raw.get("basket")
     if braw is not None:
@@ -611,6 +706,7 @@ def validate_scenario(raw: dict) -> Scenario:
     attacks = _validate_attacks(raw.get("attacks") or {}, ducks, float(goal_width))
     return Scenario(name=name, seed=seed, floor=floor, walls=walls, boxes=boxes, goal_width=float(goal_width),
                     balls=balls, ducks=ducks, persons=persons, pickables=pickables,
+                    props=props,
                     basket=basket, collision=collision, attacks=attacks, cove=cove,
                     physics_dt=physics_dt)
 

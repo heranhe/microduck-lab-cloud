@@ -160,6 +160,19 @@ export interface ScenarioPerson {
 }
 export interface ScenarioPickable { id: string; kind: "brick" | "block" | "sock"; pos: [number, number]; yaw: number }
 export interface ScenarioBasket { pos: [number, number]; size: [number, number]; rim: number }
+/** A scenario-declared object (microduck_local/world/scenario.py `Prop`).
+ *  `size` is FULL extents for a box; a sphere reads size[0] as its radius and
+ *  a cylinder size[0] as radius, size[2] as full height. `cls` is the
+ *  DETECTOR class it is reported as and need not match `shape`. mass 0 =
+ *  static scenery. */
+export interface ScenarioProp {
+  id: string; pos: [number, number, number];
+  shape: "box" | "sphere" | "cylinder";
+  size: [number, number, number];
+  mass: number; yaw: number;
+  rgba: [number, number, number, number];
+  cls: string; rolling: number;
+}
 export const PICKABLE_SIZES: Record<string, [number, number, number]> = {
   brick: [0.032, 0.016, 0.0096],
   block: [0.04, 0.04, 0.04],
@@ -177,6 +190,7 @@ export interface Scenario {
   ducks: ScenarioDuck[];
   persons?: ScenarioPerson[];
   pickables?: ScenarioPickable[];
+  props?: ScenarioProp[];
   basket?: ScenarioBasket | null;
   /** > 0: a pitch — goals this wide centred on both short walls (the World counts them). */
   goal_width?: number;
@@ -390,6 +404,17 @@ export function tofZonePoints(jaw: number[], mm: number[]): { origin: [number, n
   return { origin, pts };
 }
 export interface DetectionItem { cls: string; name: string; bearing: number; elevation: number; width: number; range: number; conf: number }
+
+/** What the camera inset writes on a detection box.
+ *
+ *  WHICH object, not what kind: every prop in a tidy room is class "toy", so
+ *  the class said nothing and three boxes in a row read "toy 1.42 m". `name`
+ *  is the simulator's — `Detection.name` is truth the robot would not have —
+ *  which is the same privilege the inset already takes to colour a ghost
+ *  differently, and the head-camera legend says so. A ghost has no name. */
+export function detLabel(it: Pick<DetectionItem, "name" | "range">): string {
+  return `${it.name || "ghost"} ${it.range.toFixed(2)} m`;
+}
 /** A detector frame: captured at `t`, `age` old now, the frustum it saw
  *  through, the camera's world pose at capture (x y z, w x y z quaternion of
  *  the site frame, x forward) and what it found. */
@@ -422,7 +447,13 @@ export interface BrainInputs {
   det?: { age: number | null; stale: boolean; max: number; n: number };
   target?: { bearing: number; range: number | null; since: number } | null;
   /** The brain's tracker, with each track's odometry-frame position and velocity once it has both. */
-  tracks?: { id: number; cls: string; name: string; bearing: number; range: number; hits: number; age: number; xy?: [number, number]; vel?: [number, number] }[];
+  /** The brain's tracker. `xy` is the last MEASUREMENT; `pred` is where the
+   *  track thinks the thing is NOW, and the two differ by exactly the
+   *  staleness — which is what the stage's GHOST draws. `sigma` is `pred`'s
+   *  1-sigma radius; the error is RADIAL, so a ring at 1 sigma holds about
+   *  39% of the errors and 2 sigma about 86%, NOT 68/95 (calibrated in
+   *  probe_shot_gate.py). Label it, do not imply the wrong confidence. */
+  tracks?: { id: number; cls: string; name: string; bearing: number; range: number; hits: number; age: number; xy?: [number, number]; vel?: [number, number]; pred?: [number, number]; sigma?: number }[];
   /** A chase brain's plan, in its odometry frame: where it predicts the
    *  ball will stop (it looks and hunts that way), the ball memory its
    *  search walks to, and its line-up / push spot.
@@ -600,8 +631,12 @@ export interface LidarPayload {
   mount?: [number, number, number] | null;
 }
 export interface SimObject {
-  id: string; kind: "ball" | "box" | "person" | "toy"; pose: number[];
+  id: string; kind: "ball" | "box" | "person" | "toy" | "prop"; pose: number[];
   possessed?: boolean; toy?: string; held?: string | null; inBasket?: boolean;
+  /** A scenario-declared prop (world/scenario.Prop): its shape, FULL extents,
+   *  colour, and the DETECTOR CLASS it is reported as — which is not
+   *  necessarily its shape (a cube declared "ball" is a legitimate ask). */
+  prop?: { shape: "box" | "sphere" | "cylinder"; size: [number, number, number]; rgba: number[]; cls: string };
   /** "g1" when this person is a Unitree G1, not the mocap capsule. */
   robot?: string;
   /** G1 body poses in GET /scene/g1 order, when robot is set. */
@@ -753,6 +788,25 @@ export function headCameraPose(jaw: number[]): { origin: [number, number, number
 export function capturePose(cam: number[]): { origin: [number, number, number]; forward: [number, number, number]; up: [number, number, number] } {
   const q = [cam[3], cam[4], cam[5], cam[6]];
   return { origin: [cam[0], cam[1], cam[2]], forward: quatRotate(q, [1, 0, 0]), up: quatRotate(q, [0, 0, 1]) };
+}
+
+// Wrist cameras, by the body the lab mounts them on. A mount body's x axis is
+// its optical axis and z its up (sensors/detector.Detector's convention, the
+// frame `det.cam` is in), so the body's streamed pose IS the camera pose and
+// capturePose reads it as is. The field is robots/moss.py
+// ARM_CAMERA_HFOV_DEG / ARM_CAMERA_VFOV_DEG. A room samples no wrist
+// detector (MOSS's `arm_detector` is built but not ticked in world mode), so
+// the /sim wrist inset is the picture alone, with no boxes.
+export const WRIST_CAMERAS: Record<string, [number, number]> = { moss_arm_camera: [70, 55] };
+
+/** Which of a robot scene's bodies is a wrist camera, and its field. */
+export function wristCamera(bodies: readonly string[] | undefined): { idx: number; fov: [number, number] } | null {
+  if (!bodies) return null;
+  for (const [name, fov] of Object.entries(WRIST_CAMERAS)) {
+    const idx = bodies.indexOf(name);
+    if (idx >= 0) return { idx, fov };
+  }
+  return null;
 }
 
 /** Where a detection lands in the camera's image, as fractions of the frame

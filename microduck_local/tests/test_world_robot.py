@@ -355,7 +355,11 @@ def test_the_body_list_is_the_viewers_scene_list_name_for_name():
 
 def test_the_two_tracked_mars_scenarios_load_and_round_trip():
     from microduck_local.world.scenario import validate_scenario
-    for name, brain in (("mars-playroom", "wander"), ("mars-follow", "follow")):
+    # `mars-playroom` opens on `tidy_arm`, not `wander`: a wheeled body that
+    # wanders a room full of toys and never reaches for one reads as a stall,
+    # and the brain it wants is one dropdown away for anyone who wants to see
+    # `wander` drive onto the basket.
+    for name, brain in (("mars-playroom", "tidy_arm"), ("mars-follow", "follow")):
         sc = load_scenario(SCENARIOS / f"{name}.json")
         assert sc.name == name
         assert [d.robot for d in sc.ducks] == ["mars"]

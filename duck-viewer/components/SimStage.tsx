@@ -727,6 +727,28 @@ export function Statics({ scenario }: { scenario: Scenario | null }) {
 /** One geometry per toy kind: a studded 2×4 brick, a bevelled block, a
  *  rolled sock (a box with big radii). Built once, shared by every toy. */
 const toyGeometries = new Map<string, THREE.BufferGeometry>();
+const propGeometries = new Map<string, THREE.BufferGeometry>();
+
+/** A prop's geometry from its own declared shape and FULL extents
+ *  (lib/sim.ts `ScenarioProp`, microduck_local/world/scenario.py `Prop`) —
+ *  the same three primitives `world/compose.py` builds, so what the page
+ *  draws is what the physics has. Cached by the shape+size key, because a
+ *  room may hold forty of them and they never change within a scenario. */
+function propGeometry(shape: string, size: [number, number, number]): THREE.BufferGeometry {
+  const key = `${shape}:${size.join(",")}`;
+  const cached = propGeometries.get(key);
+  if (cached) return cached;
+  let g: THREE.BufferGeometry;
+  if (shape === "sphere") g = new THREE.SphereGeometry(size[0], 24, 16);
+  else if (shape === "cylinder") {
+    g = new THREE.CylinderGeometry(size[0], size[0], size[2], 24);
+    g.rotateX(Math.PI / 2);           // MuJoCo cylinders stand on +z
+  } else g = new RoundedBoxGeometry(size[0], size[1], size[2], 1, Math.min(0.004, Math.min(...size) / 6));
+  g.computeVertexNormals();
+  propGeometries.set(key, g);
+  return g;
+}
+
 function toyGeometry(kind: string): THREE.BufferGeometry {
   const cached = toyGeometries.get(kind);
   if (cached) return cached;
@@ -1028,6 +1050,15 @@ export function Dynamics({ scenario, client, g1Scene }: {
   const freeBoxes = scenario.boxes.map((b, i) => ({ b, i })).filter(({ b }) => b.mass > 0);
   const persons = scenario.persons ?? [];
   const toys = scenario.pickables ?? [];
+  // Props with mass stream a pose in `objects`; a mass-0 prop is scenery that
+  // `compose` welded to the world body, so the group's initial position is
+  // all it ever needs and no frame entry will arrive for it — `World.__init__`
+  // builds `objects` by walking FREE JOINTS, and a welded body has none.
+  // Which is why the group below must carry that initial transform itself:
+  // without it a static prop sat at the world origin (ghost-demo's `plinth`,
+  // mass 0 at y = 1.3, drew 1.3 m from where the physics and the detector
+  // both have it) and its `yaw` was never applied at all.
+  const props = scenario.props ?? [];
   const setRef = (id: string) => (el: THREE.Group | null) => {
     if (el) refs.current.set(id, el);
     else refs.current.delete(id);
@@ -1037,6 +1068,22 @@ export function Dynamics({ scenario, client, g1Scene }: {
       <instancedMesh ref={blobs} args={[undefined, undefined, MAX_BLOBS]} material={blobMat} frustumCulled={false}>
         <planeGeometry args={[1, 1]} />
       </instancedMesh>
+      {props.map((pr) => (
+        // A prop that streams overwrites both of these every frame; a welded
+        // one keeps them, which is the whole point.
+        <group key={pr.id} ref={setRef(pr.id)} position={pr.pos} rotation={[0, 0, pr.yaw]}>
+          <mesh geometry={propGeometry(pr.shape, pr.size)}>
+            <meshStandardMaterial
+              color={new THREE.Color(pr.rgba[0], pr.rgba[1], pr.rgba[2])}
+              transparent={pr.rgba[3] < 1}
+              opacity={pr.rgba[3]}
+              roughness={0.5}
+              metalness={0}
+              envMapIntensity={0.8}
+            />
+          </mesh>
+        </group>
+      ))}
       {toys.map((t) => (
         <group key={t.id} ref={setRef(t.id)}>
           <mesh geometry={toyGeometry(t.kind)}>

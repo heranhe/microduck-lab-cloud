@@ -5,14 +5,23 @@ body it belongs to, and the ball's displacement over the settle is recorded.
     cd microduck_local
     uv run python scripts/probe_settle_contact.py --arm "base=" --arm "sg=settle_gaze_neck=1.0,settle_head_down=1.0"
 """
-import argparse, math, os, sys, statistics as st
+import argparse
+import math
+import os
+import statistics as st
+import sys
 from collections import Counter
-import mujoco, numpy as np
+
+import mujoco
+import numpy as np
+
 sys.path.insert(0, "scripts")
 from kick_gym import EPISODE_S, _drive, _place, gym_scenario  # noqa: E402
+
 from microduck_local.brain import REGISTRY  # noqa: E402
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer  # noqa: E402
 from microduck_local.world.arena import World  # noqa: E402
+
 
 def run(seed, episodes, knobs):
     if knobs: os.environ["MICRODUCK_CHASE"] = knobs

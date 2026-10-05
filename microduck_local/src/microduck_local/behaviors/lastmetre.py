@@ -144,13 +144,23 @@ four spawn-only stages, the same spawn knobs. The two ids differ in ONE
 number, which is what makes them a controlled pair.
 """
 
+import json
 import math
 
 import mujoco
+import numpy as np
 
 from .. import contract as C
 from .ball import _ball_camera, _ball_knob
-from .core import Behavior, CurriculumStage, RewardTerm, _face_home_pen, _register, _trunk_yaw
+from .core import (
+    Behavior,
+    CurriculumStage,
+    RewardTerm,
+    _face_home_pen,
+    _register,
+    _spawn_knob,
+    _trunk_yaw,
+)
 from .kick import (
     BALL_NOISE,
     BALL_OFFSET,
@@ -236,6 +246,177 @@ LM_FAR_SIDE = (-0.13, 0.13)       # m either side - a ball it has to walk to can
 LM_APPROACH_EPISODE_S = "4.0"
 
 
+# --- THE REPLAY SPAWN: the state PLAY actually hands over (roadmap 12aw) ---
+#
+# Every window above is one somebody drew. `scripts/probe_handover.py` scored
+# them against 758 real handovers recorded by `scripts/kick_gym.py`, and the
+# draw and the deployment do not meet. The BALL BOX is right - 94 % / 92 % of
+# swings inside `KICK_BOX_AHEAD` / `KICK_BOX_SIDE`, so 12b drew that one well
+# - and nothing else is:
+#
+#   * head_pitch: play hands over at a median +0.548 off HOME, p90 +0.583,
+#     into `LM_GAZE_TIP_HEAD`, which STARTS at +0.60. The two distributions
+#     are disjoint; coverage 3 %. Verified from the spawn side too, off 40
+#     resets of the running env: +0.611 .. +1.169.
+#   * head_yaw: a median 0.31 rad TOWARD the kicking foot, into a window of
+#     +-0.03 (the walk env's own pose noise, since `LM_GAZE_YAW` is (0, 0)).
+#     Coverage 6 %.
+#   * and the four axes this spawn cannot express at all: the duck arrives
+#     MID-STRIDE (max |joint vel| median 5.4 rad/s, trunk yawing 1.2 rad/s,
+#     rolling 2.6) while `walk_env.reset` does `qvel[:] = 0.0`, measured as
+#     exactly 0.0000 on all 40 resets.
+#
+# One handover of 758 lands inside every windowed axis at once.
+#
+# **The rival fix on the gaze axis is already measured dead.** `ChaseParams`
+# (controllers.py, under "AND THAT IS WHY RAISING `head_down` DOES NOTHING")
+# reports `head_down` 0.6 -> 1.0 moving the median camera depression only
+# 0.245 -> 0.339 rad and no kick metric at all, because `_gaze` aims the axis
+# AT the ball and the clamp binds in under a tenth of frames. The brain cannot
+# be walked to the kick's window, so this walks the kick's spawn to the brain.
+#
+# Two modes, because two mechanisms are live and AGENTS.md asks each to
+# measure alone:
+#
+#   "gaze" - the three gaze joints from a recorded handover, everything else
+#            the recipe's own. Isolates "the windows were drawn wrong".
+#   "full" - the whole configuration: 14 joints and their velocities, the
+#            trunk's height, roll and pitch, its linear and angular velocity,
+#            and the ball's offset and velocity. Distributional skill-chaining
+#            itself.
+#
+# Rows are filtered to THIS RECIPE'S FOOT, never mirrored: the buffer holds
+# both feet, a mirror across a 14-joint contract is a bug surface for no gain,
+# and 334 right / 424 left is plenty for either. World position and yaw are
+# NOT replayed - the env's own `random_yaw` stays in charge, so the replay
+# adds a distribution and removes no randomization.
+LM_REPLAY_MODES = ("gaze", "full")
+_LM_REPLAY_CACHE: dict[tuple[str, str], list] = {}
+# Columns a "full" replay needs. A buffer recorded before they existed loads
+# fine for "gaze" and RAISES for "full", rather than silently spawning a
+# statue and reporting it as the treatment (AGENTS.md verification rule 0: a
+# knob that changes nothing is broken, not null).
+_LM_REPLAY_FULL_COLS = ("joint_vel", "root_z", "root_quat_rel",
+                        "body_vx", "body_vy", "body_vz", "body_wx", "body_wy", "body_wz",
+                        "ball_vx", "ball_vy")
+
+
+def _lm_replay_rows(path: str, foot: str, mode: str) -> list:
+    """The recorded handovers for ONE foot, parsed once per process."""
+    key = (path, foot)
+    rows = _LM_REPLAY_CACHE.get(key)
+    if rows is None:
+        rows = []
+        with open(path) as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                if (r.get("swing") and r.get("touch") == "kick"
+                        and r.get("foot") == foot and "joints" in r):
+                    rows.append(r)
+        if not rows:
+            raise ValueError(f"{path}: no {foot} swing rows with a `joints` column — "
+                             "record one with scripts/kick_gym.py --out")
+        _LM_REPLAY_CACHE[key] = rows
+    if mode == "full":
+        missing = [c for c in _LM_REPLAY_FULL_COLS if c not in rows[0]]
+        if missing:
+            raise ValueError(f"{path}: mode 'full' needs columns {missing}; re-record "
+                             "the buffer with the current scripts/kick_gym.py")
+    return rows
+
+
+def _lm_replay(env, side: str, r, yaw: float, qadr: int, dadr: int):
+    """Spawn from a recorded handover. Returns (ahead, side) of the ball when
+    it replaced the box's, else None. No RNG is drawn when the knob is off, so
+    every pre-12aw rung's stream stays bit-identical."""
+    path = _spawn_knob(env, "MICRODUCK_LM_REPLAY")
+    if not path:
+        return None
+    mode = (_spawn_knob(env, "MICRODUCK_LM_REPLAY_MODE") or "gaze").strip()
+    if mode not in LM_REPLAY_MODES:
+        raise ValueError(f"MICRODUCK_LM_REPLAY_MODE={mode!r}; expected one of {LM_REPLAY_MODES}")
+    rows = _lm_replay_rows(path, f"kick_{side}", mode)
+    row = rows[int(r.integers(len(rows)))]
+    q, adr = env.data.qpos, env.joint_qpos_adr
+    i_neck, i_head, i_yaw = (C.JOINT_NAMES.index(n)
+                             for n in ("neck_pitch", "head_pitch", "head_yaw"))
+    if mode == "gaze":
+        for i in (i_neck, i_head, i_yaw):
+            q[adr[i]] = row["joints"][i]
+        env.last_replay = ("gaze", row["ep"], row.get("seed"))
+        return None
+    # "full": the whole state. Joints and their velocities first...
+    q[adr] = row["joints"]
+    env.data.qvel[env.joint_qvel_adr] = row["joint_vel"]
+    # ...then the trunk, at the env's OWN yaw with the recorded roll/pitch
+    # composed onto it (the buffer stores the quaternion with world yaw
+    # removed, so this cannot fight `random_yaw`).
+    rq, rv = env._root_qpos, env._root_qvel
+    q[rq + 2] = row["root_z"]
+    qy = np.array([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
+    out = np.zeros(4)
+    mujoco.mju_mulQuat(out, qy, np.asarray(row["root_quat_rel"], float))
+    q[rq + 3:rq + 7] = out
+    c, s = math.cos(yaw), math.sin(yaw)
+    env.data.qvel[rv + 0] = row["body_vx"] * c - row["body_vy"] * s
+    env.data.qvel[rv + 1] = row["body_vx"] * s + row["body_vy"] * c
+    env.data.qvel[rv + 2] = row["body_vz"]
+    env.data.qvel[rv + 3] = row["body_wx"] * c - row["body_wy"] * s
+    env.data.qvel[rv + 4] = row["body_wx"] * s + row["body_wy"] * c
+    env.data.qvel[rv + 5] = row["body_wz"]
+    # ...and the ball where THAT swing found it, moving as it was moving.
+    ox, oy = float(row["ahead"]), float(row["side"])
+    env.data.qpos[qadr:qadr + 7] = [float(q[rq + 0]) + c * ox - s * oy,
+                                    float(q[rq + 1]) + s * ox + c * oy,
+                                    BALL_Z, 1.0, 0.0, 0.0, 0.0]
+    env.data.qvel[dadr:dadr + 6] = 0.0
+    env.data.qvel[dadr + 0] = row["ball_vx"] * c - row["ball_vy"] * s
+    env.data.qvel[dadr + 1] = row["ball_vx"] * s + row["ball_vy"] * c
+    env.last_replay = ("full", row["ep"], row.get("seed"))
+    return ox, oy
+
+
+def ball_ghost_payload(env):
+    """WHERE THE POLICY THINKS THE BALL IS — [x, y, z, conf, seen] or None.
+
+    The truth is `ball_marker_payload`; this is the belief the four head slots
+    actually carry, so the lab can draw them side by side while a policy is
+    TRAINING. That is the whole point: obs[51:55] is a projection through the
+    head camera at the detector's cadence with a jittered bearing, held and
+    re-expressed by odometry while nothing is reported — so it drifts, and a
+    policy learning to act on it is learning to act on the drift. Reward
+    curves cannot show that and a caption of numbers barely can.
+
+    `_lm_world` is the believed world point itself, read off the env rather
+    than reconstructed from the slots: the slots are CLIPPED and normalized
+    (bearing to +-1, range to `_lm_range_scale`), so inverting them would draw
+    a ghost the policy never saw — pinned to the clip whenever the ball is
+    outside the window. `conf` is the memory's own decay and `seen` whether
+    the last report had it in frame, which together say how much of what is
+    drawn is a sighting and how much is dead reckoning.
+
+    None for a recipe that does not write these slots (every trick, and the
+    blind kicks — which is the honest answer: a blind kick has no belief)."""
+    # BOTH sides through getattr: `episode_id` is a `BehaviorEnv` attribute,
+    # and the lab's roster can hold a plain `MicroduckWalkEnv` (any walk
+    # policy, no recipe), which has none — so reading it directly raised
+    # AttributeError and took the whole /train stage loop down with it. It
+    # only stayed hidden because `--world` runs an empty roster. A payload
+    # helper is called on every env in the roster, so it must answer for
+    # every env in the roster, and "this env has no episodes" is a None, not
+    # a crash.
+    if getattr(env, "_lm_episode", None) != getattr(env, "episode_id", None):
+        return None
+    w = getattr(env, "_lm_world", None)
+    if w is None:
+        return None
+    return [round(float(w[0]), 4), round(float(w[1]), 4), BALL_Z,
+            round(float(getattr(env, "_lm_conf", 0.0)), 3),
+            1.0 if getattr(env, "_lm_det_seen", False) else 0.0]
+
+
 def _lm_gaze(env) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
     """(neck, head, |head yaw|) spawn windows for this stage — offsets off HOME.
 
@@ -293,16 +474,24 @@ def _lm_reset_for(side: str, range_scale: float = LM_RANGE_SCALE, suffix: str = 
         # world's (0, 0) this is a no-op and the walk env's own head-yaw
         # spawn noise survives, exactly as it does for the wide kick.
         env.data.qpos[env.joint_qpos_adr[7]] += sgn * r.uniform(*yaw_w)
+        # THE REPLAY SPAWN (12aw). Last, so it overrides whatever the windows
+        # drew, and before ctrl/BAM/mj_forward so those see the state that will
+        # actually be stepped. Returns the ball offset when it placed one.
+        replayed = _lm_replay(env, side, r, yaw, qadr, dadr)
+        if replayed is not None:
+            ox, oy = replayed
         env.data.ctrl[:] = env.data.qpos[env.joint_qpos_adr]
         if getattr(env, "bam", None) is not None:
             env.bam.reset(env.data.qpos[env.joint_qpos_adr])
         mujoco.mj_forward(env.model, env.data)
         env.last_spawn = (f"ball {ox:.2f}m ahead {abs(oy):.2f}m "
                           f"{side if oy * sgn >= 0 else ('left' if side == 'right' else 'right')}"
-                          + (" (out of reach)" if far else ""))
+                          + (" (out of reach)" if far else "")
+                          + ("" if replayed is None and getattr(env, "last_replay", None) is None
+                             else f" [replay {getattr(env, 'last_replay', ('?',))[0]}]"))
         # Sensing state, fresh per episode (a leaked estimate is one free
         # sighting on the first step of the next one).
-        env._lm_episode = env.episode_id
+        env._lm_episode = getattr(env, "episode_id", None)
         env._lm_step_done = -1
         env._lm_det_step = -10 ** 9
         env._lm_det_seen = False
@@ -378,7 +567,7 @@ def _lm_sense(env, force: bool = False) -> None:
 def _lm_obs(env) -> None:
     """Behavior.obs_fn: sense once per control step (the obs can be rebuilt
     more than once per step; the detector runs once)."""
-    if getattr(env, "_lm_episode", None) != env.episode_id:
+    if getattr(env, "_lm_episode", None) != getattr(env, "episode_id", None):
         return                        # reset in progress; reset_fn seeds first
     if env._lm_step_done == env.step_count:
         return

@@ -38,6 +38,38 @@ done
 # (2) the lab's own answer, when it is up: GET /teach/status `running` is
 #     what the lab reads off its trainer subprocess (the authoritative one —
 #     see the endpoint's docstring on why the process table lies).
+# A FORCE is not a free pass: it is the bypass that has killed another
+# session's run FOUR times (2026-09-24, a dribble chain at 2.93M of 6M among
+# them). The guard below is exactly what a FORCE skips, so a FORCE while
+# someone else's job is up IS the kill. It stays available — editing lab
+# Python is a real reason, and the running process holds stale code — but it
+# now PRINTS WHAT IT IS ABOUT TO DESTROY, with the steps already spent, so
+# the cost is visible at the moment of the decision rather than in an
+# apology afterwards.
+if [ "${MICRODUCK_RESTART_FORCE:-0}" = "1" ]; then
+  _doomed="$(curl -s -m 2 "http://127.0.0.1:$PORT/teach/status" 2>/dev/null \
+    | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    raise SystemExit
+for j in d.get("jobs", []):
+    if j.get("status") in ("training", "restarting"):
+        st, tot = j.get("steps") or 0, j.get("total") or 0
+        print(f"    {j[\"runName\"]}  {st:,}/{tot:,} steps")
+' 2>/dev/null)"
+  if [ -n "$_doomed" ]; then
+    echo "FORCE: this restart will KILL these live training jobs:"
+    echo "$_doomed"
+    echo "  The lab runs several jobs at once — if you only need to START one,"
+    echo "  POST /teach instead and leave these alone. If a job is not yours,"
+    echo "  say so in the shared channel first and let it checkpoint."
+    echo "  Continuing in 5s (Ctrl-C to abort)..."
+    sleep 5
+  fi
+fi
+
 if [ "${MICRODUCK_RESTART_FORCE:-0}" != "1" ]; then
   if pgrep -fl 'microduck_local\.train_behavio[r]|microduck_local\.trai[n] ' 2>/dev/null | grep -qi python; then
     echo "REFUSING to restart: a trainer process is running:"

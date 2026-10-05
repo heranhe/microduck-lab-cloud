@@ -713,6 +713,38 @@ def slot_env(robot: str, seed: int, kwargs: dict | None = None):
         # and a TypeError inside `_make_env` would be a slot that cannot be
         # created at all.
         return KinematicIdle(body, seed=seed)
+    # THE BODY'S OWN ENV KNOBS, read from the environment the way the trainer
+    # reads them. Without this a roster slot silently takes every ladder's
+    # DEFAULT rung: a lab launched with MICRODUCK_MOSS_PICK_RUNG=2 showed
+    # MOSS picking at rung 0, where the can spawns between the pads within
+    # 15 mm every episode — which looks like a robot that never sees a
+    # different can, and is, and is the fourth place this same knob had to
+    # be plumbed. One seam for every lab env, rather than a fifth.
+    #
+    # A caller that names the kwarg itself WINS: the trainee preview resolves
+    # its stage's rung and passes it explicitly, and that must beat whatever
+    # the lab process happens to have exported.
+    #
+    # `SystemExit`, not just `Exception`: `train_env_kwargs` is the TRAINER's
+    # hook and a missing CLI flag is fatal THERE, which this repo spells as
+    # `raise SystemExit` — the G1's does it for `--task imitate` with no
+    # `--clip`. `SystemExit` is a `BaseException`, so an `except Exception`
+    # here does not catch it and the refusal escaped into the lab, where it is
+    # not a refusal at all: the caller already knows the clip (it came out of
+    # the run's own `run.json` via `viz_server.env_kwargs_for_task_run`) and
+    # the merge below is exactly what lets it win. `viz_server` line ~2893
+    # already catches the same idiom from `env_class`; this did not, and every
+    # G1 imitation slot in the lab raised instead of previewing. A body that
+    # refuses simply contributes no derived knobs, which is what the caller's
+    # own kwargs are for. `KeyboardInterrupt` is deliberately NOT caught.
+    fn = getattr(body, "train_env_kwargs", None)
+    if fn is not None:
+        import types
+        try:
+            derived = dict(fn(types.SimpleNamespace(task=task)))
+        except (SystemExit, Exception):  # noqa: BLE001  (see above)
+            derived = {}
+        kw = {**derived, **kw}
     return body.env_class(task)(**kw)
 
 

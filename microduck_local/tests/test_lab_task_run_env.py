@@ -127,3 +127,101 @@ def test_the_lab_slot_for_an_imitation_run_turns_the_clips_clock(tmp_path):
             advanced += 1
         prev_angle, prev_count = angle, duck.env.step_count
     assert advanced >= 100, f"only {advanced} of 150 ticks were inside an episode"
+
+
+def test_a_bodys_TRAINER_refusal_does_not_kill_a_lab_slot(monkeypatch):
+    """`train_env_kwargs` is the TRAINER's hook, and a missing CLI flag is
+    fatal THERE — which this repo spells `raise SystemExit`. `SystemExit` is a
+    `BaseException`, so `lab/robots.slot_env`'s `except Exception` did not
+    catch it: every G1 imitation slot raised out of the lab instead of
+    previewing, with the clip sitting right there in the kwargs the caller had
+    already resolved from the run's own run.json.
+
+    Body-agnostic and ASSET-FREE on purpose. The G1 version of this is the
+    `@needs_g1` test above, which SKIPS on a machine that never ran
+    `fetch-g1` — so it was green in every environment that did not have the
+    assets and red in every one that did, which is how it stayed red. This one
+    fails everywhere.
+    """
+    from microduck_local.lab import robots as lab_robots
+
+    built: dict = {}
+
+    class _Env:
+        def __init__(self, **kw):
+            built.update(kw)
+
+    class _Body:
+        id = "stub"
+        default_task = "walk"
+
+        def train_env_kwargs(self, args):
+            raise SystemExit("--task imitate needs --clip <name>")
+
+        def env_class(self, task):
+            return _Env
+
+    monkeypatch.setattr(lab_robots._registry, "get", lambda _id: _Body())
+    env = lab_robots.slot_env("stub", 7, {"task": "imitate", "clip_name": CLIP})
+    assert isinstance(env, _Env), "a body's trainer refusal reached the caller"
+    assert built.get("clip_name") == CLIP, (
+        "the caller's own kwargs must survive the refusal — they are the whole "
+        "reason a refusal is survivable here")
+    assert "task" not in built, "`task` picks the env class; it is not a kwarg"
+
+
+def test_a_lab_slot_still_lets_a_KeyboardInterrupt_through(monkeypatch):
+    """The catch above is `(SystemExit, Exception)` and deliberately not
+    `BaseException`: Ctrl-C during a slot build must stop the lab, not be
+    absorbed into "this body contributed no knobs"."""
+    from microduck_local.lab import robots as lab_robots
+
+    class _Body:
+        id = "stub"
+        default_task = "walk"
+
+        def train_env_kwargs(self, args):
+            raise KeyboardInterrupt
+
+        def env_class(self, task):
+            raise AssertionError("reached the env build through a Ctrl-C")
+
+    monkeypatch.setattr(lab_robots._registry, "get", lambda _id: _Body())
+    with pytest.raises(KeyboardInterrupt):
+        lab_robots.slot_env("stub", 7, {"task": "imitate"})
+
+
+def test_the_TRAINEE_PREVIEW_survives_the_same_refusal(monkeypatch):
+    """`lab/robots.slot_env` was not the only caller of the hook.
+
+    `viz_server._body_env_kwargs` had the identical `except Exception`, and it
+    is the 🎓 trainee preview's translation of a stage's knobs — so a G1
+    imitation teach job raised out of the preview builder too. Only reachable
+    on a stage that carries a `MICRODUCK_` knob, because the function returns
+    early when none do, which is why one probe with an empty stage said it was
+    fine. Found by checking EVERY caller of the hook after fixing the first.
+
+    Also pins that the staged variables are put back: the `finally` that
+    restores `os.environ` must still run on the way out.
+    """
+    import os
+    import types
+
+    from microduck_local import viz_server as V
+
+    seen = {}
+
+    class _Body:
+        id = "stub"
+
+        def train_env_kwargs(self, args):
+            seen["knob"] = os.environ.get("MICRODUCK_STUB_RUNG")
+            raise SystemExit("--task imitate needs --clip <name>")
+
+    monkeypatch.setattr("microduck_local.robots.registry.get", lambda _id: _Body())
+    before = os.environ.get("MICRODUCK_STUB_RUNG")
+    b = types.SimpleNamespace(robot="stub", task="imitate")
+    assert V._body_env_kwargs(b, {"MICRODUCK_STUB_RUNG": "2"}) == {}
+    assert seen["knob"] == "2", "the stage's knob never reached the body"
+    assert os.environ.get("MICRODUCK_STUB_RUNG") == before, (
+        "the staged variable was not put back")

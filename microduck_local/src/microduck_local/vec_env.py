@@ -187,6 +187,247 @@ class _CloudpickleFn:
         return self.fn()
 
 
+#: Kill switch for `_SpareReset`: `MICRODUCK_BACKGROUND_RESET=0` puts every
+#: env back on the old in-line reset.
+BACKGROUND_RESET = os.environ.get("MICRODUCK_BACKGROUND_RESET", "1") != "0"
+#: Spares per env slot. MEASURED on the MOSS pick (s5 policy, stage-6
+#: config, 32 envs): 1 spare 4.1k steps/s, 2 spares 4.9k, 3 spares 4.8k —
+#: one spare is sometimes still resetting when a short episode ends. Each
+#: spare is ~73 MB per worker (2.3 GB a spare across 32).
+RESET_SPARES = int(os.environ.get("MICRODUCK_RESET_SPARES", "2"))
+
+
+class _SpareReset:
+    """Several instances of one env: one steps, the spares reset on threads.
+
+    The fleet steps in LOCKSTEP — every vec-step waits for the slowest worker
+    — so one worker's reset idles all the others. That is free when resets
+    are rare (a walker's 1000-step episode) and ruinous when they are not.
+    MEASURED on the MOSS pick, 2026-09-27: a reset is 33 ms against a 0.67 ms
+    step (a 2 s arm deploy plus a recompile per prop), episodes last ~45
+    steps, and 16 envs fell from 7.7k steps/s with no resets to 1.1k with
+    them; 32 envs did no better (1.17k). The workers sat at ~5% CPU.
+
+    The deploy cannot be cached instead: the prop is parked in the jaws'
+    reach while the arm unfolds, so the settled state depends on the prop
+    (base hold 17 mm apart for two props) and on the wrist target. So the
+    reset is kept exactly as it is and moved off the critical path: when the
+    active env's episode ends the next spare — reset in the background since
+    it last stepped — takes over at once, and the old one resets while the
+    worker would otherwise sit in `go_sem.acquire()`. `mj_step` and
+    `MjSpec.compile` both release the GIL. With it: 1.49k -> 4.9k steps/s on
+    that pick (2 spares), episode length and return unchanged within their
+    standard errors over 3000 episodes of the same policy.
+
+    WHAT CHANGES: which random draws an episode gets, the way a different
+    seed would — several env instances, several streams. Each spare's stream
+    is seeded from a draw of the active env's own generator, so a run is
+    still fixed by `--seed`. WHAT DOES NOT: the physics of every episode
+    (tests/test_background_reset.py replays the swaps against plain envs bit
+    for bit)
+    and the distribution it is drawn from. Opt-in per env class
+    (`background_reset = True`), because spares cost memory and cheap resets
+    gain nothing.
+    """
+
+    def __init__(self, active: gym.Env, spares: list[gym.Env]):
+        self.active = active
+        self.observation_space = active.observation_space
+        self.action_space = active.action_space
+        # The env's OWN generator, seeded by its constructor (`_build_env`
+        # only wraps envs that have one): gymnasium's `np_random` is drawn
+        # from OS entropy until the first seeded reset, and spares seeded
+        # from it would make a run irreproducible under a fixed `--seed`.
+        src = active.unwrapped.rng
+        #: Spares in the order they take over, each with its reset in flight
+        #: or done: [(env, thread, box)].
+        self._queue = []
+        for env in spares:
+            self._launch(env, seed=int(src.integers(2**62)))
+
+    def _launch(self, env: gym.Env, seed: int | None = None) -> None:
+        import threading
+        box = {}
+
+        def run():
+            try:
+                box["out"] = env.reset(seed=seed) if seed is not None else env.reset()
+            except BaseException as e:      # re-raised on the worker thread
+                box["err"] = e
+        t = threading.Thread(target=run, name="spare-reset", daemon=True)
+        t.start()
+        self._queue.append((env, t, box))
+
+    @staticmethod
+    def _join(job):
+        env, t, box = job
+        t.join()
+        if "err" in box:
+            raise box["err"]
+        return env, box["out"]
+
+    def _settle_all(self) -> list[gym.Env]:
+        """Wait out every reset in flight; the spares, in order."""
+        jobs, self._queue = self._queue, []
+        return [self._join(j)[0] for j in jobs]
+
+    def _relaunch(self, spares: list[gym.Env]) -> None:
+        for env in spares:
+            self._launch(env)
+
+    @property
+    def unwrapped(self) -> gym.Env:
+        return self.active.unwrapped
+
+    def step(self, action):
+        return self.active.step(action)
+
+    def reset(self, **kwargs):
+        if kwargs:
+            # An explicit seed/options is a request about THIS env: honour it
+            # in line, then re-prepare the spares.
+            spares = self._settle_all()
+            out = self.active.reset(**kwargs)
+            self._relaunch(spares)
+            return out
+        env, out = self._join(self._queue.pop(0))
+        old, self.active = self.active, env
+        self._launch(old)
+        return out
+
+    def set_attr(self, name: str, value) -> None:
+        # Every instance, and the spares' prepared episodes are redone so a
+        # reset-time knob takes effect on the very next episode, as before.
+        spares = self._settle_all()
+        for env in (*spares, self.active):
+            setattr(env.unwrapped, name, value)
+        self._relaunch(spares)
+
+    def call(self, name: str, args, kwargs):
+        spares = self._settle_all()
+        for env in spares:
+            getattr(env.unwrapped, name)(*args, **kwargs)
+        out = getattr(self.active.unwrapped, name)(*args, **kwargs)
+        self._relaunch(spares)
+        return out
+
+    def close(self) -> None:
+        spares = []
+        for job in self._queue:
+            try:
+                spares.append(self._join(job)[0])
+            except BaseException:
+                spares.append(job[0])
+        self._queue = []
+        for env in (self.active, *spares):
+            env.close()
+
+
+def _build_env(fn: Callable[[], gym.Env]):
+    env = fn()
+    if not (BACKGROUND_RESET and getattr(env.unwrapped, "background_reset", False)):
+        return env
+    import warnings
+    if not isinstance(getattr(env.unwrapped, "rng", None), np.random.Generator):
+        warnings.warn(f"{type(env.unwrapped).__name__} asks for background "
+                      "resets but has no seeded `rng` generator to derive the "
+                      "spares' streams from; resetting in line instead")
+        return env
+    spares = [fn() for _ in range(max(1, RESET_SPARES))]
+    model = getattr(env.unwrapped, "model", None)
+    # An env may DECLARE that it never writes into its compiled model, and
+    # then sharing one is the ordinary multithreaded-MuJoCo pattern rather
+    # than a race. It has to be a declaration and not something measured
+    # here, because the check below runs ONCE, at construction: a process-
+    # wide scene cache (`moss_env._RECURRING_SCENES`) hands the same model to
+    # a spare at RESET time, long after this has passed, so an env that
+    # shares only later would slip through a check of today's identities.
+    read_only = bool(getattr(env.unwrapped, "shares_compiled_model", False))
+    if (model is not None and not read_only
+            and any(getattr(s.unwrapped, "model", None) is model
+                    for s in spares)):
+        # ONE compiled model under several instances (`shared_model_scope`):
+        # an env that writes into it — the walk env's `_sync_model` sets each
+        # step's domain randomization there — would have a spare's reset on
+        # another thread racing the active env's writes. The same reason
+        # ThreadedVecEnv refuses domain randomization.
+        for s in spares:
+            s.close()
+        warnings.warn(f"{type(env.unwrapped).__name__} shares one compiled "
+                      "model between instances; background resets would race "
+                      "on it, resetting in line instead")
+        return env
+    return _SpareReset(env, spares)
+
+
+def _set_attr(env, name: str, value) -> None:
+    if isinstance(env, _SpareReset):
+        env.set_attr(name, value)
+    else:
+        setattr(env.unwrapped, name, value)
+
+
+def _env_method(env, name: str, args, kwargs):
+    if isinstance(env, _SpareReset):
+        return env.call(name, args, kwargs)
+    return getattr(env.unwrapped, name)(*args, **kwargs)
+
+
+#: Write ends of every live ForkVecEnv's lifeline in THIS process. Closed in
+#: every child this process forks (`_drop_lifelines`), so the only holder of
+#: a write end is the process that made it: a helper forked later — an eval
+#: pool, a second vec env's workers — would otherwise keep the first env's
+#: workers alive after the trainer died.
+_LIFELINE_WRITE_FDS: set[int] = set()
+
+
+def _drop_lifelines() -> None:
+    for fd in _LIFELINE_WRITE_FDS:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _LIFELINE_WRITE_FDS.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_drop_lifelines)
+
+
+def _exit_with_parent(read_fd: int, write_fd: int) -> None:
+    """End this worker when the process that forked it ends, however it ends.
+
+    A worker spends its life in `go_sem.acquire()`, which nothing interrupts:
+    a trainer killed with SIGKILL, OOM-killed or crashed never sends
+    "close", and its workers were reparented to launchd and waited on that
+    semaphore forever (reproduced 2026-09-28: `kill -9` on the parent left
+    all three workers alive under PID 1). The lab sweeps the workers of a
+    trainer IT launched (`TrainingJob._sweep_workers`), but a trainer started
+    from a shell or by an agent had no such net.
+
+    The parent holds the only write end of a pipe it never writes to; this
+    thread blocks on the read end, which returns EOF exactly when the last
+    write end closes — i.e. when the parent is gone. Blocked in `os.read` it
+    costs nothing and holds no GIL.
+    """
+    import threading
+    # Our inherited copy of the write end must go, or EOF could never come.
+    # The at-fork hook has already closed it; closing the NUMBER again could
+    # hit whatever reused it since (multiprocessing reopens stdin on devnull).
+    if write_fd in _LIFELINE_WRITE_FDS:
+        _LIFELINE_WRITE_FDS.discard(write_fd)
+        os.close(write_fd)
+
+    def watch() -> None:
+        try:
+            while os.read(read_fd, 1):
+                pass
+        except OSError:
+            pass
+        os._exit(0)
+    threading.Thread(target=watch, name="parent-lifeline", daemon=True).start()
+
+
 def _shm_view(buf, dtype, shape):
     """Numpy view of a multiprocessing.RawArray. Both parent and fork children
     see the same pages — that is the whole point (COW ndarrays would not)."""
@@ -196,9 +437,18 @@ def _shm_view(buf, dtype, shape):
 def _fork_worker(remote, parent_remote, env_fn_wrappers: list[_CloudpickleFn],
                  first_idx: int, widx: int, act_buf, obs_buf, rew_buf,
                  done_buf, ctrl_buf, go_sem, done_sem, pending,
-                 pending_lock, obs_dim: int, act_dim: int) -> None:
+                 pending_lock, obs_dim: int, act_dim: int,
+                 lifeline: tuple[int, int] | None = None) -> None:
     parent_remote.close()
-    envs = [fn() for fn in env_fn_wrappers]
+    if lifeline is not None:
+        _exit_with_parent(*lifeline)
+    envs = [_build_env(fn) for fn in env_fn_wrappers]
+    if any(isinstance(e, _SpareReset) for e in envs):
+        # A spare resetting in Python (spec building, the driver's per-substep
+        # loop) must hand the GIL back within 0.1 ms, not CPython's 5 ms, or
+        # it stalls this worker's step and with it the whole lockstep fleet.
+        import sys
+        sys.setswitchinterval(1e-4)
     act = _shm_view(act_buf, np.float32, (-1, act_dim))
     obs_s = _shm_view(obs_buf, np.float32, (-1, obs_dim))
     rew = _shm_view(rew_buf, np.float64, (-1,))
@@ -219,6 +469,7 @@ def _fork_worker(remote, parent_remote, env_fn_wrappers: list[_CloudpickleFn],
         # latency for W-fewer semaphore ops and pipes per vec-step.
         go_sem.acquire()
         if not ctrl[widx]:
+            episode_infos = []
             for local, env in enumerate(envs):
                 idx = first_idx + local
                 o, reward, terminated, truncated, info = env.step(act[idx])
@@ -230,12 +481,7 @@ def _fork_worker(remote, parent_remote, env_fn_wrappers: list[_CloudpickleFn],
                     info["terminal_observation"] = o
                     o, _ = env.reset()
                     obs_s[idx] = o
-                    # Sent BEFORE the release so the bytes exist by the time
-                    # the parent (which recvs only after collecting all W
-                    # releases) asks this pipe for them. Multiple done envs
-                    # in one worker send in local order; the parent reads
-                    # this pipe back in the same order.
-                    remote.send(info)
+                    episode_infos.append(info)
                 else:
                     obs_s[idx] = o
             # Completion barrier: only the last worker out posts, so the
@@ -247,6 +493,12 @@ def _fork_worker(remote, parent_remote, env_fn_wrappers: list[_CloudpickleFn],
                 last = pending.value == 0
             if last:
                 done_sem.release()
+            # The parent waits for the shared writes before reading pipes.
+            # Sending a large info first would fill the pipe and prevent
+            # the completion notification, leaving both sides waiting.
+            # Packed workers preserve their env order when sending below.
+            for info in episode_infos:
+                remote.send(info)
             continue
         try:
             cmd, data = remote.recv()
@@ -270,11 +522,11 @@ def _fork_worker(remote, parent_remote, env_fn_wrappers: list[_CloudpickleFn],
         elif cmd == "set_attr":
             slots, name, value = data
             for s in slots:
-                setattr(envs[s].unwrapped, name, value)
+                _set_attr(envs[s], name, value)
             remote.send(None)
         elif cmd == "env_method":
             slots, name, m_args, m_kwargs = data
-            remote.send([getattr(envs[s].unwrapped, name)(*m_args, **m_kwargs)
+            remote.send([_env_method(envs[s], name, m_args, m_kwargs)
                          for s in slots])
         else:
             raise NotImplementedError(cmd)
@@ -348,6 +600,10 @@ class ForkVecEnv:
         self._pending = mp.RawValue("i", 0)
         self._pending_lock = ctx.Lock()
         self.remotes, work_remotes = zip(*[ctx.Pipe() for _ in range(w_count)])
+        # The workers' lifeline (`_exit_with_parent`): this process keeps the
+        # write end open until `close()`, and never writes to it.
+        self._lifeline = os.pipe()
+        _LIFELINE_WRITE_FDS.add(self._lifeline[1])
         self.processes = []
         for w, (work_remote, remote, first) in enumerate(
                 zip(work_remotes, self.remotes, self._firsts)):
@@ -358,7 +614,7 @@ class ForkVecEnv:
                       self._act_buf, self._obs_buf, self._rew_buf,
                       self._done_buf, self._ctrl_buf, self._go[w],
                       self._done_sem, self._pending, self._pending_lock,
-                      obs_dim, act_dim),
+                      obs_dim, act_dim, self._lifeline),
                 daemon=True,
             )
             proc.start()
@@ -439,10 +695,9 @@ class ForkVecEnv:
 
     def step_wait(self) -> tuple:
         self._done_sem.acquire()
-        # All completions collected, so every shared write (and any
-        # episode-end info pickle) is in place before we read. A worker with
-        # several done envs sent their infos in local order; reading its pipe
-        # by ascending env index consumes them in that same order.
+        # All shared writes are complete. Episode infos follow the signal;
+        # recv waits for their bytes without blocking worker completion.
+        # Packed workers send in local order, matching ascending env indices.
         infos: list[dict] = [{} for _ in range(self.num_envs)]
         for i in np.flatnonzero(self._done):
             infos[i] = self.remotes[self._worker_of[i]].recv()
@@ -465,6 +720,9 @@ class ForkVecEnv:
             self._go[w].release()      # close sends no reply; just wake + join
         for proc in self.processes:
             proc.join()
+        _LIFELINE_WRITE_FDS.discard(self._lifeline[1])
+        for fd in self._lifeline:
+            os.close(fd)
         self.closed = True
 
     def get_attr(self, attr_name: str, indices=None) -> list[Any]:

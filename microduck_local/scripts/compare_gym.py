@@ -3,8 +3,11 @@
 The gym's own compare() (funnel per arm, two-proportion z + MDE on whiff),
 then the per-seed reading the roadmap reports beside it: whiff per seed,
 connected kicks, sweet-spot rate, median |side|, and a sign test."""
-import json, math, sys
+import json
+import math
+import sys
 from collections import defaultdict
+
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
 import kick_gym  # noqa: E402
 

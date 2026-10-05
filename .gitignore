@@ -56,8 +56,10 @@ duck-viewer/.git-scaffold-backup/
 # legacy pre-rename state file (a still-running old server may recreate it)
 microduck_local/farm-state.json
 microduck_local/farm-server.log
-# backend log (restart.sh writes it)
-microduck_local/lab-server.log
+# backend logs: restart.sh writes lab-server.log, and a SCRATCH lab on any
+# other port writes lab-<port>.log (duck-lab --port 8799 -> lab-8799.log).
+# Runtime logs, not source — lab-8799.log was sitting untracked in the tree.
+microduck_local/lab-*.log
 # viewer log (viewer.sh writes it)
 duck-viewer/viewer-server.log
 

@@ -5,15 +5,21 @@ reachability counters and whether a swing came.
     cd microduck_local
     uv run python scripts/probe_board_states.py --arm "base=" --arm "reach=spot_reach=0.129"
 """
-import argparse, os, sys, statistics as st
+import argparse
+import os
+import sys
 from collections import Counter
+
 import numpy as np
+
 sys.path.insert(0, "scripts")
 from kick_gym import EPISODE_S, _board_rect, _drive, _place_at_boards, gym_scenario  # noqa: E402
+
 from microduck_local.brain import REGISTRY  # noqa: E402
-from microduck_local.brain.controllers import tof_clearance_bearings  # noqa: E402
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer  # noqa: E402
+from microduck_local.brain.controllers import tof_clearance_bearings  # noqa: E402
 from microduck_local.world.arena import World  # noqa: E402
+
 
 def run(seed, episodes, knobs, margin, cove=0.0, corner=0.0):
     if knobs: os.environ["MICRODUCK_CHASE"] = knobs

@@ -1035,6 +1035,23 @@ class World:
                                                                 f"ball{i}"), b.radius)
                     for i, b in enumerate(scenario.balls)]
         targets += [Target(p.id, "person", self.persons[p.id].body, p.radius, height=p.height) for p in scenario.persons]
+        # PROPS, as the class the scenario DECLARED them (world/scenario.Prop:
+        # `cls` is what the detector reports, not what the prop is drawn as).
+        # This is the line that makes a prop a thing a BRAIN can act on rather
+        # than only something the renderer draws, and the radius is the
+        # prop's own `radius()` — the largest half-extent, which over-reports
+        # a flat prop's apparent width, as `Prop` says.
+        # A PROP is ranged by its own declared size, not by its class's
+        # nominal one (`sensors/detector.Target.nominal_radius`). A prop is
+        # the one target kind whose dimensions the SCENARIO states outright,
+        # so a 66 x 115 mm can declared `"toy"` no longer reports the range a
+        # 40 mm toy would — which was a 230 mm error and cost a pick brain
+        # every grasp it attempted. Ducks, balls, persons, baskets and posts
+        # are untouched and still range by their class.
+        targets += [Target(pr.id, pr.cls,
+                           mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, pr.id),
+                           pr.radius(), nominal_radius=pr.radius())
+                    for pr in scenario.props if pr.mass > 0]
         # A pitch's four goal POSTS, as landmarks a camera can classify
         # (roadmap Track 4 s6 C.2): the goal is a scored line with no
         # geometry, so they are fixed-position targets on the mouth line,
@@ -1049,6 +1066,18 @@ class World:
         # ...and the reverse, for `sense_grip`: a gripper reports the BODY it
         # has hold of and the rest of the world speaks toy ids.
         self._pickable_of_body: dict[int, str] = {b: t for t, b in self.pickables.items()}
+        # ...and the PROPS a scenario declares, which are graspable objects
+        # too. `sense_grip` resolves a held body through this map, so a robot
+        # gripping a prop reported `holding = None` and every consumer -- the
+        # tidy overlay, `record-world`'s log, and a brain deciding whether it
+        # has the thing -- saw nothing. MEASURED on MOSS: the gripper's own
+        # `held_body` returned the can in 12 of 12 episodes while the loop
+        # counted 0 grips, because the can was a prop rather than a pickable.
+        for _pr in getattr(scenario, "props", ()) or ():
+            if getattr(_pr, "mass", 0.0) > 0:
+                _bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, _pr.id)
+                if _bid >= 0:
+                    self._pickable_of_body.setdefault(_bid, _pr.id)
         targets += [Target(t.id, "toy", self.pickables[t.id],
                            max(PICKABLE_KINDS[t.kind]["size"]) / 2) for t in scenario.pickables]
         self.basket = scenario.basket
@@ -1170,6 +1199,11 @@ class World:
         self.wall_bumps: dict[str, int] = {d: 0 for d in self.ducks}
         self.wall_ticks: dict[str, int] = {d: 0 for d in self.ducks}
         self._on_wall: set[str] = set()
+        #: Scenario props by id, so the frame can say what SHAPE and DETECTOR
+        #: CLASS each streamed prop is without the page re-reading the
+        #: scenario (and so a prop's kind below is decided by the scenario
+        #: rather than by a guess at its body name).
+        self._prop_specs = {pr.id: pr for pr in scenario.props}
         # Dynamic objects (free bodies that are not ducks): streamed each frame.
         self.objects: list[tuple[str, str, int]] = []
         for j in range(self.model.njnt):
@@ -1180,7 +1214,8 @@ class World:
             if "/" in name or name in self.persons:
                 continue
             kind = ("ball" if name.startswith("ball") else
-                    "toy" if name in self.pickables else "box")
+                    "toy" if name in self.pickables else
+                    "prop" if name in self._prop_specs else "box")
             self.objects.append((name, kind, b))
         # Rolling cost of one control step, split physics / sensors (ms),
         # EMA over ~1 s of ticks — the /sim perf HUD reads it.
@@ -2175,6 +2210,13 @@ class World:
                     d.lidar.maybe_scan(data, self.t)
                 if d.detector is not None:
                     d.detector.sample(data, self.t)
+                # A body's SECOND camera (MOSS's wrist): its frames were never
+                # taken — the /sim overlay drew its cone from the spec while
+                # `arm_detector.last` stayed None, so a brain scanning with it
+                # (`tidy_moss.wrist_scan`) read nothing for 48 seeds.
+                arm_det = d.sensors.get("arm_detector")
+                if arm_det is not None:
+                    arm_det.sample(data, self.t)
                 # The claw is a sense too (`sense_grip`): a driver-stepped
                 # body's grasp is physics, so "am I holding something" is
                 # READ each tick rather than remembered from an event.
@@ -2208,6 +2250,10 @@ class World:
                 item["toy"] = self.pickable_kind[name]
                 item["held"] = held.get(name)
                 item["inBasket"] = self.in_basket(name)
+            elif kind == "prop":
+                pr = self._prop_specs[name]
+                item["prop"] = {"shape": pr.shape, "size": [round(float(v), 4) for v in pr.size],
+                                "rgba": [round(float(v), 3) for v in pr.rgba], "cls": pr.cls}
             out.append(item)
         return out
 

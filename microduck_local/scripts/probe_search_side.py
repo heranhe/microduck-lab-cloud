@@ -1,13 +1,19 @@
 """During a long loss, what state is the brain in, and when it searches, does it turn TOWARD the true ball?"""
-import math, os, sys, json
-from collections import Counter, defaultdict
+import math
+import os
+import sys
+from collections import Counter
+
 import numpy as np
+
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
 from probe_ball_loss import brain_kwargs
+
 from microduck_local.brain import REGISTRY, Senses
 from microduck_local.brain.brain_env import POLICIES_DIR, onnx_infer
-from microduck_local.brain.controllers import Chase, ChaseParams
+from microduck_local.brain.controllers import Chase
 from microduck_local.world import World, make_pitch
+
 
 def _wrap(a): return math.atan2(math.sin(a), math.cos(a))
 

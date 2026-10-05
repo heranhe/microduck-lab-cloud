@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from "react";
 import Link from "next/link";
 import { plansHref } from "@/lib/plans";
-import { LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings, type LabClient } from "@/lib/lab";
+import { displayedTraining, LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings, type LabClient } from "@/lib/lab";
 import type { CloudAccount as Account, CloudHardware as Hardware, HfCloudAccount as HfAccount, CloudProvider as Provider } from "@/lib/cloudCompute";
 import { useI18n, type Locale } from "@/lib/i18n";
 import { localizeBehavior } from "@/lib/teachLocalization";
@@ -12,6 +12,8 @@ import { TrainingScoreChart } from "./TrainingScoreChart";
 import { useTrainingScoreHistory } from "./useTrainingScoreHistory";
 import styles from "./CloudPanel.module.css";
 import { usePanelDrag } from "./usePanelDrag";
+
+import { useSelectedDuck } from "@/lib/select";
 
 type Job = {
   id: string; platform: Provider; task: string; gpu: string; device?: string; vram?: string;
@@ -55,7 +57,9 @@ async function jsonRequest(path: string, init?: RequestInit) {
     const detail = await response.json().then((v) => v.detail).catch(() => `HTTP ${response.status}`);
     throw new Error(detail);
   }
-  return response.json();
+  const data = await response.json();
+  if (data.ok === false) throw new Error(data.message || data.detail || "Request failed");
+  return data;
 }
 
 export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClient | null> }) {
@@ -124,7 +128,8 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
 
   const cloudActive = useMemo(() => jobs.filter(needsRelease), [jobs]);
   const primary = cloudActive.find((j) => j.allocated_at) ?? cloudActive[0];
-  const local = clientRef.current?.frame?.training ?? null;
+  const selectedDuck = useSelectedDuck();
+  const local = displayedTraining(clientRef.current?.frame, selectedDuck);
   const localActive = local?.status === "training" || local?.status === "stopping";
   const saving = local?.status === "stopping";
   const progress = local?.progress;
@@ -150,7 +155,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
     setBusy("disconnect"); setError(""); setNotice("");
     try {
       const requests: Promise<unknown>[] = [];
-      if (localActive && !saving) requests.push(jsonRequest("/teach/stop", { method: "POST" }));
+      if (localActive && !saving) requests.push(jsonRequest("/teach/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run: local.runName }) }));
       const providers = new Set(cloudActive.map((j) => j.platform));
       requests.push(...[...providers].map((p) => jsonRequest(`/cloud/${p === "hf" ? "hf" : "colab"}/stop-all`, { method:"POST" })));
       const results = await Promise.allSettled(requests);
@@ -159,7 +164,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
       const pending = results.some((result) => {
         if (result.status !== "fulfilled") return false;
         const data = result.value as { stopped?: Job[] };
-        return data.stopped?.some((job) => job.released !== true);
+        return data.stopped?.some((job) => typeof job === "object" && job.released !== true);
       });
       if (pending) requestCloudOpen();
       setNotice(primary
@@ -227,7 +232,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
             <button onClick={requestTeachOpen}>{tr("Open monitor", "查看训练监控")}</button>
             <button onClick={async () => {
               if (!window.confirm(tr("Force terminate? Progress since the last saved checkpoint will be lost.", "强制终止训练？最近检查点之后的进度会丢失。"))) return;
-              try { await jsonRequest("/teach/stop?force=true", { method: "POST" }); }
+              try { await jsonRequest("/teach/stop?force=true", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run: local?.runName }) }); }
               catch (e) { setError(errorText(e, locale)); }
             }}>{tr("Force terminate", "强制终止")}</button>
           </div>

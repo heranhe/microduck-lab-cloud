@@ -16,7 +16,10 @@ What is locked here:
   * THE POSITIVE CONTROL. Remove the opponent and the same draw must read
     "ours" on essentially every episode. This is the check that separates "the
     opponent took the ball" from "our duck never reaches a ball in six
-    seconds", and it is what set `DUEL_S` (58% at 4 s, 94% at 6 s).
+    seconds", and it is what set `DUEL_S` (58% at 4 s, 94% at 6 s — both
+    measured 2026-09-10, BEFORE the F.2 own-goal pack began shipping ON; the
+    window is 8 s from 2026-09-24 for that reason, and `kick_gym.DUEL_S`
+    carries the paired measurement).
   * THE ATTRIBUTION. In a duel both bodies are inside the touch radius, so
     nearest-wins would credit whichever duck the ball was kicked AT. The rule
     is "the ball leaves the body that struck it", and its sign is the one thing
@@ -243,18 +246,53 @@ def test_the_firing_rate_is_zero_on_the_shipped_brain_and_high_with_the_knob():
 
 # --- the positive control ---------------------------------------------------
 
+# Five seeds, not one. The rate is STRUCTURAL PER SEED, not sampling noise:
+# holding the window and the config fixed, seed 0 reads 81% at 16 episodes and
+# 81% again at 48, while its neighbours sit at 88 / 94 / 96%. Each seed has its
+# own characteristic difficulty and more episodes converge to it rather than to
+# the population. So a single-seed assert does not measure the gym, it measures
+# that seed — and seed 0 is the hardest of the five, which is how a real -7.3%
+# shift in the shipped pack surfaced here as one deterministic red test instead
+# of as the population number it is.
+DUEL_CONTROL_SEEDS = (0, 1, 2, 3, 4)
+
+
 def test_with_nobody_to_contest_it_we_touch_first(world):  # noqa: ARG001
     """The control that makes every contested number readable: the identical
     draw for our duck, no opponent, and the episode must resolve to OURS. It
     also fixes `DUEL_S` — at 4 s this read 58%, which would have put a 40%
-    floor of "nobody" under every arm and called it a contest."""
-    rows = run_duel(seed=0, episodes=16, opponents=0)
-    s = duel_summ(rows)
-    assert s["theirs_first"] == 0, "there is no opponent: nothing can touch it but us"
-    assert s["their_advance"] is None
-    assert s["ours_first"] / s["n"] >= 0.85, (
-        f"the unopposed duck resolved only {s['ours_first']}/{s['n']} in {DUEL_S:g} s — "
-        "the window, not the contest, is deciding these episodes")
+    floor of "nobody" under every arm and called it a contest.
+
+    Runs the SHIPPED configuration on purpose. The contested arms carry the
+    F.2 own-goal pack (`approach_keepout=0.20` and friends), so a control with
+    that pinned off would certify a window it never measured — see the long
+    note on `DUEL_S` in `kick_gym.py` for the paired numbers and why the window
+    moved 6 s -> 8 s rather than the pack coming off here.
+
+    Measured at 8 s, 16 episodes x these 5 seeds: 100/100/100/94/100%,
+    mean 98.8%, in ~14 s. The thresholds below sit well under that.
+    """
+    rates = []
+    for seed in DUEL_CONTROL_SEEDS:
+        s = duel_summ(run_duel(seed=seed, episodes=16, opponents=0))
+        assert s["theirs_first"] == 0, (
+            f"seed {seed}: there is no opponent: nothing can touch it but us")
+        assert s["their_advance"] is None, f"seed {seed}: no opponent, no advance"
+        rates.append(s["ours_first"] / s["n"])
+    mean = sum(rates) / len(rates)
+    worst = min(rates)
+    shown = ", ".join(f"{r:.0%}" for r in rates)
+    # The MEAN is the population claim the contested arms rest on...
+    assert mean >= 0.90, (
+        f"the unopposed duck resolved {mean:.0%} of episodes in {DUEL_S:g} s "
+        f"across seeds {DUEL_CONTROL_SEEDS} ({shown}) — the window, not the "
+        "contest, is deciding these episodes")
+    # ...and the WORST seed is the claim that no single arm's seed is quietly
+    # running on a clock-limited draw, which is the failure the single-seed
+    # version of this test could only ever catch by accident.
+    assert worst >= 0.85, (
+        f"one seed resolved only {worst:.0%} in {DUEL_S:g} s ({shown}) — that "
+        "seed's arms carry a floor of 'our duck never got there'")
 
 
 # --- backward compatibility, both directions --------------------------------

@@ -70,7 +70,7 @@
       "policy": null,
       "tof": "datasheet",
       "detector": "datasheet",
-      "brain": "wander",
+      "brain": "tidy_arm",
       "odom": "ideal",
       "team": null,
       "role": null,

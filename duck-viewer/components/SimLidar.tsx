@@ -73,6 +73,9 @@ const PLOT = 210;
  *  automatic: the payload's `mount` is only needed where a drawing has to be
  *  re-read in the BASE frame, which is the adapter's job and not the ray's. */
 const LIDAR_MOUNT_BODY = "base_laser";
+/** The scan's own mount when the frame names it (`sensors.lidar.body`): MOSS's
+ *  scan is the RealSense's depth row and leaves `moss_camera`, not a laser. */
+const scanBody = (scan: LidarPayload) => (scan as LidarPayload & { body?: string }).body ?? LIDAR_MOUNT_BODY;
 
 /** How long a hit's tick is drawn in the room, m. Short on purpose: a tick at
  *  the surface reads as a contact, a full-length ray per return reads as fog.
@@ -316,9 +319,14 @@ export function LidarPlot({ client, duckId }: { client: SimClient; duckId: strin
         // head camera is the only sense that has them. MEASURED as the cause
         // of a lidar-only wander parking on the basket (mars-roadmap 3b).
         const plane = scan?.mount ? scan.mount[2] : null;
+        // MOSS's scan is its RealSense's depth row, not a laser: it maps the
+        // room (walls, boxes, an upright can); lying toys pass under it.
+        const depthRow = scan ? scanBody(scan) !== LIDAR_MOUNT_BODY : false;
         const text = plane === null
           ? "one horizontal slice: nothing above or below the scan plane exists"
-          : `one slice at ${plane.toFixed(2)} m: the basket's 6 cm rim and the toys are BELOW it — only the head camera has them (see “sees:”)`;
+          : depthRow
+            ? `the RealSense's depth, one row at ${plane.toFixed(3)} m: walls and anything taller; lying toys pass under it — the colour camera has those. It builds MOSS'S MAP.`
+            : `one slice at ${plane.toFixed(2)} m: the basket's 6 cm rim and the toys are BELOW it — only the head camera has them (see “sees:”)`;
         if (note.current.textContent !== text) note.current.textContent = text;
       }
     };
@@ -457,9 +465,12 @@ export function LidarOverlay({
     lines.current?.layers.set(OVERLAY_LAYER);
   }, []);
   const laserIdx = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const [id, sc] of Object.entries(robotScenes)) out[id] = sc.bodies.indexOf(LIDAR_MOUNT_BODY);
-    return out;
+    const cache: Record<string, number> = {};
+    return (robot: string, body: string) => {
+      const key = `${robot}/${body}`;
+      if (!(key in cache)) cache[key] = robotScenes[robot]?.bodies.indexOf(body) ?? -1;
+      return cache[key];
+    };
   }, [robotScenes]);
   const pos = useMemo(() => new Float32Array(MAX_LIDAR_SEG * 2 * 3), []);
   const colors = useMemo(() => new Float32Array(MAX_LIDAR_SEG * 2 * 3), []);
@@ -506,8 +517,8 @@ export function LidarOverlay({
       for (const d of f.ducks) {
         const scan = d.sensors?.lidar;
         if (!scan || (sel && d.id !== sel)) continue;
-        const idx = laserIdx[d.robot || "microduck"];
-        const pose = idx === undefined || idx < 0 ? undefined : d.bodies[idx];
+        const idx = laserIdx(d.robot || "microduck", scanBody(scan));
+        const pose = idx < 0 ? undefined : d.bodies[idx];
         if (!pose) continue;
         const origin: [number, number, number] = [pose[0], pose[1], pose[2]];
         const q = [pose[3], pose[4], pose[5], pose[6]];
@@ -516,7 +527,10 @@ export function LidarOverlay({
         // the room is the fan in the panel's strip — including the footprint
         // returns both of them drop.
         const tof = tofFromLidar(scan, { footprintM: lidarFootprintM(scan, d.robot) });
-        const picks = new Set(tof.cols.map((x) => x.ray).filter((r) => r >= 0));
+        // A depth camera's row (MOSS) feeds a map, not the ToF adapter: every
+        // ray is read, so none is singled out as the sector the brain steers on.
+        const depthRow = scanBody(scan) !== LIDAR_MOUNT_BODY;
+        const picks = new Set(depthRow ? [] : tof.cols.map((x) => x.ray).filter((r) => r >= 0));
         for (let i = 0; i < scan.mm.length; i++) {
           const mm = scan.mm[i];
           if (!mm) continue; // 0 = no reading: nothing to draw, not a contact
@@ -531,7 +545,7 @@ export function LidarOverlay({
             continue;
           }
           if (picks.has(i)) seg(origin, dir, 0, r, "#43c2b8");
-          else if (tof.rayCol[i] >= 0) seg(origin, dir, 0, r, "#1f4d4a");
+          else if (depthRow || tof.rayCol[i] >= 0) seg(origin, dir, 0, r, "#1f4d4a");
           seg(origin, dir, Math.max(0, r - HIT_TICK_M), r, depthColor(mm, max * 1000));
         }
         // …and the OUTLINE: consecutive returns joined into the silhouette

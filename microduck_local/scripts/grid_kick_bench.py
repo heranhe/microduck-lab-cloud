@@ -21,11 +21,15 @@ first-look-frame number. Two seeds a cell by default - a half-filled cell is
 one hit. Measured 2026-09-10: the vendored right strike connects on 70-80 %
 of the box already (roadmap 12b).
 """
-import argparse, math, sys
-import mujoco, numpy as np
+import argparse
+import math
+
+import mujoco
+import numpy as np
+
 from microduck_local import contract as C
 from microduck_local.behaviors.env import BehaviorEnv
-from microduck_local.behaviors.kick import _kick_ball_ids, BALL_Z
+from microduck_local.behaviors.kick import BALL_Z, _kick_ball_ids
 from microduck_local.brain.brain_env import onnx_infer
 
 ap = argparse.ArgumentParser()
