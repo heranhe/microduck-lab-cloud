@@ -383,7 +383,7 @@ def test_the_walker_name_scan_catches_a_wrong_name_of_every_kind(robot):
     model = _model(robot)
     spec = _resolved(S.get(robot))
     side, geoms = next(iter(spec.foot_geoms.items()))
-    rig = spec.rig_controls[0]
+    rig = next(iter(spec.rig_controls), {"parts": {}})
     plants = [
         ("base_body", dict(base_body="no_such_link")),
         ("gyro_sensor", dict(gyro_sensor="no_such_sensor")),
@@ -744,6 +744,9 @@ def test_an_open_loop_hold_topples_inside_that_window(robot):
     fell = (worst["terminated_at"] is not None
             or worst["z"] <= spec.fall_height
             or worst["gravity_z"] >= spec.fall_gravity_z)
+    if spec.extra.get("open_loop_stable"):
+        assert not fell, f"{robot}: declared stable HOME toppled"
+        return
     assert fell, (
         f"{robot} held the default pose open-loop for {HOLD_SECONDS} s "
         f"(z {worst['z']:.3f}, gravity_z {worst['gravity_z']:+.3f}). For a "
@@ -1187,7 +1190,7 @@ def _visual_scene(robot_id: str) -> tuple[dict, int]:
         from microduck_local.robots import moss
         return scene, int(moss.robot_spec().compile().nmesh)
     body = S.get(robot_id)
-    if getattr(body, "kind", "") == "generic":
+    if getattr(body, "kind", "") == "generic" or hasattr(body, "visual_group"):
         # A level-0 body's model is its own MJCF, so the count comes off that
         # — but NOT as `nmesh`, and this is a measurement, not a shortcut.
         # `nmesh` counts every mesh the model loaded, and MEASURED on

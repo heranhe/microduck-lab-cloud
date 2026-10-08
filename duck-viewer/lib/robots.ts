@@ -26,6 +26,7 @@ export function robotEmoji(id: string, kind?: string): string {
     microduck: "🦆",
     g1: "🤖",
     mars: "🛸",
+    jumper: "🦀",
   };
   if (byId[id]) return byId[id];
   const byKind: Record<string, string> = {

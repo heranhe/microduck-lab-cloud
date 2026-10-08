@@ -73,6 +73,8 @@ _BUILTINS: tuple[_Builtin, ...] = (
              setup_hint="uv run fetch-robot g1"),
     _Builtin(id="mars", module=".mars", attr="MARS",
              setup_hint="uv run fetch-robot mars"),
+    _Builtin(id="jumper", module=".jumper", attr="JUMPER",
+             setup_hint="uv run fetch-robot jumper"),
     _Builtin(id="moss", module=".moss", attr="MOSS",
              setup_hint="uv run fetch-robot moss"),
 )

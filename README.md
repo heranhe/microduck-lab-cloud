@@ -10,6 +10,12 @@
 
 **更新方式：**最新修复合并到 `main`，日常更新不再创建 GitHub Release。每次重要更新及原版本说明保留在[更新日志](CHANGELOG.md)中。
 
+## 2026-10-08：新增“跳跳”（Jumper）六足机器人
+
+新增 KingKong Robotics 的 **“跳跳”（Jumper）**：22 个物理关节，20 维策略动作，71 维观测，独立的六足训练环境。可在实验室添加跳跳、查看真实物理姿态，并通过教学面板启动站立或三足步态训练；训练快照与最终 ONNX 会加载到场景中。
+
+资源通过 `cd microduck_local && uv run fetch-robot jumper` 获取，固定上游版本并逐文件校验 SHA-256。训练端提供 mjlab 1.3 的站立与三足步态任务，见 [跳跳接入说明](docs/jumper.md)。本次完成 106,496 步站立流程验证；步态收敛、跳跃和实机部署仍未验收。官方 Jumper 策略不能直接加载到本次独立契约。
+
 ## 2026-10-05：同步上游 MOSS 与多任务训练
 
 已合并上游 `bbf0326`（MOSS 第四种机器人），保留本分支的训练方案、Colab / Hugging Face 云端流程、中英文界面和保存续训。
@@ -158,13 +164,14 @@ uv run eval-pitch --seeds 12 --per-side 3 --out runs/my-soccer.jsonl --tag my-so
 | ![MicroDuck 跑步演示](docs/media/running.gif) | ![带辅助起跳的后空翻演示](docs/media/backflip.gif) |
 
 <a id="robots"></a>
-## 多机器人：MicroDuck、G1 与 MARS
+## 多机器人：MicroDuck、G1、MARS 与 Jumper
 
 | 机器人 | 当前实验能力 |
 |---|---|
 | MicroDuck | 本地行走和动作训练、玩具整理、跟随、足球；行走部署契约为 61 维观测 / 14 维动作 |
 | Unitree G1 | 29 关节人形机器人，复用训练、导出、动作编辑和实验室；在世界中作为被小鸭跟随的人物 |
 | Innate MARS | 轮式底盘、机械臂和夹爪，支持 LiDAR、跟随、`tidy_arm` 整理，以及实验性的 `reach` / `pick` 训练任务 |
+| 跳跳（Jumper） | 22 个物理关节、20 维动作、71 维观测；本地站立/三足步态训练与 mjlab 1.3 任务，详见 [接入说明](docs/jumper.md) |
 | MuJoCo Menagerie 模型 | 可经机器人注册机制加载模型到实验室；加载显示不代表自动具备可用控制器或训练任务 |
 
 ![MicroDuck 与 Unitree G1 在同一实验室中并排显示](docs/media/lab-g1.png)

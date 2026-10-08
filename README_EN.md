@@ -10,6 +10,12 @@ Built on [Jonathan Hawkins' Microduck Lab](https://github.com/jonathanhawkins/mi
 
 **Updates:** current fixes land on `main`; routine updates no longer create GitHub Releases. Changes and historical release notes are preserved in the [changelog](CHANGELOG.md).
 
+## October 8, 2026: Jumper (跳跳), a new six-legged robot
+
+Added KingKong Robotics' **Jumper (跳跳)** to the lab: 22 physical joints, 20 policy actions and a separate 71-observation contract. The teach panel offers standing and tripod-gait recipes, with live snapshots and normalized ONNX export. Fetch verified assets with `cd microduck_local && uv run fetch-robot jumper`.
+
+The companion training fork includes mjlab 1.3 standing and tripod tasks. A 106,496-step standing run verified the training/export/load workflow; gait convergence, jumping and hardware deployment have not been validated. Upstream Jumper policies use a different observation and motor model. See the [integration notes](docs/jumper.md) for setup, verification and limits.
+
 ## October 5, 2026: upstream MOSS and concurrent training
 
 Merged upstream `bbf0326` while preserving training plans, Colab / Hugging Face workflows, Chinese/English UI, and save/resume controls.
