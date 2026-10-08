@@ -133,5 +133,6 @@
     "assets/jumper/urdf/jumper/meshes/visual/display_module_link.stl": "c019dd2abf703c94dc2dbf693acce85e8b62ee9ada1af21a0786afd00bd94b2e",
     "assets/jumper/urdf/jumper/meshes/visual/tof_sensor_link.stl": "4813e253c3b471319254a330f06715473f388f3b91dc7fb8da097cec9724aafd",
     "assets/jumper/urdf/jumper/meshes/visual/upper_shell_link.stl": "25cadf3b3a05f56de945468858315a867f4d3c9b5967911c9e395d81f3176fc9"
-  }
+  },
+  "lab_spacing_m": 1.5389273257256828
 }

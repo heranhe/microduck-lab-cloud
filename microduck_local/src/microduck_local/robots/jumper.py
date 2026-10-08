@@ -5,7 +5,7 @@ from functools import lru_cache
 import numpy as np
 
 from . import jumper_model as J
-from .body import RobotFrames, measure_lab_spacing_m
+from .body import RobotFrames
 from .policy_contract import declare
 from .spec import Effector, RobotSpec
 
@@ -69,9 +69,8 @@ def visual_scene():
 
 @lru_cache(maxsize=1)
 def body():
-    import mujoco
-
-    model = mujoco.MjModel.from_xml_path(str(J.scene_xml()))
+    # Geometry measured at STAND for the pinned asset revision. Reading
+    # metadata must also work on a machine that has not fetched meshes.
     return JumperBody(
         id="jumper",
         title="Jumper",
@@ -94,7 +93,7 @@ def body():
         lin_vel_y_range=(-0.2, 0.2),
         ang_vel_z_range=(-0.5, 0.5),
         twist_obs_slice=(66, 69),
-        lab_spacing_m=measure_lab_spacing_m(model, "STAND")[0],
+        lab_spacing_m=J.FACTS["lab_spacing_m"],
         physics_dt=J.PHYSICS_DT,
         effectors=tuple(
             Effector(id=leg, label=leg, body=foot, point="sole")

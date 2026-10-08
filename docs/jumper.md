@@ -41,10 +41,10 @@ PYTHONPATH=src .venv/bin/python -c 'from pathlib import Path; from microduck_loc
 
 ## mjlab 训练端
 
-训练适配发布在 [heranhe/microduck_rl 的 jumper-integration 分支](https://github.com/heranhe/microduck_rl/tree/jumper-integration)。本地在工作区根目录的 `microduck_rl` 中运行（不是 `microduck-lab/microduck_rl` 上游副本）：
+训练适配发布在 [heranhe/microduck_rl 的 main 分支](https://github.com/heranhe/microduck_rl/tree/main)。本地在工作区根目录的 `microduck_rl` 中运行（不是 `microduck-lab/microduck_rl` 上游副本）：
 
 ```bash
-git clone --branch jumper-integration https://github.com/heranhe/microduck_rl.git
+git clone --branch main https://github.com/heranhe/microduck_rl.git
 cd microduck_rl
 uv sync
 ```
@@ -78,3 +78,8 @@ uv run --with pytest pytest tests/test_jumper_cfg.py -q
 - 经实验室 `/teach` 启动站立流程验证：`teach-jumper_stand-2a8e72`，32 个并行环境，实际 106496 步（预算 100000，按完整 rollout 收尾），约 44 秒，3 个快照；最终模型、归一化统计和 ONNX 已保存在本地 runs/，前端已加载最终策略。此记录只证明训练/导出/加载流程可用，不代表完成步态收敛验收。
 
 ![真实实验室中的 Jumper 与已导出的站立策略](media/jumper-lab.png)
+
+
+## main 合并与新环境检查
+
+训练适配已合并到训练 fork 的 main 分支。修复未下载 Jumper 资源时测试收集提前解析模型的问题：机器人声明只读取固定版本的关节与实测场景间距，模型解析延后到仿真、训练或绘制时。新增缺资源情况下收集机器人一致性测试的回归检查。

@@ -16,6 +16,10 @@ def test_listing_and_fetch_hint_do_not_need_assets(monkeypatch, tmp_path):
     assert "jumper" in R.ids()
     assert R.setup_hint("jumper") == "uv run fetch-robot jumper"
     assert not R.get("jumper").ready()
+    concrete = R.get("jumper")._resolve()
+    assert concrete.num_actions == 20
+    assert concrete.contract().obs_dim == 71
+    assert concrete.lab_spacing_m == J.FACTS["lab_spacing_m"]
 
 
 def test_a_bad_download_never_becomes_ready(monkeypatch, tmp_path):
@@ -144,3 +148,30 @@ def test_ppo_can_update_then_export_with_its_normalizer(tmp_path):
     path = export(tmp_path, tmp_path / "policy.onnx")
     assert PolicyContract.from_onnx(path) == R.get("jumper").contract()
     env.close()
+
+
+def test_collection_without_jumper_assets(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    project = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "tests/test_body_conformance.py",
+            "tests/test_mjcf_body.py",
+        ],
+        cwd=project,
+        env={**os.environ, "MICRODUCK_JUMPER_DIR": str(tmp_path / "missing")},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[jumper]" in result.stdout
