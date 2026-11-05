@@ -6,10 +6,8 @@ import { plansHref } from "@/lib/plans";
 import { displayedTraining, LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings, type LabClient } from "@/lib/lab";
 import {
   canSaveAndDisconnect,
-  cloudBudgetLeft,
   cloudHeartbeatStale,
   cloudPhaseText,
-  cloudProgressPercent,
   needsRelease,
   type CloudAccount as Account,
   type CloudHardware as Hardware,
@@ -20,7 +18,9 @@ import {
 } from "@/lib/cloudCompute";
 import { useI18n, type Locale } from "@/lib/i18n";
 import { localizeBehavior } from "@/lib/teachLocalization";
-import { requestCloudOpen, requestPolicyToggle, requestTeachOpen, usePolicyOpen } from "@/lib/ui";
+import { requestCloudOpen, requestCloudTraining, requestPolicyToggle, requestTeachOpen, usePolicyOpen } from "@/lib/ui";
+import { appendCloudScore, cloudProgressView, localProgressView } from "@/lib/trainProgress";
+import { TrainProgress } from "./TrainProgress";
 import { TrainingScoreChart } from "./TrainingScoreChart";
 import { useTrainingScoreHistory } from "./useTrainingScoreHistory";
 import styles from "./CloudPanel.module.css";
@@ -90,8 +90,14 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const [refreshError, setRefreshError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const [cloudScore, setCloudScore] = useState<{ jobId: string; points: { x: number; y: number }[] }>({ jobId: "", points: [] });
+
   const updateJobs = useCallback((platform: Provider) => (data: { jobs?: Job[]; server?: ColabServerView }) => {
     if (data.server) setServer(data.server);
+    if (platform === "colab") {
+      const live = (data.jobs ?? []).filter(needsRelease);
+      setCloudScore((previous) => appendCloudScore(previous, live.find((j) => j.allocated_at) ?? live[0]));
+    }
     setJobs((previous) => [
       ...previous.filter((job) => job.platform !== platform),
       ...(data.jobs ?? []).map((job) => ({ ...job, platform })),
@@ -158,7 +164,6 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const progress = local?.progress;
   const steps = progress?.overallSteps ?? progress?.steps ?? 0;
   const total = progress?.overallTotal ?? progress?.total ?? 0;
-  const percent = total > 0 ? Math.min(100, 100 * steps / total) : 0;
   const sps = progress?.sps;
   const nextSnap = progress?.nextSnapStep;
   const snapEta = nextSnap != null && sps && sps > 0 ? Math.max(0, nextSnap - (progress?.steps ?? 0)) / sps : null;
@@ -176,9 +181,13 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
 
   const canSave = !!primary && canSaveAndDisconnect(primary);
   const savingNow = primary?.state === "saving";
-  const primaryPercent = primary ? cloudProgressPercent(primary) : null;
-  const primaryBudget = primary ? cloudBudgetLeft(primary, now) : null;
   const primaryStale = !!primary && cloudHeartbeatStale(primary, now);
+  // The same readout for a CPU run and a GPU run.
+  const progressView = localActive && progress && local
+    ? localProgressView({ status: local.status === "stopping" ? "stopping" : "training", steps, total, etaSeconds: progress.etaSeconds, score: progress.ep_rew }, locale)
+    : primary ? cloudProgressView(primary, now, locale) : null;
+  const chartPoints = localActive ? scoreHistory : cloudScore.points;
+  const showChart = localActive || (!!primary && cloudScore.points.length > 0);
 
   const saveAndDisconnect = async (job: Job) => {
     setBusy("disconnect"); setError(""); setNotice("");
@@ -333,7 +342,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
     <div className={styles.toolbar} data-policy-ui>
       <button className={styles.trainButton} onClick={requestTeachOpen}>🎓 {tr("Training", "训练")}</button>
       <button className={`${styles.toolButton} ${open ? styles.toolButtonActive : ""}`} onClick={() => open ? setOpen(false) : requestCloudOpen()}>☁ {tr("Cloud", "云算力")}</button>
-      <button className={`${styles.toolButton} ${policyOpen ? styles.toolButtonActive : ""}`} onClick={requestPolicyToggle}>🧠 {tr("Policies", "策略")}</button>
+      <button className={`${styles.toolButton} ${policyOpen ? styles.toolButtonActive : ""}`} onClick={requestPolicyToggle}>🧠 {tr("Models", "模型")}</button>
       <Link className={styles.toolButton} href={plansHref()} title={tr("Create or import a training plan", "创建或导入训练方案")}>📋 {tr("Plans", "方案")}</Link>
     </div>
     <div className={`${styles.statusBar} ${hasActiveCompute ? styles.statusBarActive : ""} ${localActive ? styles.trainingBar : ""}`} data-policy-ui>
@@ -367,45 +376,21 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           </div>
         </details>}
       </div>
-      {localActive && progress && <>
-        <div className={styles.progressLine}>
-          <strong>{percent.toFixed(1)}%</strong>
-          <span>{steps.toLocaleString()} / {total.toLocaleString()} {tr("steps", "步")}</span>
-          <span>{saving ? tr("Saving checkpoint", "正在保存检查点") : progress.etaSeconds != null ? `${tr("Remaining ≈", "剩余约")}${duration(progress.etaSeconds)}` : tr("Estimating time…", "正在估算剩余时间…")}</span>
-        </div>
-        <div className={styles.progressTrack} role="progressbar" aria-label={tr("Training progress", "训练进度")} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
-          <span style={{ width: `${percent}%` }}/>
-        </div>
-      </>}
+      {progressView && <TrainProgress view={progressView}/>}
       {primary && <>
-        <div className={styles.progressLine}>
-          <strong>{cloudPhaseText(primary, locale)}</strong>
-          {primaryPercent != null && <span>{primary.progress?.iteration}/{primary.progress?.iterations} {tr("iterations", "迭代")} · {primaryPercent.toFixed(1)}%</span>}
-          {primary.progress?.eta && <span>{tr("Remaining ≈", "剩余约")}{primary.progress.eta}</span>}
-        </div>
-        {primaryPercent != null && <div className={styles.progressTrack} role="progressbar" aria-label={tr("Cloud training progress", "云端训练进度")} aria-valuenow={primaryPercent} aria-valuemin={0} aria-valuemax={100}>
-          <span style={{ width: `${primaryPercent}%` }}/>
-        </div>}
-        <div className={styles.snapshotLine}>
-          {primary.progress?.reward != null && <span>{tr("Score", "得分")} {primary.progress.reward}</span>}
-          {primary.progress?.gpu_util != null && <span>GPU {primary.progress.gpu_util}%</span>}
-          {primaryBudget != null && <span>{tr("Time limit in", "距时长上限")} {duration(primaryBudget)}</span>}
-          {primary.rate != null && <span>{primary.rate} CCU/h</span>}
-          {primary.ccu_spent != null && <span>{tr("Spent", "已用")} {primary.ccu_spent} CCU</span>}
-        </div>
         <div className={styles.snapshotLine}>{tr("Keep this Mac open: it finishes and releases the job.", "请勿合上电脑：结果下载和算力释放都由本机完成。")}</div>
         {primaryStale && <div className={styles.error} role="alert">{tr("No answer from the runtime for a while. The GPU may still be billing.", "云端已有一段时间没有响应，算力可能仍在计费。")}</div>}
         {primary.message && <div className={styles.error} role="alert">{errorText(primary.message, locale)}</div>}
       </>}
       {error && <div className={styles.error} role="alert">{error}</div>}
       </div>
-      {localActive && <div className={styles.scoreChart}>
+      {showChart && <div className={styles.scoreChart}>
         <div className={styles.scoreHeading}>
           <span title={tr("Score per practice run; higher is better", "每轮训练得分，越高表示动作完成得越好")}>{tr("Training score · higher is better", "训练得分 · 越高越好")}</span>
-          {scoreHistory.length > 0 && <strong>{scoreHistory[scoreHistory.length - 1].y.toFixed(2)}</strong>}
+          {chartPoints.length > 0 && <strong>{chartPoints[chartPoints.length - 1].y.toFixed(2)}</strong>}
         </div>
-        {scoreHistory.length > 0
-          ? <TrainingScoreChart points={scoreHistory} label={tr("Score per practice run; higher is better", "每轮训练得分，越高表示动作完成得越好")} />
+        {chartPoints.length > 0
+          ? <TrainingScoreChart points={chartPoints} label={tr("Score per practice run; higher is better", "每轮训练得分，越高表示动作完成得越好")} />
           : <div className={styles.scoreEmpty}>{tr("Waiting for the first score…", "等待首轮得分…")}</div>}
       </div>}
     </div>
@@ -436,6 +421,11 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           {provider === "colab" && <button className={styles.refreshButton} disabled={busy === "refresh"} onClick={async () => { setBusy("refresh"); await refresh(true); setBusy(""); }}>{busy === "refresh" ? tr("Checking…", "检查中…") : tr("Refresh", "刷新")}</button>}
           {provider === "hf" && hfSettings?.configured && <button className={styles.dangerLink} disabled={busy === "token"} onClick={disconnectHf}>{tr("remove token", "移除 Token")}</button>}
         </div>
+
+        {account.connected && !hasCloudActive && <div className={styles.tokenRow}>
+          <button className={styles.smallButton} onClick={requestCloudTraining}>▶ {tr("Start cloud training", "开始云训练")}</button>
+          <span className={styles.help}>{tr("Pick an official task, then press Cloud.", "选一个官方任务，再点“云算力”。")}</span>
+        </div>}
 
         {provider === "colab" && colab.connected && !(typeof colab.balance === "number" && colab.balance > 0) && <div className={styles.balanceWarning}>
           <strong>{tr("No paid CCU shown · Free T4 can still be requested", "无可用付费 CCU · 仍可尝试免费 T4")}</strong>

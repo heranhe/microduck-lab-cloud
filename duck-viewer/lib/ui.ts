@@ -87,6 +87,25 @@ export function requestTeachOpen() {
   }
 }
 
+let pendingTeachFilter: "cpu" | "cloud" | null = null;
+
+/** Open the training panel already filtered to what runs on cloud GPUs. The
+ * request is remembered because the list only exists while the panel is open. */
+export function requestCloudTraining() {
+  if (typeof window === "undefined") return;
+  pendingTeachFilter = "cloud";
+  window.dispatchEvent(new CustomEvent("microduck:close-cloud"));
+  window.dispatchEvent(new CustomEvent("microduck:open-teach"));
+  window.dispatchEvent(new CustomEvent("microduck:teach-filter", { detail: "cloud" }));
+}
+
+/** The filter someone asked for before the list mounted; read once. */
+export function takeTeachFilter(): "cpu" | "cloud" | null {
+  const filter = pendingTeachFilter;
+  pendingTeachFilter = null;
+  return filter;
+}
+
 /** Open the shared cloud account/job manager from a training prerequisite. */
 export function requestCloudOpen() {
   if (typeof window !== "undefined") {

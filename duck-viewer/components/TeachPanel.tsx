@@ -9,7 +9,9 @@
 // Self-contained: talks to the lab server directly and reads the streamed
 // frame via clientRef (same polling pattern as Hud).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActionPicker, type ActionPick } from "./ActionPicker";
+import { TrainProgress } from "./TrainProgress";
 import { TrainingScoreChart } from "./TrainingScoreChart";
 import { useTrainingScoreHistory } from "./useTrainingScoreHistory";
 import { usePanelDrag } from "./usePanelDrag";
@@ -37,16 +39,30 @@ import { fetchRobots, type RobotInfo } from "@/lib/anim";
 import { trickNoun } from "@/lib/robots";
 import { loadJSON, saveJSON } from "@/lib/persist";
 import { useI18n } from "@/lib/i18n";
-import { planRequest, plansHref, type Plan } from "@/lib/plans";
+import { planRequest, plansHref, type Catalog, type Plan } from "@/lib/plans";
 import { loadClip } from "@/lib/anim";
 import { localizeBehavior, rewardMetricLabel } from "@/lib/teachLocalization";
 import {
   CLOUD_ACTIVE_STATES,
-  cloudTaskFor,
+  needsRelease,
   type CloudAccount,
+  type CloudJob,
+  type CloudProvider,
   type ComputeSource,
   type HfCloudAccount,
 } from "@/lib/cloudCompute";
+import {
+  CLOUD_PRESETS,
+  buildActionRows,
+  cloudConfirmText,
+  effectiveCcuLimit,
+  fallbackActionRows,
+  mayUsePaidUnits,
+  type ActionRow,
+  type CloudPreset,
+  type TrainMode,
+} from "@/lib/actionCatalog";
+import { cloudProgressView } from "@/lib/trainProgress";
 import { bestRunFor } from "@/lib/tricks";
 import { getSelectedDuck, useSelectedDuck } from "@/lib/select";
 import { modalIsOpen, requestCloudOpen } from "@/lib/ui";
@@ -1204,23 +1220,23 @@ export function TeachPanel({
     return Array.isArray(stored) && stored.length ? stored.slice(-MSG_CAP) : [GREETING];
   });
   const [input, setInput] = useState("");
-  // A submitted recipe remains the selected action even after the draft is
-  // cleared. Cloud training must use that choice, not an empty text field.
-  const [chosenAction, setChosenAction] = useState<{ text: string; behavior: string; robotId: string } | null>(
-    () => loadJSON("teachChosenAction", null)
-  );
-  const [compute, setCompute] = useState<ComputeSource>(() => loadJSON("teachCompute", "local"));
   const [colabAccount, setColabAccount] = useState<CloudAccount>({ connected: false });
   const [hfAccount, setHfAccount] = useState<HfCloudAccount>({ connected: false, hardware: [] });
   const [colabGpu, setColabGpu] = useState("T4");
   const [hfFlavor, setHfFlavor] = useState("l4x1");
-  const [cloudIterations, setCloudIterations] = useState(1000);
+  // The first cloud run is a small, bounded one; "full run" is one click away.
+  const [cloudPreset, setCloudPreset] = useState<CloudPreset | "custom">("trial");
+  const [cloudIterations, setCloudIterations] = useState<number>(CLOUD_PRESETS.trial.iterations);
   const [cloudEnvs, setCloudEnvs] = useState(4096);
-  const [cloudMaxMinutes, setCloudMaxMinutes] = useState(180);
-  const [cloudMaxCcu, setCloudMaxCcu] = useState("");
+  const [cloudMaxMinutes, setCloudMaxMinutes] = useState<number>(CLOUD_PRESETS.trial.maxMinutes);
+  const [cloudMaxCcu, setCloudMaxCcu] = useState<string>(CLOUD_PRESETS.trial.maxCcu);
   const [cloudBusy, setCloudBusy] = useState(false);
   const launchPending = useRef(false);
   const [cloudError, setCloudError] = useState("");
+  // Connection trouble found by the background refresh, kept apart so a refresh
+  // never erases the reason the last launch failed.
+  const [labError, setLabError] = useState("");
+  const [prereq, setPrereq] = useState<{ task: string; problem: string | null } | null>(null);
   const [activeCloudJobs, setActiveCloudJobs] = useState(0);
   // Training is owned by duck-lab. Keep this separate from provider account
   // state so an offline backend cannot look like an unconnected Google account.
@@ -1236,19 +1252,22 @@ export function TeachPanel({
   const activeRobot = useActiveRobot();
   const robot = resolveRobot(robots, activeRobot) ?? DUCK_ONLY[0];
   const noun = robot.noun ?? robot.title;
-  const suggestions = robot.teach ?? [];
-  const selectedSuggestion = suggestions.find(
-    (s) => s.text.trim().toLocaleLowerCase() === input.trim().toLocaleLowerCase()
+  const teach = robot.teach;
+  // What the list shows. The catalog says which actions train where; a lab too
+  // old to serve it still offers its suggestion chips.
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [picked, setPicked] = useState<ActionPick | null>(null);
+  const [cloudProvider, setCloudProvider] = useState<CloudProvider>(() => loadJSON("teachCloudProvider", "colab"));
+  const [colabJobList, setColabJobList] = useState<CloudJob[]>([]);
+  const rows = useMemo(
+    () => (catalog ? buildActionRows(catalog, robot.id, teach, locale) : fallbackActionRows(robot.id, teach, locale)),
+    [catalog, robot.id, teach, locale],
   );
-  // Old servers returned the built-in text without behavior ids. Preserve the
-  // one exact, equivalent mapping instead of making all cloud options vanish.
-  const selectedBehavior = selectedSuggestion?.behavior ||
-    (input.trim().toLocaleLowerCase() === "official walking" ? "official_velocity" : undefined) ||
-    (input.trim().toLocaleLowerCase() === "official recovery" ? "official_velstand" : undefined) ||
-    (input.trim().toLocaleLowerCase() === "stand still" ? "stand" : undefined) ||
-    (!input.trim() && chosenAction?.robotId === robot.id ? chosenAction.behavior : undefined);
-  const actionText = input.trim() || (chosenAction?.robotId === robot.id ? chosenAction.text : "");
-  const cloudTask = cloudTaskFor(robot.id, selectedBehavior);
+  // A pick that belongs to another robot's list simply stops applying.
+  const pickedRow: ActionRow | null = rows.find((r) => r.id === picked?.rowId) ?? null;
+  const activePick: ActionPick | null = pickedRow ? picked : null;
+  const compute: ComputeSource = activePick?.mode === "cloud" ? cloudProvider : "local";
   // Our runs, for the ▶ beside a trick that already has a MEASURED best run —
   // so watching what a trick looks like never means digging through 🧠.
   const [policies, setPolicies] = useState<Policy[]>([]);
@@ -1274,8 +1293,7 @@ export function TeachPanel({
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => saveJSON("teachOpen", open), [open]);
-  useEffect(() => saveJSON("teachCompute", compute), [compute]);
-  useEffect(() => saveJSON("teachChosenAction", chosenAction), [chosenAction]);
+  useEffect(() => saveJSON("teachCloudProvider", cloudProvider), [cloudProvider]);
   useEffect(() => {
     const openPanel = () => setOpen(true);
     const closePanel = () => setOpen(false);
@@ -1299,7 +1317,19 @@ export function TeachPanel({
     return () => {
       stale = true;
     };
-  }, [open]);
+    // Again once the lab answers: a panel opened while it was still starting would keep the placeholder list.
+  }, [open, labOnline]);
+
+  useEffect(() => {
+    if (!open || labOnline !== true) return;
+    let stale = false;
+    const first = window.setTimeout(() => setCatalogLoading(true), 0);
+    planRequest<Catalog>("/plans/templates")
+      .then((c) => { if (!stale) setCatalog(c); })
+      .catch(() => { if (!stale) setCatalog(null); })
+      .finally(() => { if (!stale) setCatalogLoading(false); });
+    return () => { stale = true; clearTimeout(first); };
+  }, [open, labOnline]);
 
   const refreshCompute = useCallback(async () => {
     const [health, colab, hf, colabJobs, hfJobs] = await Promise.allSettled([
@@ -1320,6 +1350,9 @@ export function TeachPanel({
         setHfFlavor(hf.value.hardware[0].id);
       }
     }
+    if (colabJobs.status === "fulfilled") {
+      setColabJobList((colabJobs.value.jobs ?? []).map((job: CloudJob) => ({ ...job, platform: "colab" as const })));
+    }
     if (colabJobs.status === "fulfilled" && hfJobs.status === "fulfilled") {
       setActiveCloudJobs([...(colabJobs.value.jobs ?? []), ...(hfJobs.value.jobs ?? [])]
         .filter((job: { state: string; released?: boolean }) => job.released !== true && (ACTIVE_CLOUD_STATES.has(job.state) || job.released === false)).length);
@@ -1327,10 +1360,10 @@ export function TeachPanel({
     const failed = [colab, hf, colabJobs, hfJobs].find((result) => result.status === "rejected");
     if (failed?.status === "rejected") {
       const raw = failed.reason instanceof Error ? failed.reason.message : String(failed.reason);
-      setCloudError(locale === "zh" && (raw.includes("Failed to fetch") || raw.includes("Lab unavailable"))
+      setLabError(locale === "zh" && (raw.includes("Failed to fetch") || raw.includes("Lab unavailable"))
         ? "无法连接本地 duck-lab。"
         : raw);
-    } else if (health.status === "fulfilled") setCloudError("");
+    } else if (health.status === "fulfilled") setLabError("");
   }, [hfFlavor, locale]);
 
   useEffect(() => {
@@ -1344,6 +1377,26 @@ export function TeachPanel({
       window.removeEventListener("microduck:cloud-refresh", refreshNow);
     };
   }, [open, refreshCompute]);
+  const pickedCloudTask = activePick?.mode === "cloud" ? pickedRow?.cloud?.task ?? null : null;
+  useEffect(() => {
+    if (!open || !pickedCloudTask || cloudProvider !== "colab" || labOnline !== true) return;
+    let stale = false;
+    cloudRequest(`/cloud/colab/prerequisites?task=${encodeURIComponent(pickedCloudTask)}`)
+      .then((r) => { if (!stale) setPrereq({ task: pickedCloudTask, problem: r.ready ? null : String(r.problem ?? "") }); })
+      .catch(() => { if (!stale) setPrereq(null); });
+    return () => { stale = true; };
+  }, [open, pickedCloudTask, cloudProvider, labOnline]);
+  // A running cloud job reports every few seconds; the account lookups stay slow.
+  const cloudRunning = activeCloudJobs > 0;
+  useEffect(() => {
+    if (!open || !cloudRunning) return;
+    const poll = window.setInterval(() => {
+      cloudRequest("/cloud/colab/jobs")
+        .then((data) => setColabJobList((data.jobs ?? []).map((job: CloudJob) => ({ ...job, platform: "colab" as const }))))
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(poll);
+  }, [open, cloudRunning]);
   // Refetched when a run finishes too: that is when a new best can appear.
   const trainingStatus = training?.status;
   useEffect(() => {
@@ -1463,7 +1516,6 @@ export function TeachPanel({
         // The job's own numbers are the truth from here on; the pending
         // edits have been spent.
         setTraining(data.job);
-        setChosenAction({ text: body.text, behavior: data.job.behavior.id, robotId: body.robot ?? robot.id });
         behaviorRef.current = data.job.behavior.id;
         setBudgetSteps(null);
         setStagePins({});
@@ -1505,59 +1557,57 @@ export function TeachPanel({
     await postTeach({ text: trimmed, ...(robots !== DUCK_ONLY ? { robot: robot.id } : {}) });
   }
 
-  async function launchSelectedTraining() {
-    const trimmed = actionText;
-    if (!trimmed || cloudBusy || launchPending.current) return;
-    if (activeCloudJobs > 0 || (compute !== "local" && localJobsActive)) {
+  async function startPicked() {
+    if (!pickedRow || !activePick || cloudBusy || launchPending.current) return;
+    if (activeCloudJobs > 0 || (activePick.mode === "cloud" && localJobsActive)) {
       setCloudError(tr(
         "A training job is already running. Stop it from the top status bar before starting another.",
         "已有训练任务正在运行，请先使用顶部状态栏停止训练或断开云算力。"
       ));
       return;
     }
-    if (compute === "local") {
-      await submit(trimmed);
+    if (activePick.mode === "cpu") {
+      const text = pickedRow.local?.text;
+      if (!text) return;
+      setPicked(null);
+      await submit(text);
       return;
     }
-    if (!cloudTask) {
-      setCloudError(tr(
-        "This action has no equivalent official cloud task yet. Use local training or choose an official cloud task.",
-        "这个动作暂时没有等价的官方云端任务，请使用本地训练或明确选择官方云端任务。"
-      ));
-      return;
-    }
+    const task = pickedRow.cloud?.task;
+    if (!task) return;
 
-    // Anything on the account can be drawn on, T4 included; ask before spending it.
+    // Anything on the account can be drawn on, a T4 included; say what is at stake first.
     const balance = colabAccount.balance;
-    const mayCharge = compute === "colab" && !(typeof balance === "number" && balance <= 0);
-    if (mayCharge && !window.confirm(tr(
-      `This may use your paid compute units (balance: ${balance ?? "unknown"}). It stops automatically after ${cloudMaxMinutes} minutes. Start?`,
-      `本次训练可能消耗付费计算单元（余额 ${balance ?? "未知"}）。到达 ${cloudMaxMinutes} 分钟上限后会自动停止。确定开始吗？`,
-    ))) return;
+    const mayCharge = compute === "colab" && mayUsePaidUnits(balance);
+    const ccuLimit = effectiveCcuLimit(cloudMaxCcu, balance);
+    if (mayCharge && !window.confirm(cloudConfirmText({
+      title: pickedRow.title, gpu: colabGpu, iterations: cloudIterations,
+      maxMinutes: cloudMaxMinutes, ccuLimit, balance,
+    }, locale))) return;
 
     launchPending.current = true;
     setCloudBusy(true);
     setCloudError("");
     try {
       const body = compute === "colab"
-        ? { task: cloudTask, gpu: colabGpu, iterations: cloudIterations, envs: cloudEnvs,
-            maxMinutes: cloudMaxMinutes, maxCcu: Number(cloudMaxCcu) > 0 ? Number(cloudMaxCcu) : null, confirmPaid: mayCharge }
-        : { task: cloudTask, flavor: hfFlavor, iterations: cloudIterations, envs: cloudEnvs };
+        ? { task, gpu: colabGpu, iterations: cloudIterations, envs: cloudEnvs,
+            maxMinutes: cloudMaxMinutes, maxCcu: ccuLimit, confirmPaid: mayCharge }
+        : { task, flavor: hfFlavor, iterations: cloudIterations, envs: cloudEnvs };
       await cloudRequest(`/cloud/${compute}/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       setActiveCloudJobs((count) => Math.max(1, count));
-      setInput("");
+      setPicked(null);
       setMsgs((m) => [
         ...m,
-        { kind: "user", text: trimmed },
+        { kind: "user", text: pickedRow.title },
         {
           kind: "note",
           text: tr(
-            `☁ Training was sent to ${compute === "colab" ? "Google Colab" : "Hugging Face"}. Follow elapsed time and disconnect from the top cloud status bar.`,
-            `☁ 训练已提交到 ${compute === "colab" ? "Google Colab" : "Hugging Face"}。可在顶部云算力状态栏查看时长并一键断开。`
+            `☁ Training was sent to ${compute === "colab" ? "Google Colab" : "Hugging Face"}. Follow it below, and save and disconnect from the top status bar.`,
+            `☁ 训练已提交到 ${compute === "colab" ? "Google Colab" : "Hugging Face"}。进度显示在下方，可在顶部状态栏保存并断开。`
           ),
         },
       ]);
@@ -1696,21 +1746,6 @@ export function TeachPanel({
     .some((t) => t.status === "training" || t.status === "stopping" || t.restarting);
   const envBudget = frame?.envBudget;
   const localFull = !!envBudget && envBudget.total - envBudget.used < (envBudget.minJob ?? 8);
-  const trainingInProgress = activeCloudJobs > 0 || (compute === "local" ? localFull : localJobsActive);
-  const canLaunch = labOnline === true && !!actionText && !cloudBusy &&
-    !trainingInProgress && (compute === "local" || (!!cloudTask && cloudAccountReady));
-  // An unsupported cloud action must remain clickable so the user gets the
-  // explanation from launchSelectedTraining instead of an unexplained grey
-  // button. Account/offline guards still disable the real launch control.
-  const launchButtonEnabled = labOnline === true && !!actionText && !cloudBusy &&
-    !trainingInProgress && (compute === "local" || cloudAccountReady);
-  const startLabel = trainingInProgress
-    ? tr("Training in progress", "训练进行中")
-    : compute === "local"
-    ? tr("▶ Start local training", "▶ 开始本地训练")
-    : compute === "colab"
-      ? tr("▶ Start on Colab", "▶ 使用 Colab 开始训练")
-      : tr("▶ Start on Hugging Face", "▶ 使用 Hugging Face 开始训练");
   const resetToRecipe = () => {
     setBudgetSteps(declaredTotal);
     const cleared: Record<number, number | null> = {};
@@ -1729,8 +1764,8 @@ export function TeachPanel({
     // Above the ducks' floating DOM labels (drei Html, zIndexRange [10, 0]).
     zIndex: 20,
     ...(panelDrag.point ? { left: panelDrag.point.x, top: panelDrag.point.y } : { right: 14, bottom: 14 }),
-    width: wide ? "min(560px, calc(100vw - 28px))" : "min(300px, calc(100vw - 28px))",
-    maxHeight: panelDrag.size ? "calc(100vh - 110px)" : "min(360px, calc(100vh - 240px))",
+    width: wide ? "min(560px, calc(100vw - 28px))" : "min(460px, calc(100vw - 28px))",
+    maxHeight: panelDrag.size ? "calc(100vh - 110px)" : "min(560px, calc(100vh - 200px))",
     display: "flex",
     flexDirection: "column",
     background: "rgba(14, 16, 20, 0.86)",
@@ -1747,6 +1782,289 @@ export function TeachPanel({
   // The top toolbar is the single training entry point. Keep hooks mounted
   // while closed so saved state and open requests still work.
   if (!open) return null;
+
+  const liveCloud = colabJobList.find(needsRelease);
+  const liveTitle = liveCloud ? (rows.find((r) => r.cloud?.task === liveCloud.task)?.title ?? liveCloud.task) : "";
+  const blockedReason = (mode: TrainMode): string => {
+    if (mode === "cpu") {
+      return localFull ? tr("This computer has no free training slot. Stop a run first.", "本机没有空闲的训练名额，请先停止一个训练。") : "";
+    }
+    return localJobsActive ? tr("A local run is training. Stop it before starting a cloud one.", "本机正在训练，请先停止后再启动云端训练。") : "";
+  };
+  const applyPreset = (preset: CloudPreset) => {
+    setCloudPreset(preset);
+    setCloudIterations(CLOUD_PRESETS[preset].iterations);
+    setCloudMaxMinutes(CLOUD_PRESETS[preset].maxMinutes);
+    setCloudMaxCcu(CLOUD_PRESETS[preset].maxCcu);
+  };
+  const seg = (on: boolean): React.CSSProperties => ({
+    background: on ? "#263c4d" : "#1c2230", color: on ? "#e8f2fb" : "#9fb4d8",
+    border: `1px solid ${on ? "#70b8d8" : "rgba(255,255,255,0.08)"}`,
+    borderRadius: 12, padding: "1px 8px", fontFamily: mono, fontSize: 10, cursor: "pointer",
+  });
+  const errorLine = cloudError || labError
+    ? <div role="alert" style={{ color: "#ef957d", fontSize: 10, marginTop: 6, whiteSpace: "pre-wrap" }}>{cloudError || labError}</div>
+    : null;
+  const startButton = (label: string, enabled: boolean) => (
+    <button
+      type="button"
+      disabled={!enabled}
+      onClick={() => void startPicked()}
+      style={{
+        marginTop: 8, border: "1px solid #d39a48", borderRadius: 6, padding: "6px 12px",
+        background: enabled ? "#694318" : "#25221d", color: enabled ? "#ffe0a6" : "#68645d",
+        fontFamily: mono, fontSize: 11, fontWeight: 700, cursor: enabled ? "pointer" : "default",
+      }}
+    >
+      {cloudBusy ? tr("Submitting…", "提交中…") : label}
+    </button>
+  );
+  const budgetBlock = (
+        <div style={{ marginBottom: 6 }}>
+          <button
+            type="button"
+            onClick={() => setBudgetOpen((v) => !v)}
+            aria-expanded={budgetOpen}
+            title={tr("how long the next run practices — click to change it", "下一次训练的步数；点击修改")}
+            style={{
+              background: "none", border: "none", padding: 0, color: "#8b93a3",
+              fontFamily: mono, fontSize: 10, cursor: "pointer",
+            }}
+          >
+            <span style={{ fontSize: 8 }}>{budgetOpen ? "▾" : "▸"}</span> ⏱ {tr("practice", "练习")}:{" "}
+            <span style={{ color: offRecipe || budgetSteps != null ? "#e8e6e1" : "#9fb4d8" }}>
+              {planTotal > 0
+                ? `${fmtSteps(planTotal)} ${tr("steps", "步")}${plan.length > 1 ? ` · ${plan.length} ${tr("stages", "阶段")}` : ""}`
+                : tr("as long as the recipe says", "按动作方案默认步数")}
+            </span>
+          </button>
+          {budgetOpen && (
+            <div style={{ marginTop: 4 }}>
+              <div
+                style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}
+              >
+                <Tip
+                  tip={
+                    <>
+                      <div>How long the {noun} gets to practice, in millions of tries.</div>
+                      <div style={{ color: "#8b93a3", marginTop: 3 }}>
+                        More practice usually means a better trick and a longer wait. Type
+                        any number between {fmtSteps(MIN_STEP_BUDGET)} and{" "}
+                        {fmtSteps(MAX_STEP_BUDGET)}, or tap a preset. A trick with stages
+                        splits this across them, keeping the recipe&apos;s proportions.
+                      </div>
+                    </>
+                  }
+                >
+                  <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("practice for", "练习步数")}</span>
+                </Tip>
+                <MStepsInput
+                  value={budgetShown}
+                  placeholder={tr("recipe", "默认")}
+                  onCommit={setBudgetSteps}
+                />
+                <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("M steps", "百万步")}</span>
+                {offRecipe && (
+                  <Tip tip={tr("back to the practice plan the recipe ships with", "恢复动作方案的默认练习计划")}>
+                    <button
+                      onClick={resetToRecipe}
+                      style={{
+                        background: "none",
+                        color: "#8b93a3",
+                        border: "1px dashed rgba(255,255,255,0.22)",
+                        borderRadius: 12,
+                        padding: "1px 7px",
+                        fontFamily: mono,
+                        fontSize: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ↺ {tr("recipe", "默认")}
+                    </button>
+                  </Tip>
+                )}
+              </div>
+              <div
+                style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginTop: 3 }}
+              >
+                {BUDGET_PRESETS_M.map((m) => {
+                  const on = budgetShown === m * 1e6;
+                  return (
+                    <button
+                      key={m}
+                      onClick={() => setBudgetSteps(m * 1e6)}
+                      style={{
+                        background: on ? "#2a3548" : "#1c2230",
+                        color: on ? "#e8e6e1" : "#9fb4d8",
+                        border: `1px solid ${on ? "#7db8d8" : "rgba(255,255,255,0.08)"}`,
+                        borderRadius: 12,
+                        padding: "1px 7px",
+                        fontFamily: mono,
+                        fontSize: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {m}M
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 2 }}>
+                {planTotal > 0
+                  ? `${fmtSteps(planTotal)} ${tr("practice steps in total", "步练习总计")}`
+                  : tr("each trick practices for as long as its own recipe says — set a number to change that", "每个动作使用默认练习步数；输入数字可修改")}
+              </div>
+              {plan.length > 1 && (
+                <div style={{ color: "#8b93a3", fontSize: 10 }}>
+                  {plan.length} {tr("stages", "阶段")}: {plan.map((s) => fmtSteps(s)).join(" / ")}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+  );
+  const renderConfig = (row: ActionRow, mode: TrainMode) => {
+    if (labOnline === false) {
+      return (
+        <div style={{ color: "#efb37d", fontSize: 10, lineHeight: 1.45 }}>
+          <strong>{tr("Training service is offline.", "训练服务未启动。")}</strong>{" "}
+          {tr("Start duck-lab in the microduck_local folder, then reopen this panel.", "请在 microduck_local 文件夹运行 `uv run duck-lab`，然后重新打开训练面板。")}
+          <code style={{ display: "block", marginTop: 4, color: "#f4d1a3" }}>cd microduck_local &amp;&amp; uv run duck-lab</code>
+        </div>
+      );
+    }
+    if (labOnline === null) {
+      return <div style={{ color: "#9fb4d8", fontSize: 10 }}>{tr("Checking the local training service…", "正在检查本地训练服务…")}</div>;
+    }
+    const blocked = blockedReason(mode);
+    if (mode === "cpu") {
+      return (
+        <>
+          <div style={{ color: "#9fb4d8", fontSize: 10, marginBottom: 6 }}>
+            {tr(`"${row.title}" trains on this computer's CPU with its own recipe. It costs nothing.`, `「${row.title}」使用本机 CPU 和它自带的训练方案，不收费。`)}
+          </div>
+          {budgetBlock}
+          {blocked && <div style={{ color: "#e6a28f", fontSize: 10 }}>{blocked}</div>}
+          {startButton(tr("▶ Start on this computer", "▶ 开始本机训练"), !cloudBusy && !blocked)}
+          {errorLine}
+        </>
+      );
+    }
+    const balance = colabAccount.balance;
+    const paid = typeof balance === "number" && balance > 0;
+    const missingPrereq = compute === "colab" && prereq && prereq.task === row.cloud?.task ? prereq.problem : null;
+    const field: React.CSSProperties = { color: "#7f8997", fontSize: 9 };
+    return (
+      <>
+        <div style={{ color: "#9fb4d8", fontSize: 10, marginBottom: 6 }}>
+          {tr(`"${row.title}" trains on the official task `, `「${row.title}」使用官方任务 `)}<code>{row.cloud?.task}</code>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+          <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("Provider", "算力来源")}</span>
+          {(["colab", "hf"] as CloudProvider[]).map((p) => (
+            <button key={p} type="button" aria-pressed={cloudProvider === p} style={seg(cloudProvider === p)}
+              onClick={() => { setCloudProvider(p); setCloudError(""); }}>
+              {p === "colab" ? "Google Colab" : "Hugging Face"}
+            </button>
+          ))}
+          <button type="button" onClick={requestCloudOpen}
+            style={{ marginLeft: "auto", border: 0, background: "none", color: "#7db8d8", padding: 0, cursor: "pointer", font: `10px ${mono}` }}>
+            {tr("manage account ↗", "管理账号 ↗")}
+          </button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+          {(["trial", "full"] as CloudPreset[]).map((k) => (
+            <button key={k} type="button" aria-pressed={cloudPreset === k} style={seg(cloudPreset === k)} onClick={() => applyPreset(k)}>
+              {k === "trial" ? tr("Trial run", "试跑") : tr("Full run", "完整训练")}
+            </button>
+          ))}
+          <span style={{ color: "#747e8d", fontSize: 10 }}>
+            {cloudPreset === "trial"
+              ? tr("A small first run that proves the whole chain.", "先用小规模跑通整条流程。")
+              : cloudPreset === "full"
+                ? tr("The official-sized run.", "正式规模的训练。")
+                : tr("Custom settings.", "自定义设置。")}
+          </span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1.35fr .8fr .8fr", gap: 5 }}>
+          <label style={field}>
+            {tr("GPU", "算力卡")}
+            {compute === "colab" ? (
+              <select value={colabGpu} onChange={(e) => setColabGpu(e.target.value)} style={computeInputStyle}>
+                {COLAB_GPUS.map((gpu) => <option key={gpu} value={gpu} disabled={gpu !== "T4" && !paid}>
+                  {gpu !== "T4" ? gpu
+                    : paid ? tr("T4 · may use compute units", "T4 · 可能消耗计算单元")
+                      : tr("T4 · free tier", "T4 · 可尝试免费层")}
+                </option>)}
+              </select>
+            ) : (
+              <select value={hfFlavor} onChange={(e) => setHfFlavor(e.target.value)} style={computeInputStyle}>
+                {hfAccount.hardware.map((h) => <option key={h.id} value={h.id}>{h.label} · {h.vram}</option>)}
+              </select>
+            )}
+          </label>
+          <label style={field}>
+            {tr("iterations", "迭代")}
+            <input type="number" min={1} max={100000} value={cloudIterations} style={computeInputStyle}
+              onChange={(e) => { setCloudIterations(Number(e.target.value)); setCloudPreset("custom"); }}/>
+          </label>
+          <label style={field}>
+            {tr("envs", "环境数")}
+            <input type="number" min={1} max={4096} value={cloudEnvs} onChange={(e) => setCloudEnvs(Number(e.target.value))} style={computeInputStyle}/>
+          </label>
+        </div>
+        {compute === "colab" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginTop: 5 }}>
+            <label style={field}>
+              {tr("time limit (min)", "时长上限（分钟）")}
+              <input type="number" min={5} max={720} value={cloudMaxMinutes} style={computeInputStyle}
+                onChange={(e) => { setCloudMaxMinutes(Number(e.target.value)); setCloudPreset("custom"); }}/>
+            </label>
+            {paid && (
+              <label style={field}>
+                {tr("CCU limit (optional)", "计算单元上限（可选）")}
+                <input type="number" min={0} step="any" value={cloudMaxCcu} placeholder={tr("none", "不限")} style={computeInputStyle}
+                  onChange={(e) => { setCloudMaxCcu(e.target.value); setCloudPreset("custom"); }}/>
+              </label>
+            )}
+          </div>
+        )}
+        {compute === "colab" && (
+          <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
+            {tr("At a limit, progress is saved and the GPU is released automatically. Keep this Mac open while it runs.", "到达上限后会自动保存进度并释放算力。训练期间请勿合上电脑。")}
+            {cloudEnvs < 1024 ? tr(" Few envs leave a paid GPU mostly idle; the official setting is 4096.", " 环境数过少时 GPU 利用率很低，官方配置为 4096。") : ""}
+          </div>
+        )}
+        {compute === "colab" && colabAccount.connected && !paid && (
+          <div style={{ color: "#9fb4d8", fontSize: 10, marginTop: 6 }}>
+            {tr("0 paid CCU does not block a free T4 request. Google decides availability and may end the session at any time.", "0 付费 CCU 不影响尝试免费 T4；能否分配及会话时长由 Google 动态决定。")}
+          </div>
+        )}
+        {!cloudAccountReady && (
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6, color: "#d8b46f", fontSize: 10 }}>
+            <span style={{ flex: 1 }}>
+              {compute === "colab"
+                ? tr("Connect Colab first; higher GPU tiers need paid compute units.", "请先连接 Colab；更高规格 GPU 需要付费计算单元。")
+                : tr("Hugging Face is not connected or has no available hardware.", "Hugging Face 未连接或没有可用算力卡。")}
+            </span>
+            <button type="button" onClick={requestCloudOpen} style={{ border: 0, background: "none", color: "#7db8d8", cursor: "pointer", padding: 0, font: `10px ${mono}` }}>
+              {tr("connect", "去连接")}
+            </button>
+          </div>
+        )}
+        {blocked && <div style={{ color: "#e6a28f", fontSize: 10, marginTop: 6 }}>{blocked}</div>}
+        {missingPrereq && (
+          <div role="alert" style={{ color: "#e6a28f", fontSize: 10, marginTop: 6, whiteSpace: "pre-wrap" }}>{missingPrereq}</div>
+        )}
+        {startButton(
+          compute === "colab" ? tr("▶ Start on Colab", "▶ 使用 Colab 开始训练") : tr("▶ Start on Hugging Face", "▶ 使用 Hugging Face 开始训练"),
+          !cloudBusy && cloudAccountReady && !blocked && !missingPrereq,
+        )}
+        {errorLine}
+      </>
+    );
+  };
+
 
   return (
     // data-teach-ui doubles as the PolicyPanel's drop target: a policy chip
@@ -1765,7 +2083,7 @@ export function TeachPanel({
         <button
           onClick={() => {
             setMsgs([GREETING]);
-            setChosenAction(null);
+            setPicked(null);
             setInput("");
             // Also dismiss a FINISHED training card — the farm keeps
             // broadcasting the job payload until told to let go (a running
@@ -1932,376 +2250,51 @@ export function TeachPanel({
             })}
           </div>
         )}
-        <div style={{ color: "#8b93a3", fontSize: 10, marginBottom: 4 }}>
-          {tr("1. choose an action", "1. 选择训练动作")}
-        </div>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
-          {suggestions.map(({ text: s, title, emoji, behavior }) => {
-            const best = bestRunFor(policies, behavior, robot.id);
-            const chinese: Record<string, string> = {
-              "stand on one leg": "单脚站立", "stand still": "保持站立",
-              "crouch down": "下蹲", "spin in place": "原地转圈", "do a headstand": "头倒立",
-            };
-            const label = tr(s, chinese[s] ?? s);
-            const chip: React.CSSProperties = {
-              background: actionText.toLocaleLowerCase() === s.toLocaleLowerCase() ? "#263c4d" : "#1c2230",
-              color: actionText.toLocaleLowerCase() === s.toLocaleLowerCase() ? "#e8f2fb" : "#9fb4d8",
-              border: `1px solid ${actionText.toLocaleLowerCase() === s.toLocaleLowerCase() ? "#70b8d8" : "rgba(255,255,255,0.08)"}`,
-              borderRadius: 12,
-              padding: "2px 8px", fontFamily: mono, fontSize: 10, cursor: "pointer",
-            };
-            return (
-              <span key={s} style={{ display: "inline-flex", alignItems: "stretch" }}>
-                <button
-                  title={tr(`teach ${robotPhrase(robot)}: ${title}`, `训练动作：${label}`)}
-                  onClick={() => {
-                    setInput(s);
-                    setChosenAction({ text: s, behavior, robotId: robot.id });
-                    setCloudError("");
-                  }}
-                  style={best ? { ...chip, borderRadius: "12px 0 0 12px", borderRight: "none" } : chip}
-                >
-                  {emoji ? `${emoji} ${label}` : label}
-                </button>
-                {best && (
-                  <Tip
-                    tip={
-                      <>
-                        <div>▶ watch the best run so far — spawns a {noun} running it.</div>
-                        <div style={{ color: "#8b93a3", marginTop: 3 }}>
-                          {policyTitle(best)}
-                          {best.note ? ` — ${best.note}` : ""}
-                        </div>
-                      </>
-                    }
-                  >
-                    <button
-                      aria-label={`watch the best ${title} run`}
-                      onClick={() => {
-                        // Same message the palette's ▶ chip sends: a chain stage
-                        // spawns in showcase mode so the whole trick gets performed.
-                        clientRef.current?.sendSpawnDuck(best.id, !!best.chain);
-                        pushToast(`⚡ spawning ${policyTitle(best)}…`);
-                      }}
-                      style={{
-                        ...chip,
-                        color: "#d8cfa0",
-                        border: "1px solid rgba(216, 198, 125, 0.45)",
-                        borderRadius: "0 12px 12px 0",
-                        padding: "2px 7px 2px 5px",
-                        // The chip beside it is as tall as its emoji; match it.
-                        height: "100%",
-                      }}
-                    >
-                      ▶
-                    </button>
-                  </Tip>
-                )}
-              </span>
-            );
-          })}
-          {robot.id === "microduck" && compute !== "local" && (
-            <button
-              type="button"
-              onClick={() => { setInput("official walking"); setChosenAction(null); setCloudError(""); }}
-              style={{
-                background: selectedBehavior === "official_velocity" ? "#263c4d" : "#1c2230",
-                color: selectedBehavior === "official_velocity" ? "#e8f2fb" : "#9fb4d8",
-                border: "1px solid rgba(112,184,216,0.45)", borderRadius: 12,
-                padding: "2px 8px", fontFamily: mono, fontSize: 10, cursor: "pointer",
-              }}
-              title={tr("Official MicroDuck walking task on cloud compute", "云端官方 MicroDuck 行走任务")}
-            >
-              ☁ {tr("official walking", "官方行走")}
-            </button>
-          )}
-          {robot.id === "microduck" && compute !== "local" && (
-            <button type="button" style={{background:"#1c2230",color:"#9fb4d8",border:"1px solid rgba(112,184,216,0.45)",borderRadius:12,padding:"2px 8px",fontFamily:mono,fontSize:10,cursor:"pointer"}} onClick={() => {setInput("official recovery");setChosenAction(null);setCloudError("");}}>
-              ☁ {tr("official recovery", "官方行走与跌倒恢复")}
-            </button>
-          )}
-        </div>
-        {/* How long should it practice? LAST of the three questions (who, what,
-            how long) and folded to one line, because the recipe's own plan is
-            the right answer for nearly everyone. It applies to whatever you
-            start next: a typed trick, a suggestion, retrain, fine-tune, or a
-            start-from-stage. */}
-        <div style={{ marginBottom: 6 }}>
-          <button
-            type="button"
-            onClick={() => setBudgetOpen((v) => !v)}
-            aria-expanded={budgetOpen}
-            title={tr("how long the next run practices — click to change it", "下一次训练的步数；点击修改")}
-            style={{
-              background: "none", border: "none", padding: 0, color: "#8b93a3",
-              fontFamily: mono, fontSize: 10, cursor: "pointer",
-            }}
-          >
-            <span style={{ fontSize: 8 }}>{budgetOpen ? "▾" : "▸"}</span> ⏱ {tr("practice", "练习")}:{" "}
-            <span style={{ color: offRecipe || budgetSteps != null ? "#e8e6e1" : "#9fb4d8" }}>
-              {planTotal > 0
-                ? `${fmtSteps(planTotal)} ${tr("steps", "步")}${plan.length > 1 ? ` · ${plan.length} ${tr("stages", "阶段")}` : ""}`
-                : tr("as long as the recipe says", "按动作方案默认步数")}
-            </span>
-          </button>
-          {budgetOpen && (
-            <div style={{ marginTop: 4 }}>
-              <div
-                style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}
-              >
-                <Tip
-                  tip={
-                    <>
-                      <div>How long the {noun} gets to practice, in millions of tries.</div>
-                      <div style={{ color: "#8b93a3", marginTop: 3 }}>
-                        More practice usually means a better trick and a longer wait. Type
-                        any number between {fmtSteps(MIN_STEP_BUDGET)} and{" "}
-                        {fmtSteps(MAX_STEP_BUDGET)}, or tap a preset. A trick with stages
-                        splits this across them, keeping the recipe&apos;s proportions.
-                      </div>
-                    </>
-                  }
-                >
-                  <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("practice for", "练习步数")}</span>
-                </Tip>
-                <MStepsInput
-                  value={budgetShown}
-                  placeholder={tr("recipe", "默认")}
-                  onCommit={setBudgetSteps}
-                />
-                <span style={{ color: "#8b93a3", fontSize: 10 }}>{tr("M steps", "百万步")}</span>
-                {offRecipe && (
-                  <Tip tip={tr("back to the practice plan the recipe ships with", "恢复动作方案的默认练习计划")}>
-                    <button
-                      onClick={resetToRecipe}
-                      style={{
-                        background: "none",
-                        color: "#8b93a3",
-                        border: "1px dashed rgba(255,255,255,0.22)",
-                        borderRadius: 12,
-                        padding: "1px 7px",
-                        fontFamily: mono,
-                        fontSize: 10,
-                        cursor: "pointer",
-                      }}
-                    >
-                      ↺ {tr("recipe", "默认")}
-                    </button>
-                  </Tip>
-                )}
-              </div>
-              <div
-                style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginTop: 3 }}
-              >
-                {BUDGET_PRESETS_M.map((m) => {
-                  const on = budgetShown === m * 1e6;
-                  return (
-                    <button
-                      key={m}
-                      onClick={() => setBudgetSteps(m * 1e6)}
-                      style={{
-                        background: on ? "#2a3548" : "#1c2230",
-                        color: on ? "#e8e6e1" : "#9fb4d8",
-                        border: `1px solid ${on ? "#7db8d8" : "rgba(255,255,255,0.08)"}`,
-                        borderRadius: 12,
-                        padding: "1px 7px",
-                        fontFamily: mono,
-                        fontSize: 10,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {m}M
-                    </button>
-                  );
-                })}
-              </div>
-              <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 2 }}>
-                {planTotal > 0
-                  ? `${fmtSteps(planTotal)} ${tr("practice steps in total", "步练习总计")}`
-                  : tr("each trick practices for as long as its own recipe says — set a number to change that", "每个动作使用默认练习步数；输入数字可修改")}
-              </div>
-              {plan.length > 1 && (
-                <div style={{ color: "#8b93a3", fontSize: 10 }}>
-                  {plan.length} {tr("stages", "阶段")}: {plan.map((s) => fmtSteps(s)).join(" / ")}
-                </div>
-              )}
+        {liveCloud && (
+          <div style={{ margin: "0 0 8px", padding: 8, borderRadius: 8, border: "1px solid rgba(112,184,216,0.35)", background: "rgba(24,44,57,0.55)" }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>☁ {tr("Cloud training", "云端训练")} · {liveTitle}</div>
+            <TrainProgress view={cloudProgressView(liveCloud, Date.now(), locale)} />
+            <div style={{ color: "#8b93a3", fontSize: 10, marginTop: 4 }}>
+              {tr("Save and disconnect from the top status bar. Keep this Mac open.", "可在顶部状态栏保存并断开。训练期间请勿合上电脑。")}
             </div>
-          )}
-        </div>
-        <div
-          style={{
-            margin: "7px 0 8px", padding: 8, borderRadius: 8,
-            border: "1px solid rgba(255,255,255,0.09)", background: "rgba(10,13,18,0.58)",
+          </div>
+        )}
+        <ActionPicker
+          rows={rows}
+          loading={catalogLoading}
+          busyReason={activeCloudJobs > 0
+            ? tr("A cloud job is running. Stop it from the top status bar first.", "云端训练正在运行，请先在顶部状态栏停止或断开。")
+            : ""}
+          picked={activePick}
+          watch={(row) => {
+            // The best measured run of this action, so seeing what it looks like never means digging through 🧠.
+            const best = row.local ? bestRunFor(policies, row.local.behavior, robot.id) : undefined;
+            if (!best) return null;
+            return {
+              title: `${policyTitle(best)}${best.note ? ` — ${best.note}` : ""}`,
+              run: () => {
+                clientRef.current?.sendSpawnDuck(best.id, !!best.chain);
+                pushToast(`⚡ spawning ${policyTitle(best)}…`);
+              },
+            };
           }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}>
-            <span style={{ color: "#8b93a3", fontSize: 10, flex: 1 }}>
-              {tr("2. choose training compute", "2. 选择训练算力")}
-            </span>
-            {compute !== "local" && (
-              <button
-                type="button"
-                onClick={requestCloudOpen}
-                style={{ border: 0, background: "none", color: "#7db8d8", padding: 0, cursor: "pointer", font: `10px ${mono}` }}
-              >
-                {tr("manage account ↗", "管理账号 ↗")}
-              </button>
-            )}
-          </div>
-          <div role="radiogroup" aria-label={tr("training compute", "训练算力")} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5 }}>
-            {([
-              ["local", tr("This Mac", "本机")],
-              ["colab", "Google Colab"],
-              ["hf", "Hugging Face"],
-            ] as [ComputeSource, string][]).map(([source, label]) => {
-              const on = compute === source;
-              return (
-                <button
-                  key={source}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  disabled={trainingInProgress}
-                  onClick={() => {
-                    setCompute(source);
-                    if (source === "local" && (selectedBehavior === "official_velocity" || selectedBehavior === "official_velstand")) setInput("");
-                    setCloudError("");
-                  }}
-                  style={{
-                    minWidth: 0, borderRadius: 6, padding: "6px 4px",
-                    border: `1px solid ${on ? (source === "local" ? "#8794a8" : "#70b8d8") : "rgba(255,255,255,0.09)"}`,
-                    background: on ? (source === "local" ? "#242a34" : "#182c39") : "#151a22",
-                    color: on ? "#eef3f5" : "#778291", cursor: trainingInProgress ? "default" : "pointer", font: `10px ${mono}`,
-                    opacity: trainingInProgress && !on ? 0.42 : 1,
-                  }}
-                >
-                  {source === "local" ? "◉ " : source === "colab" ? "☁ " : "🤗 "}{label}
-                </button>
-              );
-            })}
-          </div>
-
-          {labOnline === false ? (
-            <div style={{ color: "#efb37d", fontSize: 10, lineHeight: 1.45, marginTop: 6, padding: "7px 8px", border: "1px solid rgba(239,179,125,0.35)", borderRadius: 6, background: "rgba(120,70,35,0.14)" }}>
-              <strong>{tr("Training service is offline.", "训练服务未启动。")}</strong>{" "}
-              {tr("Start duck-lab in the microduck_local folder, then press refresh or reopen this panel.", "请在 microduck_local 文件夹运行 `uv run duck-lab`，然后点击刷新或重新打开训练面板。")}
-              <code style={{ display: "block", marginTop: 4, color: "#f4d1a3" }}>cd microduck_local &amp;&amp; uv run duck-lab</code>
-            </div>
-          ) : labOnline === null ? (
-            <div style={{ color: "#9fb4d8", fontSize: 10, marginTop: 6 }}>
-              {tr("Checking the local training service…", "正在检查本地训练服务…")}
-            </div>
-          ) : compute === "local" ? (
-            <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
-              {tr("Uses the selected local recipe and this computer's CPU.", "使用当前动作的本地训练配方和本机 CPU。")}
-            </div>
-          ) : !actionText ? (
-            <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
-              {tr("Choose an action above before starting cloud training.", "请先在上方选择一个动作，再启动云端训练。")}
-            </div>
-          ) : !cloudTask ? (
-            <div style={{ color: "#d8b46f", fontSize: 10, marginTop: 6 }}>
-              {tr(
-                "This action only supports local training. For MicroDuck, choose Official recovery or Official walking above, or switch to This Mac.",
-                "当前动作暂不支持云端训练。MicroDuck 可选择上方的“保持站立”或“官方行走”，也可切换为“本机”。"
-              )}
-            </div>
-          ) : (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "1.35fr .8fr .8fr", gap: 5, marginTop: 7 }}>
-                <label style={{ color: "#7f8997", fontSize: 9 }}>
-                  {tr("GPU", "算力卡")}
-                  {compute === "colab" ? (
-                    <select value={colabGpu} onChange={(e) => setColabGpu(e.target.value)} style={computeInputStyle}>
-                      {COLAB_GPUS.map((gpu) => <option key={gpu} value={gpu} disabled={gpu !== "T4" && !(typeof colabAccount.balance === "number" && colabAccount.balance > 0)}>
-                        {gpu !== "T4" ? gpu
-                          : typeof colabAccount.balance === "number" && colabAccount.balance > 0
-                            ? tr("T4 · may use compute units", "T4 · 可能消耗计算单元")
-                            : tr("T4 · free tier", "T4 · 可尝试免费层")}
-                      </option>)}
-                    </select>
-                  ) : (
-                    <select value={hfFlavor} onChange={(e) => setHfFlavor(e.target.value)} style={computeInputStyle}>
-                      {hfAccount.hardware.map((h) => <option key={h.id} value={h.id}>{h.label} · {h.vram}</option>)}
-                    </select>
-                  )}
-                </label>
-                <label style={{ color: "#7f8997", fontSize: 9 }}>
-                  {tr("iterations", "迭代")}
-                  <input type="number" min={1} max={100000} value={cloudIterations} onChange={(e) => setCloudIterations(Number(e.target.value))} style={computeInputStyle}/>
-                </label>
-                <label style={{ color: "#7f8997", fontSize: 9 }}>
-                  {tr("envs", "环境数")}
-                  <input type="number" min={1} max={4096} value={cloudEnvs} onChange={(e) => setCloudEnvs(Number(e.target.value))} style={computeInputStyle}/>
-                </label>
-              </div>
-              {compute === "colab" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginTop: 5 }}>
-                  <label style={{ color: "#7f8997", fontSize: 9 }}>
-                    {tr("time limit (min)", "时长上限（分钟）")}
-                    <input type="number" min={5} max={720} value={cloudMaxMinutes} onChange={(e) => setCloudMaxMinutes(Number(e.target.value))} style={computeInputStyle}/>
-                  </label>
-                  {typeof colabAccount.balance === "number" && colabAccount.balance > 0 && (
-                    <label style={{ color: "#7f8997", fontSize: 9 }}>
-                      {tr("CCU limit (optional)", "计算单元上限（可选）")}
-                      <input type="number" min={0} step="any" value={cloudMaxCcu} placeholder={tr("none", "不限")} onChange={(e) => setCloudMaxCcu(e.target.value)} style={computeInputStyle}/>
-                    </label>
-                  )}
-                </div>
-              )}
-              {compute === "colab" && (
-                <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
-                  {tr("At the limit, progress is saved and the GPU is released automatically.", "到达上限后会自动保存进度并释放算力。")}
-                  {cloudEnvs < 1024 ? tr(" Few envs leave a paid GPU mostly idle; the official setting is 4096.", " 环境数过少时 GPU 利用率很低，官方配置为 4096。") : ""}
-                </div>
-              )}
-              {compute === "colab" && colabAccount.connected && !(typeof colabAccount.balance === "number" && colabAccount.balance > 0) && (
-                <div style={{ color: "#9fb4d8", fontSize: 10, marginTop: 6 }}>
-                  {tr("0 paid CCU does not block a free T4 request. Google decides availability and may end the session at any time.", "0 付费 CCU 不影响尝试免费 T4；能否分配及会话时长由 Google 动态决定。")}
-                </div>
-              )}
-              {selectedBehavior === "official_velstand" && (
-                <div style={{ color: "#d8b46f", fontSize: 10, marginTop: 6 }}>
-                  {tr("Cloud uses the official VelStand task (walking + fall recovery); it is not the local stand-still recipe.", "云端使用官方 VelStand 任务（行走＋跌倒恢复），与本机“保持站立”配方不同。")}
-                </div>
-              )}
-              {selectedBehavior === "official_velocity" && (
-                <div style={{ color: "#9fb4d8", fontSize: 10, marginTop: 6 }}>
-                  {tr("Uses the official Velocity task for walking. This is separate from the local action recipes.", "使用官方 Velocity 行走任务，与本地动作配方相互独立。")}
-                </div>
-              )}
-              {!cloudAccountReady && (
-                <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6, color: "#d8b46f", fontSize: 10 }}>
-                  <span style={{ flex: 1 }}>
-                    {compute === "colab"
-                      ? tr("Connect Colab first; higher GPU tiers need paid compute units.", "请先连接 Colab；更高规格 GPU 需要付费计算单元。")
-                      : tr("Hugging Face is not connected or has no available hardware.", "Hugging Face 未连接或没有可用算力卡。")}
-                  </span>
-                  <button type="button" onClick={requestCloudOpen} style={{ border: 0, background: "none", color: "#7db8d8", cursor: "pointer", padding: 0, font: `10px ${mono}` }}>
-                    {tr("connect", "去连接")}
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-          {trainingInProgress && (
-            <div style={{ color: "#e6a28f", fontSize: 10, marginTop: 6 }}>
-              {tr("A job is running. Use the always-visible top status bar to stop or disconnect it.", "训练任务正在运行。请使用顶部常驻状态栏停止训练或一键断开云算力。")}
-            </div>
-          )}
-          {compute !== "local" && cloudError && <div style={{ color: "#ef957d", fontSize: 10, marginTop: 6 }}>{cloudError}</div>}
-        </div>
+          onPick={(next) => { setPicked(next); setCloudError(""); }}
+          renderConfig={renderConfig}
+        />
+        {!activePick && (cloudError || labError) && (
+          <div role="alert" style={{ color: "#ef957d", fontSize: 10, marginTop: 6 }}>{cloudError || labError}</div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            void launchSelectedTraining();
+            void submit(input);
           }}
-          style={{ display: "flex", gap: 6 }}
+          style={{ display: "flex", gap: 6, marginTop: 8 }}
         >
           <input
             value={input}
-            onChange={(e) => { setInput(e.target.value); setChosenAction(null); setCloudError(""); }}
-            placeholder={tr(`train ${robotPhrase(robot)} a new policy…`, `训练${noun}学习新策略…`)}
+            onChange={(e) => { setInput(e.target.value); setCloudError(""); }}
+            placeholder={tr(`or type an action to train on this computer…`, `或直接输入想在本机训练的动作…`)}
             style={{
               flex: 1, minWidth: 0, boxSizing: "border-box", background: "#12151b",
               border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6,
@@ -2311,26 +2304,22 @@ export function TeachPanel({
           />
           <button
             type="submit"
-            disabled={!launchButtonEnabled}
+            disabled={labOnline !== true || !input.trim() || cloudBusy}
             title={labOnline !== true
               ? tr("Start duck-lab first", "请先启动 duck-lab")
-              : !actionText
-                ? tr("Choose an action first", "请先选择动作")
-                : compute !== "local" && !cloudTask
-                  ? tr("This action is not available on cloud compute yet; click to see details", "此动作暂不支持云端训练，点击查看原因")
-                : !canLaunch && compute !== "local"
-                  ? tr("Connect the selected cloud provider first", "请先连接所选云算力")
-                  : tr("review the choice, then start training", "确认所选动作后开始训练")}
+              : !input.trim()
+                ? tr("Type an action first", "请先输入动作")
+                : tr("Train it on this computer's CPU", "用本机 CPU 训练")}
             style={{
               border: "1px solid #d39a48", borderRadius: 6,
-              background: canLaunch ? "#694318" : launchButtonEnabled ? "#46351f" : "#25221d",
-              color: canLaunch ? "#ffe0a6" : launchButtonEnabled ? "#e0b977" : "#68645d",
-              padding: "6px 10px", fontFamily: mono, fontSize: 11,
-              fontWeight: 700, cursor: launchButtonEnabled ? "pointer" : "default",
+              background: labOnline === true && input.trim() && !cloudBusy ? "#694318" : "#25221d",
+              color: labOnline === true && input.trim() && !cloudBusy ? "#ffe0a6" : "#68645d",
+              padding: "6px 10px", fontFamily: mono, fontSize: 11, fontWeight: 700,
+              cursor: labOnline === true && input.trim() && !cloudBusy ? "pointer" : "default",
               whiteSpace: "nowrap",
             }}
           >
-            {cloudBusy ? tr("Submitting…", "提交中…") : startLabel}
+            {cloudBusy ? tr("Submitting…", "提交中…") : tr("▶ Train on CPU", "▶ 本机训练")}
           </button>
         </form>
       </div>

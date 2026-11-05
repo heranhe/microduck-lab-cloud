@@ -4289,6 +4289,17 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
 
+    @app.get("/cloud/colab/prerequisites")
+    def colab_prerequisites(task: str) -> dict:
+        """What a task needs before any GPU is allocated, so the panel can say so up front."""
+        if task not in colab_jobs.TASKS:
+            raise HTTPException(422, "Unsupported task")
+        try:
+            colab_jobs.teacher_checkpoints(task)
+        except RuntimeError as exc:
+            return {"ready": False, "problem": str(exc)}
+        return {"ready": True, "problem": None}
+
     @app.post("/cloud/colab/jobs")
     def colab_start_job(req: ColabStartReq, request: Request) -> dict:
         if not origin_allowed(request.headers.get("origin")):

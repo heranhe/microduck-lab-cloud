@@ -207,9 +207,14 @@ Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
    readable only by you; the lab never accepts a Google password.
 2. Start `duck-lab` and the viewer as described below. Use **☁ Cloud** to
    verify the account and balance. Old `/cloud` bookmarks redirect to this panel.
-3. Open **🎓 Training**, choose an action in the original teaching panel, select
-   Colab as its compute source, and choose a GPU and a time limit before pressing
-   the single Start button. An account with a paid balance is asked to confirm first. Cloud submission is enabled only for actions with an
+3. Open **🎓 Training** and find the action in the list. Each row has a **CPU**
+   and a **Cloud** button; a greyed one means the action can't train that way
+   (click it to see why). Filter by "CPU" or "Cloud", or search. Press **Cloud** on
+   an official task, keep the default **Trial run** (100 iterations, 30 minutes, at
+   most 5 CCU) for the first time, and press Start. An account with a paid balance
+   is shown the task, GPU and every limit and asked to confirm first. VelStand
+   needs its teacher checkpoints downloaded; without them the panel says so before
+   any GPU is allocated. Cloud submission is enabled only for actions with an
    equivalent official `microduck_rl` task. Once a job starts, the lab toolbar shows elapsed
    time beside a one-click control that disconnects this lab's Colab sessions.
    The timer starts when GPU allocation succeeds; it is not Google's

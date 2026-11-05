@@ -2427,6 +2427,25 @@ def test_colab_callback_route_never_echoes_the_code_and_reports_the_account(fake
         assert noted == [{"connected": True}]
 
 
+def test_colab_prerequisites_route_reports_a_missing_teacher_before_any_gpu(fake_popen, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    def missing(task):
+        if task == "Mjlab-VelStand-Flat-MicroDuck":
+            raise RuntimeError("VelStand 缺少教师模型")
+        return {}
+
+    monkeypatch.setattr(V.colab_jobs, "teacher_checkpoints", missing)
+    with TestClient(V.make_app([])) as client:
+        assert client.get("/cloud/colab/prerequisites", params={"task": "Mjlab-Velocity-Flat-MicroDuck"}).json() == {
+            "ready": True, "problem": None}
+        blocked = client.get("/cloud/colab/prerequisites", params={"task": "Mjlab-VelStand-Flat-MicroDuck"}).json()
+        assert blocked["ready"] is False and "教师模型" in blocked["problem"]
+        # An unknown task is refused rather than reported as ready.
+        assert client.get("/cloud/colab/prerequisites", params={"task": "rm -rf"}).status_code == 422
+        assert client.get("/cloud/colab/prerequisites").status_code == 422
+
+
 def test_colab_artifact_route_serves_only_whitelisted_names(fake_popen, monkeypatch, tmp_path):
     from fastapi import HTTPException
 
