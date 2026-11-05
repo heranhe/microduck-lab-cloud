@@ -276,6 +276,13 @@ npm run dev
 
 “账号已连接”只代表 CLI 授权成功。付费权益的 CCU 与免费层动态资源分别显示和使用；若您预期有 Google AI Pro 付费权益但 CLI 显示 `0.00`，请在 Colab 网页核对账号与订阅，不影响先尝试免费 T4。
 
+### 舵机模型与 AI 描述训练
+
+- 训练 MicroDuck 时可选舵机模型：**飞特 STS3215（默认，按开源 BAM 参数）** 或官方 XL330；云端官方任务固定用官方 XL330。
+- 训练面板里的「✨ 用 AI 描述想训练的动作」：用你自己的 AI 服务，让它选配方、调奖励项权重，或为新动作编排关键帧，确认后才开始本机训练。AI 不会写代码，也不能自定义奖励函数。
+
+详见 [舵机模型与 AI 描述训练](docs/servo-and-ai-planning.md)。
+
 ## 使用 Hugging Face Jobs
 
 在「☁ 云算力」中切换到 Hugging Face，粘贴具有 Jobs 和模型写入权限的细粒度 Token。Token 仅保存在本机并以 Jobs Secret 传给训练容器；浏览器再次读取时只能看到掩码。面板会从 Hugging Face 实时读取可用 GPU、显存和价格。连接完成后回到「▶ 开始训练」，选择动作与 Hugging Face 算力卡后统一提交。训练结果上传到账号下的私有 `microduck-cloud-results` 模型仓库，再由本地实验室提供 ONNX 下载。顶部计时和「一键断开」同样覆盖本项目创建的 HF Jobs。

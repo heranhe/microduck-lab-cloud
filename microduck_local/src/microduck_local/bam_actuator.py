@@ -292,6 +292,67 @@ STIFF_SOLREF_FRICTION = (-5.0e4, -2.0e2)
 STIFF_SOLIMP_FRICTION = (0.99, 0.9999, 0.001, 0.5, 2.0)
 
 
+# --------------------------------------------------------------- servo choice
+#
+# The MicroDuck is built with two different servos. "official" is the Dynamixel
+# XL330 the upstream stack (microduck_rl) identifies and trains against;
+# "feetech" is the Feetech STS3215 (7.4 V version) some builds use instead.
+# They are not interchangeable: the STS3215 has ~3.5x the motor constant, no
+# firmware current limit in BAM's model, a firmware rate limit on its internal
+# target, and a different position gain.
+#
+# Parameters: Rhoban/bam (Apache-2.0), `bam/params/feetech_sts3215_7_4V/m6.json`
+# at commit 31e5b97b3cabfe2b909850d483c4e84afa9781c4 ("Parameters for st3215"),
+# verbatim; the controller constants are `bam/feetech/actuator.py`
+# (STS3215Actuator.__init__ and .initialize). `q_offset` is a testbench
+# mounting-error calibration that the simulators do not read, so it is omitted
+# exactly as for the XL330 above.
+#
+# Only the identification came from upstream. Nothing here has been measured on
+# a real MicroDuck, so treat a policy trained on it as a simulation result.
+SERVOS = ("feetech", "official")
+DEFAULT_SERVO = "feetech"   # what a training request gets when it names none
+
+STS3215_M6_PARAMS: dict[str, float] = {
+    "kt": 1.2753202369175398,                        # Nm/A (and V/(rad/s))
+    "R": 2.753421214375944,                          # Ohm
+    "armature": 0.021564290129722483,                # kg m^2
+    "friction_base": 0.0533134815909817,             # Nm
+    "friction_stribeck": 4.257322248151969e-05,      # Nm
+    "load_friction_motor": 0.044912012282132555,     # Nm/Nm
+    "load_friction_external": 0.24355483356616028,
+    "load_friction_motor_stribeck": 0.00012448975632695385,
+    "load_friction_external_stribeck": 0.1422905635963302,
+    "load_friction_motor_quad": 0.007594943296670792,
+    "load_friction_external_quad": 0.00340408727365082,
+    "dtheta_stribeck": 0.371136775424206,            # rad/s
+    "alpha": 9.93094944677977,
+    "friction_viscous": 0.028160537042911545,        # Nm/(rad/s)
+}
+# Identified alongside the friction model; they shape the controller, not the
+# friction budget, so they are kept apart from the table above.
+STS3215_ERROR_GAIN_RATIO = 1.1616979929275297
+STS3215_MAX_VELOCITY = 5.095754044445978             # rad/s, firmware target rate limit
+STS3215_COMMAND_DELAY = 0.0049807526194816515        # s
+# bam/feetech/actuator.py, STS3215Actuator.__init__.
+STS3215_KP_FW = 32.0
+STS3215_ERROR_GAIN = 0.166    # "determined using an oscilloscope"
+STS3215_MAX_PWM = 0.97
+STS3215_NOMINAL_VIN = 7.4
+# The official lag is 3-6 physics steps for a 10.2 ms identified delay; the
+# STS3215's identified delay is 4.98 ms, so the same rule gives 1-3 steps.
+STS3215_DELAY_LAGS = (1, 3)
+
+
+def load_servo_params(servo: str) -> tuple[dict[str, float], str]:
+    """Friction parameters for a servo choice, and where they came from."""
+    if servo == "official":
+        return load_bam_params()
+    if servo == "feetech":
+        return dict(STS3215_M6_PARAMS), "hard-coded (Rhoban/bam feetech_sts3215_7_4V/m6.json)"
+    raise ValueError(f"servo must be one of {SERVOS}, got {servo!r}")
+
+
 def load_bam_params() -> tuple[dict[str, float], str]:
     """Return the xl330/m6 parameters and where they came from.
 
@@ -410,7 +471,11 @@ class BamXL330Actuator:
         friction_scale_range: tuple[float, float] | None = None,
         params: dict[str, float] | None = None,
         current_scale: float | None = None,
+        servo: str = "official",
     ):
+        if servo not in SERVOS:
+            raise ValueError(f"servo must be one of {SERVOS}, got {servo!r}")
+        self.servo = servo
         self.model = model
         self.data = data
         self.joint_names = tuple(joint_names)
@@ -419,7 +484,7 @@ class BamXL330Actuator:
         self._rng = rng if rng is not None else np.random.default_rng(0)
 
         if params is None:
-            params, self.params_source = load_bam_params()
+            params, self.params_source = load_servo_params(servo)
         else:
             self.params_source = "caller-supplied"
         self.p = dict(params)
@@ -445,6 +510,17 @@ class BamXL330Actuator:
         self.kp_fw = float(kp_fw)
         self.error_gain = XL330_ERROR_GAIN
         self.max_pwm = XL330_MAX_PWM
+        # The STS3215's firmware differs, not just its constants: another
+        # position gain, a 0.97 PWM ceiling, no current limiter in BAM's model,
+        # and an internal target that chases the command at a bounded speed.
+        self._rate_step: float | None = None
+        self._rate_target: np.ndarray | None = None
+        if servo == "feetech":
+            self.kp_fw = STS3215_KP_FW
+            self.error_gain = STS3215_ERROR_GAIN * STS3215_ERROR_GAIN_RATIO
+            self.max_pwm = STS3215_MAX_PWM
+            max_current = None
+            self._rate_step = STS3215_MAX_VELOCITY * self.dt
         # MICRODUCK_BAM_CURRENT_SCALE: the servo-strength LADDER knob
         # (default 1.0 = the honest XL330 firmware limit, tau <= 0.640 Nm).
         # The xml->bam jump proved to be one giant physics cliff for
@@ -544,7 +620,8 @@ class BamXL330Actuator:
         # Voltage ceiling on the produced torque. BamActuator.edit_spec sets the
         # MuJoCo forcerange to vin_max*kt/R; we clamp by hand because the torque
         # bypasses the actuator machinery.
-        vin_for_limit = max(vin_range) if vin_range is not None else XL330_NOMINAL_VIN
+        vin_for_limit = (max(vin_range) if vin_range is not None
+                         else (STS3215_NOMINAL_VIN if servo == "feetech" else XL330_NOMINAL_VIN))
         self.force_limit = vin_for_limit * self.p["kt"] / self.p["R"]
 
         self._delay = (
@@ -620,6 +697,8 @@ class BamXL330Actuator:
         q = (self.data.qpos[self.qpos_adr] if q_target is None
              else np.asarray(q_target, dtype=np.float64))
         self._target = np.array(q, dtype=np.float64)
+        # A power-on servo adopts wherever the joint is as its internal target.
+        self._rate_target = np.array(q, dtype=np.float64) if self._rate_step is not None else None
         self._prev_motor_torque[:] = 0.0
         self._applied_torque[:] = 0.0
         self.data.qfrc_applied[self.dof_adr] = 0.0
@@ -802,6 +881,17 @@ class BamXL330Actuator:
         else:
             q_target = self._target
 
+        # STS3215 firmware: the target its P controller chases moves toward the
+        # command by at most max_velocity (bam/feetech/actuator.py).
+        if self._rate_step is not None:
+            held = self._rate_target
+            if held is None:
+                held = np.array(q, dtype=np.float64)
+            held = np.minimum(np.maximum(q_target, held - self._rate_step),
+                              held + self._rate_step)
+            self._rate_target = held
+            q_target = held
+
         # Battery sag under load, from the PREVIOUS step's torques. Stays in
         # numpy: `.sum()` is pairwise, and reimplementing that summation order
         # is exactly the kind of libm-shaped trap the kernels avoid.
@@ -870,6 +960,19 @@ class BamXL330Actuator:
         scratch inside the next mj_step, so this changes no physics.
         """
         self.data.actuator_force[self._act_ix] = self._applied_torque
+
+    @property
+    def max_torque(self) -> float:
+        """Peak torque this servo model can deliver [Nm] — the honest saturation
+        point for a reward that prices motor strain.
+
+        The XL330's is its firmware current limit (kt * 1.75 A). BAM's STS3215 has
+        no current limiter, so its ceiling is the stall torque at nominal voltage
+        and the PWM ceiling.
+        """
+        if self.servo == "feetech":
+            return STS3215_M6_PARAMS["kt"] * STS3215_NOMINAL_VIN * STS3215_MAX_PWM / STS3215_M6_PARAMS["R"]
+        return XL330_MAX_TORQUE
 
     @property
     def applied_torque(self) -> np.ndarray:

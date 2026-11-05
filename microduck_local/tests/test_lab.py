@@ -2519,6 +2519,38 @@ def test_trainee_preview_mirrors_stage_physics(fake_popen):
     assert kw["bam_current_scale"] == 1.3
 
 
+def test_teach_gives_the_duck_the_feetech_servo_unless_told_otherwise(fake_popen):
+    app = V.make_app([])
+    teach = _endpoint(app, "/teach", "POST")
+    stop = _endpoint(app, "/teach/stop", "POST")
+
+    out = asyncio.run(teach(V.TeachReq(text="spin")))
+    assert out["matched"] and _launch_env(fake_popen[-1])["MICRODUCK_SERVO"] == "feetech"
+    asyncio.run(stop(force=True))
+
+    out = asyncio.run(teach(V.TeachReq(text="spin", servo="official")))
+    assert out["matched"] and _launch_env(fake_popen[-1])["MICRODUCK_SERVO"] == "official"
+    asyncio.run(stop(force=True))
+
+    # An explicit MICRODUCK_SERVO knob wins over the field, as for every other knob.
+    out = asyncio.run(teach(V.TeachReq(text="spin", servo="official", env={"MICRODUCK_SERVO": "feetech"})))
+    assert _launch_env(fake_popen[-1])["MICRODUCK_SERVO"] == "feetech"
+    asyncio.run(stop(force=True))
+
+    # A servo nobody models is refused, not trained as the default.
+    launched = len(fake_popen)
+    out = asyncio.run(teach(V.TeachReq(text="spin", servo="dynamixel")))
+    assert not out["matched"] and "servo" in out["message"] and len(fake_popen) == launched
+
+
+def test_the_trainee_preview_mirrors_the_servo_the_trainer_runs(fake_popen):
+    b = V.behaviors_mod.BEHAVIORS["spin"]
+    assert V.trainee_env_kwargs(b, {"MICRODUCK_SERVO": "feetech"})["servo_force"] == "feetech"
+    assert "servo_force" not in V.trainee_env_kwargs(b, {})
+    job = V.TrainingJob("spin", steps=1000, extra_env={"MICRODUCK_SERVO": "official"})
+    assert V.trainee_env_kwargs(job.behavior, job.stage_env())["servo_force"] == "official"
+
+
 def test_stage_env_carries_the_runs_clip(fake_popen):
     """The clip rides extra_env into the trainer; the preview mirror reads
     stage_env, so an imitate run's preview tracked the recipe's DEFAULT clip."""

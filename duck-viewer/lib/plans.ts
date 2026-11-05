@@ -1,7 +1,7 @@
 import { localizeBehavior } from "./teachLocalization";
 import { LAB_HTTP } from "./lab";
 import type { Clip } from "./anim";
-export type LocalPlan = { behavior: string; steps: number; weights: Record<string, number>; stageSteps: Record<string, number>; stageWeights: Record<string, Record<string, number>> };
+export type LocalPlan = { behavior: string; steps: number; servo?: "feetech" | "official"; weights: Record<string, number>; stageSteps: Record<string, number>; stageWeights: Record<string, Record<string, number>> };
 export type CloudPlan = { task: string; iterations: number; envs: number; gpu: string; flavor: string };
 export type Plan = { version: 1; id?: string; revision?: number; title: string; description: string; success: string; robot: string; source: string; local: LocalPlan | null; cloud: CloudPlan | null; reference?: Clip; path?: string; revisions?: number[]; storage?: string };
 export type Term = { key: string; friendly: string; weight: number; isPenalty: boolean };

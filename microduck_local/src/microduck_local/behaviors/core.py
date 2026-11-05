@@ -515,7 +515,11 @@ def _tau2_max(env) -> float:
     if v is None:
         if getattr(env, "actuator_model", "xml") == "bam":
             from ..bam_actuator import XL330_MAX_TORQUE
-            v = float(C.NUM_JOINTS * XL330_MAX_TORQUE ** 2)
+            # The servo model knows its own ceiling (the STS3215 has no
+            # current limiter); the XL330's is the constant, unchanged.
+            bam = getattr(env, "bam", None)
+            tmax = bam.max_torque if bam is not None else XL330_MAX_TORQUE
+            v = float(C.NUM_JOINTS * tmax ** 2)
         else:
             v = float(np.sum(env.model.actuator_forcerange[:, 1] ** 2))
         env._tau2_max_cache = v

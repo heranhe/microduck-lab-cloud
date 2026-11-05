@@ -310,3 +310,106 @@ def test_latest_plan_route_does_not_shadow_templates(app):
     scope = {"type": "http", "path": "/plans/templates", "method": "GET"}
     matched = next(route for route in app.routes if route.matches(scope)[0] == Match.FULL)
     assert matched.path == "/plans/templates"
+
+
+# ------------------------------------------------------------------ AI over HTTP, servo in plans
+
+
+def fake_ai(monkeypatch, *replies):
+    """A chat-completions server that answers with `replies` in order and records requests."""
+    seen = []
+    queue = list(replies)
+
+    class Response:
+        def __init__(self, content):
+            self.content = content
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": self.content}}]}).encode()
+
+    def urlopen(req, timeout=None):
+        seen.append(json.loads(req.data))
+        return Response(queue.pop(0))
+
+    monkeypatch.setattr(P, "urlopen", urlopen)
+    return seen
+
+
+def configure_ai(app):
+    endpoint(app, "/plans/ai/settings", "PUT")(
+        P.AiSettings(base_url="http://localhost:11434/v1", model="local"), request())
+
+
+def test_ai_draft_repairs_an_invented_reward_once_and_tells_the_person(app, monkeypatch):
+    configure_ai(app)
+    bad = plan()
+    bad["local"]["weights"] = {"win_the_game": 9}
+    seen = fake_ai(monkeypatch, json.dumps(bad), json.dumps(plan()))
+    out = endpoint(app, "/plans/ai/draft", "POST")(P.AiReq(prompt="单脚站稳"), request())
+    assert out["draft"]["local"]["weights"]["smooth_moves"] == 4
+    assert "自动修正" in out["notice"] and len(seen) == 2
+    assert "win_the_game" in seen[1]["messages"][-1]["content"]
+    assert not list(P.root().glob("*/plan.json")) and not app.calls   # nothing saved or started
+
+
+def test_ai_draft_that_never_validates_is_a_502_with_the_reason(app, monkeypatch):
+    configure_ai(app)
+    bad = plan()
+    bad["local"]["behavior"] = "teleport"
+    fake_ai(monkeypatch, json.dumps(bad), json.dumps(bad))
+    with pytest.raises(HTTPException) as exc:
+        endpoint(app, "/plans/ai/draft", "POST")(P.AiReq(prompt="x"), request())
+    assert exc.value.status_code == 502 and "没有通过校验" in exc.value.detail
+
+
+def test_ai_draft_never_leaks_the_provider_error_or_key(app, monkeypatch):
+    from urllib.error import URLError
+
+    configure_ai(app)
+    endpoint(app, "/plans/ai/settings", "PUT")(
+        P.AiSettings(base_url="http://localhost:11434/v1", model="local", api_key="sk-secret"), request())
+
+    def boom(*args, **kw):
+        raise URLError("Authorization: Bearer sk-secret")
+
+    monkeypatch.setattr(P, "urlopen", boom)
+    with pytest.raises(HTTPException) as exc:
+        endpoint(app, "/plans/ai/draft", "POST")(P.AiReq(prompt="x"), request())
+    assert exc.value.status_code == 502 and "sk-secret" not in exc.value.detail
+
+
+def test_ai_prompt_offers_keyframes_only_when_the_robot_can_be_choreographed(app, monkeypatch):
+    configure_ai(app)
+    seen = fake_ai(monkeypatch, json.dumps(plan()))
+    endpoint(app, "/plans/ai/draft", "POST")(P.AiReq(prompt="单脚站稳"), request())
+    system = seen[0]["messages"][0]["content"]
+    assert "calm_body" in system and 'id "one_leg"' in system and "JOINTS" not in system   # no joint_info mounted
+
+
+def test_a_plan_may_carry_the_servo_and_it_reaches_the_launch(app):
+    p = plan()
+    p["local"]["servo"] = "official"
+    saved = create(app, p)
+    assert saved["local"]["servo"] == "official"
+    asyncio.run(endpoint(app, "/plans/{pid}/launch", "POST")(
+        saved["id"], P.LaunchReq(revision=1, compute="local"), request()))
+    assert app.calls[-1][1].servo == "official"
+    # A plan without one leaves the choice to the lab's default.
+    plain = create(app)
+    asyncio.run(endpoint(app, "/plans/{pid}/launch", "POST")(
+        plain["id"], P.LaunchReq(revision=1, compute="local"), request()))
+    assert app.calls[-1][1].servo is None
+
+
+def test_an_unknown_servo_in_a_plan_is_refused(app):
+    p = plan()
+    p["local"]["servo"] = "dynamixel"
+    with pytest.raises(HTTPException) as exc:
+        create(app, p)
+    assert exc.value.status_code == 422 and "舵机" in exc.value.detail

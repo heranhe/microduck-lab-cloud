@@ -38,7 +38,7 @@ import mujoco
 import numpy as np
 
 from . import contract as C
-from .bam_actuator import DEFAULT_FRICTION_SCALE_RANGE, BamXL330Actuator
+from .bam_actuator import DEFAULT_FRICTION_SCALE_RANGE, SERVOS, STS3215_DELAY_LAGS, BamXL330Actuator
 from .robots.spec import RobotSpec
 
 # Shared constant operands for the per-step frame math. quat_rotate_inverse
@@ -302,6 +302,16 @@ class MicroduckWalkEnv(gym.Env):
                                         # wheels) — without this the trainee preview
                                         # silently rehearsed the wrong physics while
                                         # the trainer subprocess used the stage's.
+        servo: str = "official",        # which servo BAM models: "official" (the
+                                        # Dynamixel XL330 upstream trains on) or
+                                        # "feetech" (STS3215 7.4 V). Only read under
+                                        # actuator="bam"; the xml servo is the XL330's
+                                        # linearization and has no other variant.
+                                        # MICRODUCK_SERVO overrides it, like
+                                        # MICRODUCK_ACTUATOR does.
+        servo_force: str | None = None,  # explicit per-instance choice that BEATS
+                                        # the process env (the lab's trainee preview
+                                        # mirrors the trainer's servo with it).
         bam_current_scale: float | None = None,  # per-instance servo-strength
                                         # ladder knob; None = read
                                         # MICRODUCK_BAM_CURRENT_SCALE from the env.
@@ -352,6 +362,14 @@ class MicroduckWalkEnv(gym.Env):
         if self.actuator_model not in ("xml", "bam"):
             raise ValueError(
                 f"actuator must be 'xml' or 'bam', got {self.actuator_model!r}"
+            )
+        self.servo_model = (
+            servo_force if servo_force is not None
+            else os.environ.get("MICRODUCK_SERVO", servo)
+        ).strip().lower()
+        if self.servo_model not in SERVOS:
+            raise ValueError(
+                f"servo must be one of {SERVOS}, got {self.servo_model!r}"
             )
         # A model handed in explicitly is the caller's business (they promise it
         # is this scene). Otherwise an enclosing shared_model_scope() decides
@@ -578,12 +596,13 @@ class MicroduckWalkEnv(gym.Env):
                 self.model, self.data, self.robot.joint_names,
                 dt=C.PHYSICS_DT,
                 rng=np.random.default_rng(seed),
-                delay_min_lag=3 if action_delay else 0,
-                delay_max_lag=6 if action_delay else 0,
+                delay_min_lag=(3 if self.servo_model == "official" else STS3215_DELAY_LAGS[0]) if action_delay else 0,
+                delay_max_lag=(6 if self.servo_model == "official" else STS3215_DELAY_LAGS[1]) if action_delay else 0,
                 friction_scale_range=(
                     DEFAULT_FRICTION_SCALE_RANGE if domain_rand else None
                 ),
                 current_scale=bam_current_scale,
+                servo=self.servo_model,
             )
             # BAM retuned dof_armature to its own identified value and ran
             # mj_setConst; that, not the MJCF's number, is what DR restores

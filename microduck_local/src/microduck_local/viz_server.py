@@ -179,13 +179,14 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
+from . import bam_actuator, colab_jobs, hf_jobs, run_record
+
 # Imported AS A MODULE so /teach can hot-reload it (behaviors.reload_library /
 # motion.reload_self — all-or-nothing, never bare importlib.reload): recipe edits in
 # behaviors.py are picked up by the training SUBPROCESS (fresh import) but
 # were invisible to this long-running server — the teach panel then showed a
 # stale scorecard missing new terms (bit the user twice: head_up, head_up_pull).
 from . import behaviors as behaviors_mod
-from . import colab_jobs, hf_jobs, run_record
 from . import contract as C
 from . import motion as motion_mod
 from .brain.learned import brains_dir
@@ -2553,6 +2554,11 @@ class TeachReq(BaseModel):
     #: exactly the competence worth keeping at risk. A staged chain is
     #: unaffected: `_stage_env` is merged last and still wins.
     env: dict[str, str] | None = None
+    #: Which servo the Microduck's BAM actuator models: "feetech" (STS3215,
+    #: the default) or "official" (the Dynamixel XL330 upstream trains on).
+    #: Ignored for other bodies. Sent as MICRODUCK_SERVO, so it rides the same
+    #: path as `env` and an explicit MICRODUCK_SERVO there wins.
+    servo: str | None = None
     # Which body to teach, as the panel's robot switch says. None = the old
     # rule (the trainee's body, else a one-robot roster, else the duck).
     robot: str | None = None
@@ -3100,6 +3106,11 @@ def trainee_env_kwargs(b, stage_env: dict[str, str] | None = None) -> dict:
     act = overrides.get("MICRODUCK_ACTUATOR")
     if act:
         kw["actuator_force"] = act
+    # The servo the trainer runs rides the same environment; without mirroring
+    # it the watched duck would rehearse the other servo's physics.
+    servo = overrides.get("MICRODUCK_SERVO")
+    if servo:
+        kw["servo_force"] = servo
     cur = overrides.get("MICRODUCK_BAM_CURRENT_SCALE")
     if cur:
         try:
@@ -4864,6 +4875,12 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
         stage_weights = (req.stageWeights if req.stageWeights is not None
                          else prev_sticky["stageWeights"] or None)
         job_env = teach_env_knobs(req.env)
+        if robot == "microduck" and "MICRODUCK_SERVO" not in job_env:
+            chosen = (req.servo or bam_actuator.DEFAULT_SERVO).strip().lower()
+            if chosen not in bam_actuator.SERVOS:
+                return {"matched": False,
+                        "message": f"servo must be one of {', '.join(bam_actuator.SERVOS)}."}
+            job_env["MICRODUCK_SERVO"] = chosen
         # Same "same as I had it" rule for the practice budget.
         budget = req.steps if req.steps is not None else prev_sticky["steps"]
         stage_budgets = (req.stageSteps if req.stageSteps is not None
@@ -5775,8 +5792,25 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
             next_t += 1.0 / TICK_HZ
             await asyncio.sleep(max(0.0, next_t - time.monotonic()))
 
+    def ai_joint_info(robot: str) -> dict | None:
+        """What an AI choreographer needs: joint order, limits and the standing pose.
+
+        The duck only — keyframe authoring through the AI is validated for its 14
+        joints, and another body would need its own checks before being offered."""
+        if robot != "microduck":
+            return None
+        try:
+            scratch = pose_scratch("microduck")
+        except (KeyError, FileNotFoundError):
+            return None
+        spec = scratch.spec
+        return {"names": list(spec.joint_names),
+                "lower": [float(v) for v in scratch.limits[:, 0]],
+                "upper": [float(v) for v in scratch.limits[:, 1]],
+                "stand": [float(v) for v in spec.default_pose]}
+
     from .training_plans import mount_plans
-    mount_plans(app, behaviors=behaviors_mod, clean_clip=clean_clip,
+    mount_plans(app, behaviors=behaviors_mod, clean_clip=clean_clip, joint_info=ai_joint_info,
                 atomic_write=_atomic_write_json, launch_local=teach,
                 launch_colab=colab_start_job, launch_hf=hf_start_job,
                 teach_req=TeachReq, colab_req=ColabStartReq, hf_req=HfStartReq,

@@ -12,6 +12,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionPicker, type ActionPick } from "./ActionPicker";
 import { TrainProgress } from "./TrainProgress";
+import { AiPlanner } from "./AiPlanner";
+import { ServoChoice } from "./ServoChoice";
+import { DEFAULT_SERVO, cloudServoNote, isServo, type Servo } from "@/lib/servo";
 import { TrainingScoreChart } from "./TrainingScoreChart";
 import { useTrainingScoreHistory } from "./useTrainingScoreHistory";
 import { usePanelDrag } from "./usePanelDrag";
@@ -1259,6 +1262,10 @@ export function TeachPanel({
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [picked, setPicked] = useState<ActionPick | null>(null);
   const [cloudProvider, setCloudProvider] = useState<CloudProvider>(() => loadJSON("teachCloudProvider", "colab"));
+  const [servo, setServo] = useState<Servo>(() => {
+    const saved = loadJSON<unknown>("teachServo", DEFAULT_SERVO);
+    return isServo(saved) ? saved : DEFAULT_SERVO;
+  });
   const [colabJobList, setColabJobList] = useState<CloudJob[]>([]);
   const rows = useMemo(
     () => (catalog ? buildActionRows(catalog, robot.id, teach, locale) : fallbackActionRows(robot.id, teach, locale)),
@@ -1294,6 +1301,7 @@ export function TeachPanel({
 
   useEffect(() => saveJSON("teachOpen", open), [open]);
   useEffect(() => saveJSON("teachCloudProvider", cloudProvider), [cloudProvider]);
+  useEffect(() => saveJSON("teachServo", servo), [servo]);
   useEffect(() => {
     const openPanel = () => setOpen(true);
     const closePanel = () => setOpen(false);
@@ -1504,6 +1512,8 @@ export function TeachPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...body,
+          // The duck's BAM servo; every launch path (typed, row, retrain, fine-tune) carries it.
+          ...(robot.id === "microduck" ? { servo } : {}),
           ...(budgetSteps != null ? { steps: budgetSteps } : {}),
         }),
       });
@@ -1943,6 +1953,7 @@ export function TeachPanel({
           <div style={{ color: "#9fb4d8", fontSize: 10, marginBottom: 6 }}>
             {tr(`"${row.title}" trains on this computer's CPU with its own recipe. It costs nothing.`, `「${row.title}」使用本机 CPU 和它自带的训练方案，不收费。`)}
           </div>
+          {robot.id === "microduck" && <ServoChoice value={servo} onChange={setServo}/>}
           {budgetBlock}
           {blocked && <div style={{ color: "#e6a28f", fontSize: 10 }}>{blocked}</div>}
           {startButton(tr("▶ Start on this computer", "▶ 开始本机训练"), !cloudBusy && !blocked)}
@@ -1972,6 +1983,7 @@ export function TeachPanel({
             {tr("manage account ↗", "管理账号 ↗")}
           </button>
         </div>
+        <div style={{ color: "#747e8d", fontSize: 10, marginBottom: 6 }}>{cloudServoNote(locale)}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
           {(["trial", "full"] as CloudPreset[]).map((k) => (
             <button key={k} type="button" aria-pressed={cloudPreset === k} style={seg(cloudPreset === k)} onClick={() => applyPreset(k)}>
@@ -2259,6 +2271,17 @@ export function TeachPanel({
             </div>
           </div>
         )}
+        <AiPlanner
+          robot={robot.id}
+          catalog={catalog}
+          servo={servo}
+          onServo={setServo}
+          online={labOnline === true}
+          blockedReason={activeCloudJobs > 0
+            ? tr("A cloud job is running. Stop it from the top status bar first.", "云端训练正在运行，请先在顶部状态栏停止或断开。")
+            : blockedReason("cpu")}
+          onStarted={(title) => setMsgs((m) => [...m, { kind: "user", text: title }, { kind: "note", text: tr("✨ Training started from the AI plan you approved.", "✨ 已按你确认的 AI 方案开始训练。") }])}
+        />
         <ActionPicker
           rows={rows}
           loading={catalogLoading}

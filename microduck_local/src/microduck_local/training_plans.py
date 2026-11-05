@@ -21,6 +21,8 @@ from urllib.request import urlopen
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
+from . import ai_planner
+
 MAX_BYTES = 2_000_000
 TASKS = {
     "Mjlab-Velocity-Flat-MicroDuck": "官方行走",
@@ -77,8 +79,11 @@ def clean_plan(data, behaviors, clean_clip):
         p["reference"] = reference
     local = data.get("local")
     if local is not None:
-        if not isinstance(local, dict) or set(local) - {"behavior", "steps", "weights", "stageSteps", "stageWeights"}:
-            raise ValueError("本地配置支持 behavior、steps、weights、stageSteps、stageWeights")
+        if not isinstance(local, dict) or set(local) - {"behavior", "steps", "weights", "stageSteps", "stageWeights", "servo"}:
+            raise ValueError("本地配置支持 behavior、steps、weights、stageSteps、stageWeights、servo")
+        servo = local.get("servo")
+        if servo is not None and servo not in ("feetech", "official"):
+            raise ValueError("舵机只能是 feetech（飞特 STS3215）或 official（官方 XL330）")
         b = behaviors.BEHAVIORS.get(local.get("behavior"))
         if b is None or b.robot != p["robot"]:
             raise ValueError("本地配方不存在，或机器人不匹配")
@@ -98,7 +103,7 @@ def clean_plan(data, behaviors, clean_clip):
         w = {t.key: t.weight for t in b.terms}
         w.update(weights(local.get("weights", {})))
         local = {"behavior": b.id, "steps": integer(local.get("steps"), "训练步数", 100_000, 40_000_000),
-             "weights": w, "stageSteps": {}, "stageWeights": {}}
+             "weights": w, "stageSteps": {}, "stageWeights": {}, **({"servo": servo} if servo else {})}
         for field in ("stageSteps", "stageWeights"):
             values = local.get(field, {})
             if not isinstance(values, dict):
@@ -168,7 +173,7 @@ class AiSettings(BaseModel):
 
 
 def mount_plans(app, *, behaviors, clean_clip, atomic_write, launch_local, launch_colab, launch_hf,
-                teach_req, colab_req, hf_req, clip_path, origin_allowed):
+                teach_req, colab_req, hf_req, clip_path, origin_allowed, joint_info=None):
     lock = RLock()
     def guard(request):
         if not origin_allowed(request.headers.get("origin")):
@@ -303,7 +308,8 @@ def mount_plans(app, *, behaviors, clean_clip, atomic_write, launch_local, launc
                 clip = f"plan-{pid}-v{req.revision}"
                 atomic_write(clip_path(clip), clean_clip(clip, p["reference"]))
             result = await launch_local(teach_req(text=local["behavior"], robot=p["robot"], clip=clip,
-                steps=local["steps"], weights=local["weights"], stageSteps=local["stageSteps"], stageWeights=local["stageWeights"]))
+                steps=local["steps"], weights=local["weights"], stageSteps=local["stageSteps"], stageWeights=local["stageWeights"],
+                servo=local.get("servo")))
             if not result.get("matched"):
                 raise HTTPException(409, result.get("message", "训练未启动"))
         elif req.compute in ("colab", "hf") and p["cloud"]:
@@ -363,29 +369,37 @@ def mount_plans(app, *, behaviors, clean_clip, atomic_write, launch_local, launc
         c = ai_config()
         if not c["model"]:
             raise HTTPException(409, "请先配置 AI 模型服务")
-        if not req.prompt.strip() or len(req.prompt) > 4000:
-            raise HTTPException(422, "请填写目标，最多 4000 字符")
-        candidates = [p for p in templates()["templates"] if p["robot"] == req.robot]
-        system = ("Return only a JSON training plan with version,title,description,success,robot,source,local,cloud. "
-                  "Use only an existing behavior/task from the supplied templates. Never invent reward keys, "
-                  "Python code or cloud adaptation. For an unsupported skill explain in description what the "
-                  "closest template does and what still needs authored keyframes or a developer extension. "
-                  "Local and cloud are independent. Use Chinese user-facing text. Templates: " + json.dumps(candidates, ensure_ascii=False))
-        payload = json.dumps({"model": c["model"], "messages": [{"role": "system", "content": system},
-                    {"role": "user", "content": req.prompt}]}).encode()
-        headers = {"Content-Type": "application/json"}
-        if c["api_key"]:
-            headers["Authorization"] = "Bearer " + c["api_key"]
+        recipes = [{**behaviors.behavior_card(b), "robot": b.robot}
+                   for b in behaviors.BEHAVIORS.values()
+                   if b.robot == req.robot and b.id not in ("imitate", "g1_imitate")]
+        joints = joint_info(req.robot) if joint_info else None
+        recipes_for_prompt = recipes + ([{**behaviors.behavior_card(behaviors.BEHAVIORS["imitate"]),
+                                          "robot": req.robot}]
+                                        if joints and "imitate" in behaviors.BEHAVIORS and req.robot == "microduck" else [])
+        system = ai_planner.build_system_prompt(
+            robot=req.robot, behaviors=recipes_for_prompt,
+            catalog=behaviors.catalog_cards(), joints=joints)
+
+        def call_model(messages):
+            payload = json.dumps({"model": c["model"], "messages": messages}).encode()
+            headers = {"Content-Type": "application/json"}
+            if c["api_key"]:
+                headers["Authorization"] = "Bearer " + c["api_key"]
+            with urlopen(UrlRequest(c["base_url"].rstrip("/") + "/chat/completions", payload, headers), timeout=60) as response:
+                return json.load(response)["choices"][0]["message"]["content"]
+
+        def safe_call(messages):
+            try:
+                return call_model(messages)
+            except (URLError, ValueError, KeyError, IndexError, TypeError, TimeoutError, OSError) as exc:
+                # Never return provider responses/headers that could expose the key.
+                raise ai_planner.PlannerError("AI 服务没有响应，请检查服务连接") from exc
+
         try:
-            with urlopen(UrlRequest(c["base_url"].rstrip("/") + "/chat/completions", payload, headers), timeout=45) as response:
-                raw = json.load(response)["choices"][0]["message"]["content"].strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
-            p = json.loads(raw)
-            p["source"] = "ai"
-            return {"draft": validated(p), "notice": "AI 草稿尚未保存或启动训练，请检查目标与配方是否相符。"}
-        except HTTPException:
-            raise
-        except (URLError, ValueError, KeyError, IndexError, TypeError, TimeoutError) as exc:
-            # Never return provider responses/headers that could expose the key.
-            raise HTTPException(502, "AI 服务未生成可用方案，请检查服务连接或调整目标") from exc
+            result = ai_planner.draft_plan(safe_call, validated, system=system, prompt=req.prompt)
+        except ai_planner.PlannerError as exc:
+            raise HTTPException(502, exc.reason) from exc
+        notice = "AI 草稿尚未保存或启动训练，请检查目标与配方是否相符。"
+        if result["attempts"] > 1:
+            notice += " 第一次的方案没通过校验，AI 已自动修正过一次。"
+        return {"draft": result["draft"], "notice": notice}
