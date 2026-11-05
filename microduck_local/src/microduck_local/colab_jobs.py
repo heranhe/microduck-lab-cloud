@@ -16,10 +16,12 @@ Billing rules this module exists to keep:
 
 from __future__ import annotations
 
+import html
 import importlib.util
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -27,6 +29,7 @@ import tempfile
 import threading
 import time
 import uuid
+from importlib import resources
 from pathlib import Path
 
 GPU_TYPES = {"T4", "L4", "A100", "H100"}
@@ -85,8 +88,9 @@ ACCOUNT_TTL_CONNECTED_S = 60
 ACCOUNT_TTL_NETWORK_S = 30
 ACCOUNT_TTL_AUTH_EXPIRED_S = 300
 AUTH_FLOW_TTL_S = 600
+AUTH_CALLBACK_PATH = "/cloud/colab/auth/callback"
+CLI_CONFIG_DIR = Path.home() / ".config" / "colab-cli"
 _SESSION_LINE = re.compile(r"^\[([^\]]+)\] (\S+) \| Hardware: ([^|]+?) \|", re.MULTILINE)
-_AUTH_URL = re.compile(r"https://accounts\.google\.com/\S+")
 _NOISE = re.compile(r"new version of Colab CLI|'colab update|'pip install --upgrade google-colab-cli"
                     r"|To silence this check")
 
@@ -254,94 +258,204 @@ def server_sessions() -> list[dict] | None:
     return entries
 
 
-class ColabAuthFlow:
-    """Runs the CLI's copy-paste sign-in on the person's behalf.
+def protect_cli_credentials() -> None:
+    """Keep the CLI's credentials readable by this user only.
 
-    The CLI prints a Google URL and waits on stdin for the code Google shows.
-    The code is written straight to that process and never logged or stored;
-    the CLI exchanges it and writes its own token file.
+    The CLI creates token.json and a DEBUG log world-readable, and that log holds
+    bearer tokens. It reuses an existing file's mode, so tightening sticks.
+    """
+    targets = ((CLI_CONFIG_DIR, 0o700), (CLI_CONFIG_DIR / "token.json", 0o600),
+               (CLI_CONFIG_DIR / "colab.log", 0o600))
+    for path, mode in targets:
+        try:
+            path.chmod(mode)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass  # Best effort: an odd filesystem must not block signing in.
+
+
+def _cli_auth():
+    """The CLI's own auth module: its client, scopes and landing page stay its call."""
+    try:
+        from colab_cli import auth
+    except ImportError:
+        raise RuntimeError("Colab CLI is not installed in this environment. Run: uv sync") from None
+    return auth
+
+
+def _new_oauth_flow(auth):
+    """A flow on the CLI's OAuth client, chosen the way the CLI chooses it.
+
+    Importing the CLI's auth module does not turn on its DEBUG logging, so unlike
+    `colab usage` this exchange never reaches colab.log.
+    """
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    custom = Path.home() / ".colab-cli-oauth-config.json"
+    if custom.is_file():
+        config = json.loads(custom.read_text())
+    else:
+        config = json.loads(resources.files("colab_cli").joinpath("oauth_config.json").read_text())
+    return InstalledAppFlow.from_client_config(config, auth.PUBLIC_SCOPES)
+
+
+def _write_cli_token(text: str) -> None:
+    """Replace token.json atomically: a concurrent CLI reads a whole file, old or new."""
+    CLI_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    fd, scratch = tempfile.mkstemp(dir=str(CLI_CONFIG_DIR), prefix=".token-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        os.replace(scratch, CLI_CONFIG_DIR / "token.json")
+    except BaseException:
+        Path(scratch).unlink(missing_ok=True)
+        raise
+
+
+def auth_callback_page(ok: bool, message: str) -> str:
+    """What the browser shows after Google redirects back; the URL holds the code."""
+    closing = 'setTimeout(function(){window.close()},1500);' if ok else ""
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Microduck Lab</title>
+<style>:root{{color-scheme:light dark}}body{{margin:0;min-height:100vh;display:grid;place-items:center;
+font:16px/1.6 system-ui,sans-serif;background:Canvas;color:CanvasText}}main{{max-width:28rem;padding:1.5rem;text-align:center}}
+h1{{font-size:1.25rem;margin:0 0 .5rem}}p{{margin:0;opacity:.75}}</style></head><body><main>
+<h1>{"✓ 已连接 Google 账号" if ok else "未能连接 Google 账号"}</h1><p>{html.escape(message)}</p></main>
+<script>history.replaceState(null,"",location.pathname);{closing}</script></body></html>"""
+
+
+class ColabAuthFlow:
+    """Google sign-in from the panel, without a terminal.
+
+    The lab runs the OAuth exchange itself instead of driving the CLI's login,
+    for two reasons: a loopback redirect removes the copy-paste step, and the CLI
+    logs the authorization code and the new refresh token to colab.log. The result
+    is the same token.json the CLI reads, so every other call still goes through it.
+
+    Consenting stays with the person. "callback" needs the browser and the lab on
+    one machine; "paste" uses the CLI's landing page and works anywhere.
     """
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.process: subprocess.Popen | None = None
+        self.flow = None
+        self.state = ""
+        self.mode = ""
         self.started_at = 0.0
-        self.stderr: list[str] = []
-        self.stdout: list[str] = []
+        self.result: dict = {"state": "idle"}
 
-    def _alive(self) -> bool:
-        return self.process is not None and self.process.poll() is None
-
-    def _kill(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            self.process.kill()
-            self.process.wait(timeout=5)
-        self.process = None
-
-    def start(self) -> dict:
-        binary = cli_path()
-        if not binary:
-            raise RuntimeError("Colab CLI is not installed. Run: uv tool install google-colab-cli")
+    def start(self, callback_url: str | None = None) -> dict:
+        account = cached_account_status(force=True)
+        if account.get("connected"):
+            with self.lock:
+                self.flow = None
+                self.result = {"state": "connected"}
+            return {"connected": True}
+        if account.get("reason") == "not_installed":
+            raise RuntimeError("Colab CLI is not installed. Run: uv sync")
+        auth = _cli_auth()
+        protect_cli_credentials()
+        try:
+            flow = _new_oauth_flow(auth)
+        except (OSError, ValueError, KeyError):  # Missing or malformed client config.
+            raise RuntimeError("无法读取 Colab CLI 的授权配置，请运行 uv sync 后重试。") from None
+        if callback_url:
+            mode = "callback"
+            flow.redirect_uri = callback_url
+            url, state = flow.authorization_url(prompt="select_account consent")
+        else:
+            mode = "paste"
+            flow.redirect_uri = auth.REMOTE_REDIRECT_URI
+            url, state = flow.authorization_url(prompt="select_account consent", token_usage="remote")
         with self.lock:
-            self._kill()
-            self.stderr, self.stdout = [], []
+            self.flow, self.state, self.mode = flow, state, mode
             self.started_at = time.time()
-            self.process = subprocess.Popen([binary, "usage"], stdin=subprocess.PIPE,
-                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            for stream, sink in ((self.process.stderr, self.stderr), (self.process.stdout, self.stdout)):
-                threading.Thread(target=self._drain, args=(stream, sink), daemon=True).start()
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                match = _AUTH_URL.search("".join(self.stderr))
-                if match:
-                    return {"connected": False, "url": match.group(0)}
-                if self.process.poll() is not None:
-                    # Give the drain threads a moment to deliver the last lines.
-                    time.sleep(0.2)
-                    match = _AUTH_URL.search("".join(self.stderr))
-                    if match:
-                        return {"connected": False, "url": match.group(0)}
-                    break
-                time.sleep(0.1)
-            failed = self.process.poll() not in (0,)
-            detail = "".join(self.stderr)
-            self._kill()
-        invalidate_account_cache()
-        if failed:
-            raise RuntimeError(friendly_cli_error(detail) or "无法启动 Google 授权流程。")
-        return {"connected": True}
+            self.result = {"state": "pending", "mode": mode}
+        return {"connected": False, "url": url, "mode": mode}
 
-    @staticmethod
-    def _drain(stream, sink: list[str]) -> None:
-        for line in stream:
-            sink.append(line)
+    def _expired(self) -> bool:
+        return time.time() - self.started_at > AUTH_FLOW_TTL_S
+
+    def status(self) -> dict:
+        with self.lock:
+            if self.flow is not None and self._expired():
+                self.flow = None
+                self.result = {"state": "failed", "message": "授权流程已过期，请重新点击连接。"}
+            return dict(self.result)
+
+    def _exchange(self, flow, code: str) -> dict:
+        """Trade the one-time code for a token. No library error text reaches the page."""
+        import requests
+
+        try:
+            flow.fetch_token(code=code)
+            credentials = flow.credentials
+        except Warning:  # oauthlib raises this when consent covered fewer scopes.
+            raise ValueError("授权范围不完整，请重新连接并勾选全部权限。") from None
+        except requests.RequestException:
+            raise RuntimeError("无法连接 Google，请检查网络或代理后重试。") from None
+        except Exception:
+            raise ValueError("Google 未接受这次授权，请重新点击连接。") from None
+        if not credentials.refresh_token:
+            raise ValueError("Google 没有返回长期授权，请重新点击连接。")
+        try:
+            _write_cli_token(credentials.to_json())
+        except OSError:
+            raise RuntimeError("无法保存 Google 授权，请检查 ~/.config/colab-cli 的权限。") from None
+        protect_cli_credentials()
+        invalidate_account_cache()
+        account = cached_account_status(force=True)
+        if not account.get("connected"):
+            raise RuntimeError(account.get("message") or "授权已保存，但暂时无法确认账号状态，请稍后刷新。")
+        with self.lock:
+            self.result = {"state": "connected"}
+        return account
+
+    def _fail(self, message: str) -> None:
+        with self.lock:
+            self.result = {"state": "failed", "message": message}
+
+    def callback(self, code: str | None, state: str | None, error: str | None) -> dict:
+        """Google's redirect. A wrong state leaves the real flow waiting."""
+        with self.lock:
+            live = self.flow is not None and self.mode == "callback" and not self._expired()
+            if not live or not secrets.compare_digest((state or "").encode(), self.state.encode()):
+                return {"ok": False, "message": "这个授权链接已失效，请回到实验室重新点击连接。"}
+            flow, self.flow = self.flow, None
+            self.result = {"state": "exchanging"}
+        if error or not code:
+            message = "你取消了 Google 授权。" if error == "access_denied" else "Google 没有完成授权，请重试。"
+            self._fail(message)
+            return {"ok": False, "message": message}
+        try:
+            account = self._exchange(flow, code)
+        except (ValueError, RuntimeError) as exc:
+            self._fail(str(exc))
+            return {"ok": False, "message": str(exc)}
+        return {"ok": True, "message": "可以关闭此页，回到实验室继续。", "account": account}
 
     def finish(self, code: str) -> dict:
+        """The pasted code, for when the redirect cannot reach this lab."""
         code = code.strip()
         if not code or len(code) > 2048 or re.search(r"\s", code):
             raise ValueError("授权码格式不正确，请复制 Google 页面显示的完整授权码。")
         with self.lock:
-            if not self._alive() or time.time() - self.started_at > AUTH_FLOW_TTL_S:
-                self._kill()
+            if self.flow is None or self.mode != "paste" or self._expired():
+                self.flow = None
                 raise ValueError("授权流程已过期，请重新点击连接。")
-            process = self.process
-            process.stdin.write(code + "\n")
-            process.stdin.flush()
-            process.stdin.close()
-            try:
-                returncode = process.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                self._kill()
-                raise RuntimeError("Google 授权超时，请检查网络后重试。") from None
-            self.process = None
-        invalidate_account_cache()
-        if returncode:
-            raise ValueError("Google 未接受这个授权码，请重新点击连接并使用新的授权码。")
-        return cached_account_status(force=True)
+            flow, self.flow = self.flow, None
+            self.result = {"state": "exchanging"}
+        try:
+            return self._exchange(flow, code)
+        except (ValueError, RuntimeError) as exc:
+            self._fail(str(exc))
+            raise
 
     def cancel(self) -> None:
         with self.lock:
-            self._kill()
+            self.flow = None
+            self.result = {"state": "idle"}
 
 
 def _remote_runner(task: str, iterations: int, envs: int, max_seconds: int = DEFAULT_MAX_MINUTES * 60) -> str:

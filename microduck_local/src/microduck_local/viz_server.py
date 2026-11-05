@@ -176,7 +176,7 @@ import psutil
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 # Imported AS A MODULE so /teach can hot-reload it (behaviors.reload_library /
@@ -3891,6 +3891,19 @@ def origin_allowed(origin: str | None) -> bool:
     return origin is None or bool(LOCAL_ORIGIN_RE.fullmatch(origin))
 
 
+def colab_callback_url(request: Request) -> str | None:
+    """Where Google may redirect, or None when this browser is not on the lab's machine.
+
+    Google only accepts loopback addresses here, and the address the browser just
+    used is the one known to reach the lab. Anything else falls back to pasting.
+    """
+    host, port = request.url.hostname, request.url.port
+    client = request.client.host if request.client else None
+    if host not in ("localhost", "127.0.0.1") or client not in ("127.0.0.1", "::1") or port is None:
+        return None
+    return f"http://{host}:{port}{colab_jobs.AUTH_CALLBACK_PATH}"
+
+
 def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
     scene = extract_scene()
     st = LabState(ducks)
@@ -3953,6 +3966,7 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
     async def lifespan(_app):
         task = asyncio.create_task(lab_loop())
         world.start()   # the /sim world loop, beside the roster loop
+        colab_jobs.protect_cli_credentials()
         cloud.start_reconciler()  # re-adopts and releases Colab sessions; billing outlives this process
         # Nothing else ever retrieves this task's exception, so before this
         # callback a crash in lab_loop killed every duck SILENTLY: HTTP and
@@ -4216,13 +4230,29 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
         return account
 
     @app.post("/cloud/colab/auth/start")
-    def colab_auth_start(request: Request) -> dict:
+    def colab_auth_start(request: Request, manual: bool = False) -> dict:
         if not origin_allowed(request.headers.get("origin")):
             raise HTTPException(403, "Origin not allowed")
         try:
-            return colab_auth.start()
+            return colab_auth.start(None if manual else colab_callback_url(request))
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
+
+    @app.get("/cloud/colab/auth/status")
+    def colab_auth_status() -> dict:
+        return colab_auth.status()
+
+    # A top-level redirect from Google, so no Origin to check: the one-time state
+    # is what ties it to the flow this lab started.
+    @app.get(colab_jobs.AUTH_CALLBACK_PATH)
+    def colab_auth_callback(code: str | None = None, state: str | None = None,
+                            error: str | None = None) -> HTMLResponse:
+        result = colab_auth.callback(code, state, error)
+        if result["ok"]:
+            cloud.note_account(result["account"])
+        return HTMLResponse(colab_jobs.auth_callback_page(result["ok"], result["message"]),
+                            status_code=200 if result["ok"] else 400,
+                            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
     @app.post("/cloud/colab/auth/finish")
     def colab_auth_finish(req: ColabAuthCodeReq, request: Request) -> dict:

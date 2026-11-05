@@ -6,10 +6,12 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from subprocess import CompletedProcess
 
 import pytest
+import requests
 
 from microduck_local import colab_jobs
 
@@ -1106,63 +1108,288 @@ def test_runner_enforces_its_own_deadline_when_the_lab_is_gone(tmp_path, monkeyp
 
 
 # --- web sign-in --------------------------------------------------------------
+#
+# Real google_auth_oauthlib, real PKCE and real credentials; only the HTTPS call
+# to Google's token endpoint is faked, at the transport.
 
 
-FAKE_CLI = """#!/bin/sh
-# Mirrors the real CLI: URL on stderr, code on stdin, usage on stdout once signed in.
-if [ -f "$FAKE_TOKEN" ]; then
-  echo "Current balance: 0.00 compute units"; echo "Usage rate: 0.00/hr"; echo "Active assignments: 0"
-  exit 0
-fi
-echo "To authorize colab-cli, visit this URL in any browser:" >&2
-echo "  https://accounts.google.com/o/oauth2/auth?response_type=code&state=x" >&2
-printf "Enter the authorization code: "
-read -r code || exit 1
-[ "$code" = "good-code" ] || { echo "invalid_grant" >&2; exit 1; }
-: > "$FAKE_TOKEN"
-echo "Current balance: 0.00 compute units"; echo "Usage rate: 0.00/hr"; echo "Active assignments: 0"
-"""
+class FakeGoogle(requests.adapters.BaseAdapter):
+    def __init__(self):
+        super().__init__()
+        self.requests: list[dict] = []
+        self.status = 200
+        self.refresh_token: str | None = "refresh-new"
+        self.scope = None
+        self.offline = False
+
+    def send(self, request, **kwargs):
+        if self.offline:
+            raise requests.ConnectionError("offline")
+        self.requests.append(dict(urllib.parse.parse_qsl(request.body)))
+        from colab_cli.auth import PUBLIC_SCOPES
+
+        body = {"access_token": "access-new", "token_type": "Bearer", "expires_in": 3600,
+                "scope": self.scope or " ".join(PUBLIC_SCOPES)}
+        if self.refresh_token:
+            body["refresh_token"] = self.refresh_token
+        if self.status != 200:
+            body = {"error": "invalid_grant", "error_description": "Bad Request"}
+        response = requests.Response()
+        response.status_code = self.status
+        response._content = json.dumps(body).encode()
+        response.headers["Content-Type"] = "application/json"
+        response.url = request.url
+        response.request = request
+        return response
+
+    def close(self):
+        pass
 
 
 @pytest.fixture
-def fake_auth_cli(tmp_path, monkeypatch):
-    binary = tmp_path / "colab"
-    binary.write_text(FAKE_CLI)
-    binary.chmod(0o755)
-    token = tmp_path / "token"
-    monkeypatch.setenv("FAKE_TOKEN", str(token))
-    monkeypatch.setattr(colab_jobs, "cli_path", lambda: str(binary))
-    return token
+def google(tmp_path, monkeypatch):
+    """Isolates the credentials directory: these tests must never touch the real one."""
+    fake = FakeGoogle()
+    real_flow = colab_jobs._new_oauth_flow
+
+    def flow(auth):
+        built = real_flow(auth)
+        built.oauth2session.mount("https://", fake)
+        return built
+
+    monkeypatch.setattr(colab_jobs, "_new_oauth_flow", flow)
+    monkeypatch.setattr(colab_jobs, "CLI_CONFIG_DIR", tmp_path / "colab-cli")
+    fake.account = {"connected": False, "reason": "auth_expired", "installed": True}
+    fake.connect_after_token = True
+
+    def status():
+        token_saved = (tmp_path / "colab-cli" / "token.json").exists()
+        if fake.connect_after_token and token_saved:
+            return {"connected": True, "reason": "ok", "installed": True}
+        return dict(fake.account)
+
+    monkeypatch.setattr(colab_jobs, "account_status", status)
+    colab_jobs.invalidate_account_cache()
+    yield fake
+    colab_jobs.invalidate_account_cache()
 
 
-def test_web_sign_in_relays_the_code_and_reports_the_new_account(fake_auth_cli):
+CALLBACK = "http://127.0.0.1:8788/cloud/colab/auth/callback"
+
+
+def query(url: str) -> dict:
+    return dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+
+
+def token_file() -> Path:
+    return colab_jobs.CLI_CONFIG_DIR / "token.json"
+
+
+def test_sign_in_asks_google_for_a_lasting_pkce_grant_back_to_this_lab(google):
+    started = colab_jobs.ColabAuthFlow().start(CALLBACK)
+    asked = query(started["url"])
+    assert started["mode"] == "callback" and started["connected"] is False
+    assert asked["redirect_uri"] == CALLBACK
+    assert asked["access_type"] == "offline"  # Without it no refresh token comes back.
+    assert "consent" in asked["prompt"] and asked["state"] and asked["code_challenge"]
+    assert "token_usage" not in asked
+
+
+def test_manual_sign_in_uses_the_cli_landing_page(google):
+    from colab_cli.auth import REMOTE_REDIRECT_URI
+
+    started = colab_jobs.ColabAuthFlow().start(None)
+    asked = query(started["url"])
+    assert started["mode"] == "paste"
+    assert asked["redirect_uri"] == REMOTE_REDIRECT_URI and asked["token_usage"] == "remote"
+
+
+def test_callback_saves_a_private_token_the_cli_itself_can_load(google):
+    from colab_cli.auth import PUBLIC_SCOPES
+    from google.oauth2.credentials import Credentials
+
     flow = colab_jobs.ColabAuthFlow()
-    started = flow.start()
-    assert started["url"].startswith("https://accounts.google.com/") and not started["connected"]
-    assert flow.finish("good-code")["connected"] is True
-    assert fake_auth_cli.exists()
+    state = query(flow.start(CALLBACK)["url"])["state"]
+    result = flow.callback("code-1", state, None)
+    assert result["ok"] and result["account"]["connected"] and flow.status()["state"] == "connected"
+
+    sent = google.requests[0]
+    assert sent["code"] == "code-1" and sent["redirect_uri"] == CALLBACK and sent["code_verifier"]
+    saved = Credentials.from_authorized_user_file(token_file(), PUBLIC_SCOPES)
+    assert saved.refresh_token == "refresh-new" and saved.token == "access-new"
+    assert token_file().stat().st_mode & 0o777 == 0o600
+    assert colab_jobs.CLI_CONFIG_DIR.stat().st_mode & 0o777 == 0o700
+    assert [p.name for p in colab_jobs.CLI_CONFIG_DIR.iterdir()] == ["token.json"]  # No temp file left.
 
 
-def test_web_sign_in_rejects_a_wrong_code_without_echoing_it(fake_auth_cli):
+def test_a_forged_state_exchanges_nothing_and_leaves_the_real_flow_waiting(google):
     flow = colab_jobs.ColabAuthFlow()
-    flow.start()
+    state = query(flow.start(CALLBACK)["url"])["state"]
+    for forged in ("forged", "", None, "状态"):
+        assert flow.callback("attacker-code", forged, None)["ok"] is False
+    assert google.requests == [] and not token_file().exists()
+    assert flow.status()["state"] == "pending"
+    assert flow.callback("real-code", state, None)["ok"] is True
+
+
+def test_a_redirect_only_works_once(google):
+    flow = colab_jobs.ColabAuthFlow()
+    state = query(flow.start(CALLBACK)["url"])["state"]
+    assert flow.callback("code-1", state, None)["ok"] is True
+    assert flow.callback("code-1", state, None)["ok"] is False
+    assert len(google.requests) == 1
+
+
+def test_declining_on_google_ends_the_flow_and_keeps_the_old_token(google):
+    token_file().parent.mkdir(parents=True)
+    token_file().write_text("old")
+    google.connect_after_token = False
+    flow = colab_jobs.ColabAuthFlow()
+    state = query(flow.start(CALLBACK)["url"])["state"]
+    result = flow.callback(None, state, "access_denied")
+    assert result["ok"] is False and "取消" in result["message"]
+    assert flow.status() == {"state": "failed", "message": result["message"]}
+    assert google.requests == [] and token_file().read_text() == "old"
+
+
+def test_an_error_from_google_wins_even_if_a_code_came_with_it(google):
+    flow = colab_jobs.ColabAuthFlow()
+    state = query(flow.start(CALLBACK)["url"])["state"]
+    assert flow.callback("code", state, "server_error")["ok"] is False
+    assert google.requests == [] and not token_file().exists()
+
+
+@pytest.mark.parametrize("setup, expected", [
+    (lambda g: setattr(g, "status", 400), "未接受"),
+    (lambda g: setattr(g, "refresh_token", None), "长期授权"),
+    (lambda g: setattr(g, "scope", "openid"), "勾选全部权限"),
+    (lambda g: setattr(g, "offline", True), "网络"),
+])
+def test_a_failed_exchange_explains_itself_and_keeps_the_old_token(google, setup, expected):
+    token_file().parent.mkdir(parents=True)
+    token_file().write_text("old")
+    google.connect_after_token = False
+    setup(google)
+    flow = colab_jobs.ColabAuthFlow()
+    state = query(flow.start(CALLBACK)["url"])["state"]
+    result = flow.callback("secret-code", state, None)
+    assert result["ok"] is False and expected in result["message"]
+    assert "secret-code" not in result["message"]
+    assert flow.status()["state"] == "failed"
+    assert token_file().read_text() == "old"
+
+
+def test_a_saved_token_google_then_refuses_is_not_reported_as_connected(google):
+    google.connect_after_token = False
+    google.account = {"connected": False, "reason": "auth_expired", "message": "Google 授权已失效"}
+    flow = colab_jobs.ColabAuthFlow()
+    state = query(flow.start(CALLBACK)["url"])["state"]
+    assert flow.callback("code", state, None) == {"ok": False, "message": "Google 授权已失效"}
+    assert flow.status()["state"] == "failed"
+
+
+def test_paste_exchanges_the_code_and_a_wrong_one_is_not_echoed(google):
+    flow = colab_jobs.ColabAuthFlow()
+    flow.start(None)
+    assert flow.finish(" good-code ")["connected"] is True
+    assert google.requests[0]["code"] == "good-code"
+
+    google.status = 400
+    token_file().unlink()
+    flow.start(None)
     with pytest.raises(ValueError) as error:
         flow.finish("wrong-code")
-    assert "wrong-code" not in str(error.value)
-    assert not fake_auth_cli.exists()
+    assert "wrong-code" not in str(error.value) and not token_file().exists()
 
 
-def test_web_sign_in_validates_the_code_shape_and_needs_a_started_flow(fake_auth_cli):
+def test_paste_validates_the_code_and_needs_a_paste_flow(google):
     flow = colab_jobs.ColabAuthFlow()
     with pytest.raises(ValueError, match="过期"):
-        flow.finish("good-code")
-    flow.start()
+        flow.finish("code")
+    flow.start(None)
     with pytest.raises(ValueError, match="格式"):
         flow.finish("two words")
+    flow.start(CALLBACK)
+    with pytest.raises(ValueError, match="过期"):
+        flow.finish("code")
+    assert google.requests == []
+
+
+def test_expiry_and_cancel_kill_the_redirect(google):
+    flow = colab_jobs.ColabAuthFlow()
+    state = query(flow.start(CALLBACK)["url"])["state"]
+    flow.started_at -= colab_jobs.AUTH_FLOW_TTL_S + 1
+    assert flow.callback("code", state, None)["ok"] is False
+    assert flow.status()["state"] == "failed" and flow.flow is None
+
+    state = query(flow.start(CALLBACK)["url"])["state"]
     flow.cancel()
-    assert flow.process is None
+    assert flow.callback("code", state, None)["ok"] is False
+    assert flow.status() == {"state": "idle"} and google.requests == []
 
 
-def test_web_sign_in_with_a_valid_token_needs_no_code(fake_auth_cli):
-    fake_auth_cli.write_text("")
-    assert colab_jobs.ColabAuthFlow().start() == {"connected": True}
+def test_starting_again_invalidates_the_earlier_link(google):
+    flow = colab_jobs.ColabAuthFlow()
+    first = query(flow.start(CALLBACK)["url"])["state"]
+    second = query(flow.start(CALLBACK)["url"])["state"]
+    assert first != second
+    assert flow.callback("code", first, None)["ok"] is False
+    assert flow.callback("code", second, None)["ok"] is True
+
+
+def test_a_broken_client_config_is_an_explained_failure_not_a_crash(google, monkeypatch, tmp_path):
+    monkeypatch.setattr(colab_jobs.Path, "home", lambda: tmp_path)
+    (tmp_path / ".colab-cli-oauth-config.json").write_text("not json")
+    with pytest.raises(RuntimeError, match="授权配置"):
+        colab_jobs.ColabAuthFlow().start(CALLBACK)
+
+
+def test_an_already_connected_account_needs_no_sign_in(google):
+    google.account = {"connected": True, "reason": "ok"}
+    flow = colab_jobs.ColabAuthFlow()
+    assert flow.start(CALLBACK) == {"connected": True}
+    assert flow.flow is None
+
+
+def test_credentials_become_private_and_a_missing_directory_is_fine(tmp_path, monkeypatch):
+    root = tmp_path / "colab-cli"
+    monkeypatch.setattr(colab_jobs, "CLI_CONFIG_DIR", root)
+    colab_jobs.protect_cli_credentials()  # Nothing there yet: must not raise or create it.
+    assert not root.exists()
+    root.mkdir(mode=0o755)
+    for name in ("token.json", "colab.log"):
+        (root / name).write_text("x")
+        (root / name).chmod(0o644)
+    colab_jobs.protect_cli_credentials()
+    assert root.stat().st_mode & 0o777 == 0o700
+    assert all((root / n).stat().st_mode & 0o777 == 0o600 for n in ("token.json", "colab.log"))
+
+
+def test_the_installed_cli_still_matches_what_sign_in_relies_on():
+    """A CLI upgrade that moves these must fail here, not in someone's sign-in."""
+    from colab_cli import auth
+
+    assert Path(auth.TOKEN_CONFIG_PATH).parent == Path.home() / ".config" / "colab-cli"
+    assert auth.TOKEN_CONFIG_PATH.endswith("/token.json")
+    assert "https://www.googleapis.com/auth/colaboratory" in auth.PUBLIC_SCOPES
+    assert auth.REMOTE_REDIRECT_URI.startswith("https://")
+    assert colab_jobs.CLI_CONFIG_DIR == Path.home() / ".config" / "colab-cli"
+    flow = colab_jobs._new_oauth_flow(auth)
+    assert flow.client_config["token_uri"].startswith("https://")
+
+
+def test_using_the_cli_auth_module_does_not_turn_on_its_debug_log():
+    """colab.log gets codes and refresh tokens only because the CLI's main enables DEBUG."""
+    probe = ("import logging; from microduck_local import colab_jobs as c; a = c._cli_auth(); c._new_oauth_flow(a);"
+             "r = logging.getLogger(); print(r.getEffectiveLevel(), r.handlers,"
+             " logging.getLogger('requests_oauthlib').getEffectiveLevel())")
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60, check=True)
+    assert out.stdout.split() == ["30", "[]", "30"]  # WARNING, no handlers, WARNING.
+
+
+def test_the_callback_page_escapes_its_message_and_strips_the_code_from_the_url():
+    page = colab_jobs.auth_callback_page(False, '<script>alert(1)</script>')
+    assert "<script>alert" not in page and "&lt;script&gt;" in page
+    assert "history.replaceState" in page
+    assert "window.close" not in page
+    assert "window.close" in colab_jobs.auth_callback_page(True, "ok")

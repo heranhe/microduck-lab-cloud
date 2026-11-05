@@ -2385,6 +2385,48 @@ def test_colab_routes_pass_limits_and_require_paid_confirmation(fake_popen, monk
     assert stops == [("abc", True)]
 
 
+def test_colab_sign_in_routes_pick_the_redirect_from_where_the_browser_is(fake_popen, monkeypatch):
+    seen = []
+
+    def start(self, callback_url=None):
+        seen.append(callback_url)
+        return {"connected": False, "url": "https://accounts.google.com/x", "mode": "callback"}
+
+    monkeypatch.setattr(V.colab_jobs.ColabAuthFlow, "start", start)
+    from fastapi.testclient import TestClient
+
+    # A real browser on this machine: client address and Host are both loopback.
+    with TestClient(V.make_app([]), base_url="http://127.0.0.1:8788", client=("127.0.0.1", 50000)) as local:
+        assert local.post("/cloud/colab/auth/start").status_code == 200
+        assert local.post("/cloud/colab/auth/start?manual=true").status_code == 200
+        assert local.post("/cloud/colab/auth/start", headers={"Host": "localhost:8788"}).status_code == 200
+        assert local.post("/cloud/colab/auth/start", headers={"Host": "evil.example:8788"}).status_code == 200
+        assert local.post("/cloud/colab/auth/start", headers={"Origin": "https://evil.example"}).status_code == 403
+    with TestClient(V.make_app([]), base_url="http://127.0.0.1:8788", client=("192.168.1.9", 50000)) as lan:
+        assert lan.post("/cloud/colab/auth/start").status_code == 200
+    path = V.colab_jobs.AUTH_CALLBACK_PATH
+    assert seen == [f"http://127.0.0.1:8788{path}", None, f"http://localhost:8788{path}", None, None]
+
+
+def test_colab_callback_route_never_echoes_the_code_and_reports_the_account(fake_popen, monkeypatch):
+    noted = []
+    monkeypatch.setattr(V.colab_jobs.ColabJobs, "note_account", lambda self, account: noted.append(account))
+    from fastapi.testclient import TestClient
+
+    with TestClient(V.make_app([])) as client:
+        refused = client.get(V.colab_jobs.AUTH_CALLBACK_PATH, params={"code": "SECRET-CODE", "state": "forged"})
+        assert refused.status_code == 400 and "SECRET-CODE" not in refused.text
+        assert refused.headers["cache-control"] == "no-store"
+        assert refused.headers["referrer-policy"] == "no-referrer"
+        assert client.get("/cloud/colab/auth/status").json() == {"state": "idle"}
+        assert noted == []
+        monkeypatch.setattr(V.colab_jobs.ColabAuthFlow, "callback", lambda self, code, state, error: {
+            "ok": True, "message": "done", "account": {"connected": True}})
+        accepted = client.get(V.colab_jobs.AUTH_CALLBACK_PATH, params={"code": "c", "state": "s"})
+        assert accepted.status_code == 200 and "已连接" in accepted.text
+        assert noted == [{"connected": True}]
+
+
 def test_colab_artifact_route_serves_only_whitelisted_names(fake_popen, monkeypatch, tmp_path):
     from fastapi import HTTPException
 

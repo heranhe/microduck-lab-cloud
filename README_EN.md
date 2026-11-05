@@ -200,11 +200,11 @@ The lab can run the official `microduck_rl` trainer on a Colab GPU under
 On macOS or Linux, `cd microduck_local && uv sync` installs the Colab CLI.
 Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
 
-1. In **☁ Cloud**, press **Connect Google account**, approve access on Google's
-   page and paste the code it shows. (Or run `cd microduck_local && uv run colab usage`
-   in a terminal.) A `0.00` paid balance still permits a free T4 request.
-   Credentials stay in the CLI's local store; the lab never accepts a Google
-   password or reads a token, and only relays the one-time code to the CLI.
+1. In **☁ Cloud**, press **Connect Google account**, choose your account and
+   approve access on Google's page; the panel connects by itself. If the redirect
+   can't reach the lab, switch to a code. A `0.00` paid balance still permits a
+   free T4 request. Credentials stay on this computer in the CLI's local store,
+   readable only by you; the lab never accepts a Google password.
 2. Start `duck-lab` and the viewer as described below. Use **☁ Cloud** to
    verify the account and balance. Old `/cloud` bookmarks redirect to this panel.
 3. Open **🎓 Training**, choose an action in the original teaching panel, select

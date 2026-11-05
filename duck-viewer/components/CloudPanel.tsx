@@ -81,6 +81,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const [jobs, setJobs] = useState<Job[]>([]);
   const [server, setServer] = useState<ColabServerView | null>(null);
   const [authUrl, setAuthUrl] = useState("");
+  const [authMode, setAuthMode] = useState<"callback" | "paste">("callback");
   const [authCode, setAuthCode] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [token, setToken] = useState("");
@@ -189,20 +190,49 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
     finally { setBusy(""); }
   };
 
-  const connectColab = async () => {
+  const connectColab = async (manual = false) => {
     setBusy("auth"); setError(""); setNotice("");
+    // Open during the click: browsers block a tab opened after an await.
+    const tab = window.open("", "_blank");
+    if (tab) tab.opener = null;
     try {
-      const started = await jsonRequest("/cloud/colab/auth/start", { method: "POST" });
+      const started = await jsonRequest(`/cloud/colab/auth/start${manual ? "?manual=true" : ""}`, { method: "POST" });
       if (started.url) {
         setAuthUrl(started.url);
-        window.open(started.url, "_blank", "noopener,noreferrer");
+        setAuthMode(started.mode === "callback" ? "callback" : "paste");
+        if (tab) tab.location.href = started.url;
       } else {
+        tab?.close();
         setNotice(tr("Google account is already connected.", "Google 账号已连接。"));
         await refresh(true);
       }
-    } catch (e) { setError(errorText(e, locale)); }
+    } catch (e) { tab?.close(); setError(errorText(e, locale)); }
     finally { setBusy(""); }
   };
+
+  // In callback mode the redirect lands on the lab, so the panel only has to watch.
+  useEffect(() => {
+    if (!authUrl || authMode !== "callback") return;
+    let stopped = false;
+    const check = async () => {
+      try {
+        const status = await jsonRequest("/cloud/colab/auth/status");
+        if (stopped) return;
+        if (status.state === "connected") {
+          setAuthUrl("");
+          setNotice(tr("Google account connected.", "Google 账号已连接。"));
+          await refresh(true);
+        } else if (status.state === "failed") {
+          setAuthUrl("");
+          setError(String(status.message || tr("Google sign-in did not finish.", "Google 授权未完成。")));
+        } else if (status.state === "idle") {
+          setAuthUrl("");
+        }
+      } catch { /* The next tick retries; the lab may be restarting. */ }
+    };
+    const timer = window.setInterval(check, 2000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [authUrl, authMode]); // eslint-disable-line react-hooks/exhaustive-deps -- refresh and tr are rebuilt each render.
 
   const finishConnect = async () => {
     setBusy("auth"); setError("");
@@ -210,7 +240,11 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
       setColab(await jsonRequest("/cloud/colab/auth/finish", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: authCode }) }));
       setAuthUrl(""); setAuthCode("");
       setNotice(tr("Google account connected.", "Google 账号已连接。"));
-    } catch (e) { setError(errorText(e, locale)); }
+    } catch (e) {
+      // Google's codes are one-time, so a refused one needs a fresh sign-in.
+      setAuthUrl(""); setAuthCode("");
+      setError(errorText(e, locale));
+    }
     finally { setBusy(""); }
   };
 
@@ -413,16 +447,23 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           <div className={styles.tokenRow}><input className={styles.input} type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="hf_…"/><button className={styles.smallButton} disabled={!token || busy === "token"} onClick={connectHf}>{busy === "token" ? tr("Checking…", "验证中…") : tr("Connect", "连接")}</button></div>
           <div className={styles.help}>{tr("Use a fine-grained token with Jobs and model write access.", "请使用具有 Jobs 和模型写入权限的细粒度 Token。")} <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">{tr("Create token", "创建 Token")}</a></div>
         </>}
-        {provider === "colab" && !colab.connected && colab.reason !== "network" && colab.reason !== "not_installed" && (authUrl ? <>
-          <div className={styles.help}>{tr("Approve access in the Google page, then paste the code it shows. The code only goes to the local Colab CLI.", "请在 Google 页面完成授权，再把页面显示的授权码粘贴到这里。授权码只会交给本机的 Colab CLI。")} <a href={authUrl} target="_blank" rel="noreferrer">{tr("Open the Google page", "打开 Google 授权页面")}</a></div>
+        {provider === "colab" && !colab.connected && colab.reason !== "network" && colab.reason !== "not_installed" && (authUrl && authMode === "callback" ? <>
+          <div className={styles.help}>{tr("Choose your account and approve access on the Google page. This panel connects by itself once you're done.", "请在 Google 页面选择账号并同意授权，完成后这里会自动连接。")} <a href={authUrl} target="_blank" rel="noreferrer">{tr("Open the Google page again", "重新打开 Google 页面")}</a></div>
+          <div className={styles.tokenRow}>
+            <span className={styles.help}>{tr("Waiting for Google…", "正在等待 Google 授权…")}</span>
+            <button className={styles.refreshButton} onClick={() => connectColab(true)}>{tr("Use a code instead", "改用授权码")}</button>
+            <button className={styles.refreshButton} onClick={cancelConnect}>{tr("Cancel", "取消")}</button>
+          </div>
+        </> : authUrl ? <>
+          <div className={styles.help}>{tr("Approve access on the Google page, then paste the code it shows here.", "请在 Google 页面完成授权，再把页面显示的授权码粘贴到这里。")} <a href={authUrl} target="_blank" rel="noreferrer">{tr("Open the Google page", "打开 Google 授权页面")}</a></div>
           <div className={styles.tokenRow}>
             <input className={styles.input} autoComplete="off" value={authCode} onChange={(e) => setAuthCode(e.target.value)} placeholder={tr("Authorization code", "授权码")}/>
             <button className={styles.smallButton} disabled={!authCode.trim() || busy === "auth"} onClick={finishConnect}>{busy === "auth" ? tr("Checking…", "验证中…") : tr("Finish", "完成")}</button>
             <button className={styles.refreshButton} onClick={cancelConnect}>{tr("Cancel", "取消")}</button>
           </div>
         </> : <>
-          <div className={styles.tokenRow}><button className={styles.smallButton} disabled={busy === "auth"} onClick={connectColab}>{busy === "auth" ? tr("Opening…", "正在打开…") : tr("Connect Google account", "连接 Google 账号")}</button></div>
-          <div className={styles.help}>{tr("Uses Google's official sign-in. The lab never sees your password or tokens.", "使用 Google 官方授权，本应用不接触你的密码和令牌。")}</div>
+          <div className={styles.tokenRow}><button className={styles.smallButton} disabled={busy === "auth"} onClick={() => connectColab()}>{busy === "auth" ? tr("Opening…", "正在打开…") : tr("Connect Google account", "连接 Google 账号")}</button></div>
+          <div className={styles.help}>{tr("Uses Google's official sign-in. The lab never sees your password; the token stays on this computer, readable only by you.", "使用 Google 官方授权。实验室不接触你的密码，令牌只保存在本机，且仅你的账户可读。")}</div>
         </>)}
         {provider === "colab" && server?.ok === false && cloudActive.some((job) => job.platform === "colab") && <div className={styles.balanceWarning}>
           <strong>{tr("Can't check Google's session list", "暂时无法向 Google 查询会话")}</strong>
