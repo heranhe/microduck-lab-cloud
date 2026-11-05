@@ -87,10 +87,29 @@ if [ "${MICRODUCK_RESTART_FORCE:-0}" != "1" ]; then
       echo "or, to kill it deliberately:  MICRODUCK_RESTART_FORCE=1 restart.sh ..."
       exit 1 ;;
   esac
+  # A restart stops every Colab session the lab owns, discarding that training.
+  _cloud_jobs="$(curl -s -m 5 "http://127.0.0.1:$PORT/cloud/colab/jobs" 2>/dev/null \
+    | python3 -c '
+import json, sys
+try:
+    jobs = json.load(sys.stdin).get("jobs", [])
+except Exception:
+    raise SystemExit
+for j in jobs:
+    if j.get("released") is not True:
+        print("    " + str(j.get("id")) + "  " + str(j.get("gpu")) + "  " + str(j.get("state")))
+' 2>/dev/null)"
+  if [ -n "$_cloud_jobs" ]; then
+    echo "REFUSING to restart: these Colab jobs are not released yet:"
+    echo "$_cloud_jobs"
+    echo "Disconnect them in the lab first, or to discard them deliberately:"
+    echo "  MICRODUCK_RESTART_FORCE=1 restart.sh ..."
+    exit 1
+  fi
 fi
 
 # Stop whatever LISTENS on a port — and nothing else. TERM first; a listener
-# still holding the port after 10 s gets KILL, by pid, never by name.
+# still holding the port after 60 s gets KILL, by pid, never by name.
 stop_port() {
   local port=$1 pids
   pids=$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null)
@@ -103,12 +122,14 @@ stop_port() {
     echo "stopping pid $pid: $(ps -o command= -p "$pid" 2>/dev/null | awk '{ for (i = 2; i <= NF; i++) printf "%s ", $i }' | cut -c1-90)"
     kill "$pid" 2>/dev/null
   done
-  for _ in $(seq 1 20); do
+  # 60 s, not 10: on TERM the lab unassigns its Colab runtimes, and a kill -9 in
+  # the middle would leave one billing until the next lab start re-adopts it.
+  for _ in $(seq 1 120); do
     sleep 0.5
     lsof -nP -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 || return 0
   done
   for pid in $pids; do
-    echo "pid $pid still holds :$port after 10 s — kill -9"
+    echo "pid $pid still holds :$port after 60 s — kill -9"
     kill -9 "$pid" 2>/dev/null
   done
   sleep 1

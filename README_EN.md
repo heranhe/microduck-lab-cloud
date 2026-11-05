@@ -200,21 +200,29 @@ The lab can run the official `microduck_rl` trainer on a Colab GPU under
 On macOS or Linux, `cd microduck_local && uv sync` installs the Colab CLI.
 Windows users can use the [Colab notebook](notebooks/microduck_train.ipynb).
 
-1. In a terminal, run `cd microduck_local && uv run colab usage`. On first use,
-   follow the CLI's Google authorization link. A `0.00` paid balance still permits a free T4 request.
+1. In **☁ Cloud**, press **Connect Google account**, approve access on Google's
+   page and paste the code it shows. (Or run `cd microduck_local && uv run colab usage`
+   in a terminal.) A `0.00` paid balance still permits a free T4 request.
    Credentials stay in the CLI's local store; the lab never accepts a Google
-   password or token.
+   password or reads a token, and only relays the one-time code to the CLI.
 2. Start `duck-lab` and the viewer as described below. Use **☁ Cloud** to
    verify the account and balance. Old `/cloud` bookmarks redirect to this panel.
 3. Open **🎓 Training**, choose an action in the original teaching panel, select
-   Colab as its compute source, and choose a GPU before pressing the single
-   Start button. Cloud submission is enabled only for actions with an
+   Colab as its compute source, and choose a GPU and a time limit before pressing
+   the single Start button. An account with a paid balance is asked to confirm first. Cloud submission is enabled only for actions with an
    equivalent official `microduck_rl` task. Once a job starts, the lab toolbar shows elapsed
    time beside a one-click control that disconnects this lab's Colab sessions.
    The timer starts when GPU allocation succeeds; it is not Google's
    billable time. The job list has individual disconnect controls and an ONNX
    download when export succeeds. Lab shutdown also attempts to release active
    Colab sessions.
+
+Every Colab job has a time limit (180 minutes by default) and an optional
+compute-unit limit, after which progress is saved and the runtime released. Stalls
+end the job too. "Released" means Google's session list agrees, a background check
+retries failed releases, and a restarted lab re-adopts its jobs. Keep the Mac open
+during a job: it downloads the results and releases the runtime. See
+[the cost guard notes](docs/colab-cost-guard.md), in Chinese, for the details and limits.
 
 The top entry is named **🎓 Training** because it opens the setup panel; the
 only actual Start button is at the bottom of that panel. Once a job starts, the

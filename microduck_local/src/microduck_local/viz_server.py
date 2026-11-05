@@ -2499,7 +2499,20 @@ class ColabStartReq(BaseModel):
     task: str = "Mjlab-Velocity-Flat-MicroDuck"
     gpu: str = "T4"
     iterations: int = 1000
-    envs: int = 64
+    # microduck_rl's README trains at 4096; a paid GPU idling on 64 envs is the
+    # most expensive way to collect the same samples.
+    envs: int = 4096
+    maxMinutes: int = colab_jobs.DEFAULT_MAX_MINUTES
+    maxCcu: float | None = None
+    confirmPaid: bool = False
+
+
+class ColabAuthCodeReq(BaseModel):
+    code: str
+
+
+class ColabOrphanReq(BaseModel):
+    endpoint: str
 
 
 class HfStartReq(BaseModel):
@@ -3883,6 +3896,7 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
     st = LabState(ducks)
     stats = StatsSampler()
     cloud = colab_jobs.ColabJobs()
+    colab_auth = colab_jobs.ColabAuthFlow()
     hf_cloud = hf_jobs.HfJobs()
     training_lock = Lock()
 
@@ -3923,7 +3937,10 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
             # An HTTP request counts as someone using the lab: an agent that
             # drives /world/load and /world/speed and reads results over REST
             # never opens a socket, and must not be shut down mid-experiment.
+            # A Colab job counts too: a scratch lab exiting here would kill a
+            # training run someone paid for just because the tab was closed.
             busy = bool(st.clients or world.clients or st.training_jobs()
+                        or cloud.has_unreleased()
                         or app.state.last_request > polled)
             polled = now
             if watch.update(busy, now):
@@ -3936,6 +3953,7 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
     async def lifespan(_app):
         task = asyncio.create_task(lab_loop())
         world.start()   # the /sim world loop, beside the roster loop
+        cloud.start_reconciler()  # re-adopts and releases Colab sessions; billing outlives this process
         # Nothing else ever retrieves this task's exception, so before this
         # callback a crash in lab_loop killed every duck SILENTLY: HTTP and
         # the WebSocket handshake kept working, the viewer kept its green
@@ -3959,6 +3977,7 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
             task.cancel()
             if idle_task is not None:
                 idle_task.cancel()
+            colab_auth.cancel()
             try:
                 world.stop()
                 for j in st.jobs:
@@ -4191,12 +4210,54 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
                             filename=f"microduck-{job_id}.onnx")
 
     @app.get("/cloud/colab/account")
-    def colab_account() -> dict:
-        return colab_jobs.account_status()
+    def colab_account(refresh: bool = False) -> dict:
+        account = colab_jobs.cached_account_status(force=refresh)
+        cloud.note_account(account)
+        return account
+
+    @app.post("/cloud/colab/auth/start")
+    def colab_auth_start(request: Request) -> dict:
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(403, "Origin not allowed")
+        try:
+            return colab_auth.start()
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.post("/cloud/colab/auth/finish")
+    def colab_auth_finish(req: ColabAuthCodeReq, request: Request) -> dict:
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(403, "Origin not allowed")
+        try:
+            account = colab_auth.finish(req.code)
+            cloud.note_account(account)
+            return account
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.post("/cloud/colab/auth/cancel")
+    def colab_auth_cancel(request: Request) -> dict:
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(403, "Origin not allowed")
+        colab_auth.cancel()
+        return {"ok": True}
 
     @app.get("/cloud/colab/jobs")
     def colab_list_jobs() -> dict:
-        return {"jobs": cloud.list()}
+        return {"jobs": cloud.list(), "server": cloud.server}
+
+    @app.post("/cloud/colab/orphans/release")
+    def colab_release_orphan(req: ColabOrphanReq, request: Request) -> dict:
+        if not origin_allowed(request.headers.get("origin")):
+            raise HTTPException(403, "Origin not allowed")
+        try:
+            return {"server": cloud.release_orphan(req.endpoint)}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
 
     @app.post("/cloud/colab/jobs")
     def colab_start_job(req: ColabStartReq, request: Request) -> dict:
@@ -4204,18 +4265,21 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
             raise HTTPException(403, "Origin not allowed")
         try:
             with training_slot():
-                return cloud.start(req.task, req.gpu, req.iterations, req.envs)
+                return cloud.start(req.task, req.gpu, req.iterations, req.envs,
+                                   req.maxMinutes, req.maxCcu, req.confirmPaid)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        except colab_jobs.PaidConfirmationRequired as exc:
+            raise HTTPException(409, str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
 
     @app.post("/cloud/colab/jobs/{job_id}/stop")
-    def colab_stop_job(job_id: str, request: Request) -> dict:
+    def colab_stop_job(job_id: str, request: Request, rescue: bool = False) -> dict:
         if not origin_allowed(request.headers.get("origin")):
             raise HTTPException(403, "Origin not allowed")
         try:
-            return cloud.stop(job_id)
+            return cloud.stop(job_id, rescue=rescue)
         except KeyError as exc:
             raise HTTPException(404, "Unknown Colab job") from exc
 
@@ -4234,6 +4298,17 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
             raise HTTPException(404, "ONNX export is not ready")
         return FileResponse(policy, media_type="application/octet-stream",
                             filename=f"microduck-{job_id}.onnx")
+
+    @app.get("/cloud/colab/jobs/{job_id}/artifacts/{name}")
+    def colab_download_artifact(job_id: str, name: str) -> FileResponse:
+        # A whitelist, because `name` becomes part of a path on this machine.
+        if not re.fullmatch(r"[0-9a-f]{12}", job_id) or name not in colab_jobs.SERVED_ARTIFACTS:
+            raise HTTPException(404, "Unknown artifact")
+        path = cloud.runs / job_id / name
+        if not path.is_file():
+            raise HTTPException(404, "Artifact is not available")
+        return FileResponse(path, media_type="application/octet-stream",
+                            filename=f"microduck-{job_id}-{name}")
 
     @app.post("/settings/hf")
     def hf_settings_save(req: HfTokenReq) -> dict:

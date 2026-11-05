@@ -2357,6 +2357,56 @@ def test_cloud_start_reserves_slot_before_provider_returns(fake_popen, monkeypat
         V.ColabStartReq(task="Mjlab-VelStand-Flat-MicroDuck", gpu="T4"), request)["id"] == "next"
 
 
+def test_colab_routes_pass_limits_and_require_paid_confirmation(fake_popen, monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    from microduck_local import colab_jobs, hf_jobs
+
+    colab = colab_jobs.ColabJobs(tmp_path / "colab")
+    hf = hf_jobs.HfJobs(tmp_path / "hf")
+    monkeypatch.setattr(hf_jobs, "HfJobs", lambda: hf)
+    monkeypatch.setattr(colab_jobs, "ColabJobs", lambda: colab)
+    app = V.make_app([])
+    request = types.SimpleNamespace(headers={})
+    monkeypatch.setattr(colab_jobs, "account_status", lambda: {"connected": True, "balance": 50.0})
+    with pytest.raises(HTTPException) as error:
+        _endpoint(app, "/cloud/colab/jobs", "POST")(V.ColabStartReq(), request)
+    assert error.value.status_code == 409 and "确认" in error.value.detail
+
+    seen = []
+    monkeypatch.setattr(colab, "start", lambda *args: (seen.append(args), {"id": "next"})[1])
+    _endpoint(app, "/cloud/colab/jobs", "POST")(V.ColabStartReq(maxMinutes=30, maxCcu=5.0, confirmPaid=True), request)
+    assert seen[0][4:] == (30, 5.0, True)
+    assert V.ColabStartReq().envs == 4096
+
+    stops = []
+    monkeypatch.setattr(colab, "stop", lambda job_id, rescue=False: (stops.append((job_id, rescue)), {"id": job_id})[1])
+    _endpoint(app, "/cloud/colab/jobs/{job_id}/stop", "POST")("abc", request, rescue=True)
+    assert stops == [("abc", True)]
+
+
+def test_colab_artifact_route_serves_only_whitelisted_names(fake_popen, monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    from microduck_local import colab_jobs, hf_jobs
+
+    colab = colab_jobs.ColabJobs(tmp_path / "colab")
+    hf = hf_jobs.HfJobs(tmp_path / "hf")
+    monkeypatch.setattr(hf_jobs, "HfJobs", lambda: hf)
+    monkeypatch.setattr(colab_jobs, "ColabJobs", lambda: colab)
+    app = V.make_app([])
+    route = _endpoint(app, "/cloud/colab/jobs/{job_id}/artifacts/{name}", "GET")
+    directory = tmp_path / "colab" / "abcdefabcdef"
+    directory.mkdir(parents=True)
+    (directory / "checkpoint.pt").write_bytes(b"x")
+    (directory / "job.json").write_text("{}")
+    assert str(route("abcdefabcdef", "checkpoint.pt").path) == str(directory / "checkpoint.pt")
+    for job_id, name in (("abcdefabcdef", "job.json"), ("abcdefabcdef", "../job.json"), ("../..", "checkpoint.pt")):
+        with pytest.raises(HTTPException) as error:
+            route(job_id, name)
+        assert error.value.status_code == 404
+
+
 def test_shutdown_attempts_hf_even_when_colab_release_fails(fake_popen, monkeypatch, tmp_path):
     from microduck_local import colab_jobs, hf_jobs
 

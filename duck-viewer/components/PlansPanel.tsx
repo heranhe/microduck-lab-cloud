@@ -8,7 +8,7 @@ import s from "./PlansPanel.module.css";
 
 type Library = {plans:Plan[]; path:string; clipPath:string; errors:{path:string;message:string}[]};
 type Ai = {configured:boolean; base_url:string; model:string};
-const cloudDefault = {task:"Mjlab-Velocity-Flat-MicroDuck",iterations:1000,envs:64,gpu:"T4",flavor:"l4x1"};
+const cloudDefault = {task:"Mjlab-Velocity-Flat-MicroDuck",iterations:1000,envs:4096,gpu:"T4",flavor:"l4x1"};
 
 export default function PlansPanel(){
   const [catalog,setCatalog]=useState<Catalog>({templates:[],behaviors:[]});
@@ -120,7 +120,7 @@ export default function PlansPanel(){
           {!!draft.revisions?.length&&<label>查看历史版本<select value={draft.revision} onChange={e=>action(async()=>switchDraft(await planRequest<Plan>(`/plans/${draft.id}/versions/${e.target.value}`)))}>{draft.revisions.map(v=><option key={v} value={v}>v{v}</option>)}</select></label>}
         </section>
         <section className={s.section}><h3><span className={s.number}>04</span>选择执行位置</h3><div className={s.mode}>{[["local","本机 CPU",!!draft.local],["colab","Google Colab",!!draft.cloud],["hf","Hugging Face",!!draft.cloud]].map(([id,label,enabled])=><button key={String(id)} disabled={!enabled||busy} aria-pressed={compute===id} onClick={()=>setCompute(String(id))}>{String(label)}{!enabled?" · 未适配":""}</button>)}</div><p className={s.muted}>{compute==="local"?`使用本地配方 ${draft.local?.behavior||"（未配置）"}。训练将在实验室显示。`:`使用官方任务 ${draft.cloud?.task||"（未配置）"}。云端费用与资源由服务商决定，请先连接账号。`}</p></section>
-        <div className={s.footer}><p>{dirty||!draft.id?"保存方案后才能开始训练。":`将执行 v${draft.revision} 的${compute==="local"?"本地":"云端"}配置。`}</p><button className={s.primary} disabled={busy||dirty||!draft.id||!online||(compute==="local"?!draft.local:!draft.cloud)} onClick={()=>action(async()=>{const check=await planRequest<{ready:boolean;problems:string[]}>(`/plans/${draft.id}/check`,"POST",{revision:draft.revision,compute});if(!check.ready)throw new Error(check.problems.join("；"));const r=await planRequest<{revision:number;job:Record<string,string>}>(`/plans/${draft.id}/launch`,"POST",{revision:draft.revision,compute});setJob({compute,revision:r.revision,id:r.job.runName||r.job.run||r.job.id||draft.id!});setNotice("训练已提交，使用已保存的方案版本。");})}>{busy?"处理中…":"▶ 开始训练"}</button></div>
+        <div className={s.footer}><p>{dirty||!draft.id?"保存方案后才能开始训练。":`将执行 v${draft.revision} 的${compute==="local"?"本地":"云端"}配置。`}</p><button className={s.primary} disabled={busy||dirty||!draft.id||!online||(compute==="local"?!draft.local:!draft.cloud)} onClick={()=>action(async()=>{const check=await planRequest<{ready:boolean;problems:string[]}>(`/plans/${draft.id}/check`,"POST",{revision:draft.revision,compute});if(!check.ready)throw new Error(check.problems.join("；"));let confirmPaid=false;if(compute==="colab"){const account=await planRequest<{connected:boolean;balance?:number|null}>("/cloud/colab/account");if(account.connected&&!(typeof account.balance==="number"&&account.balance<=0)){if(!window.confirm(`本次训练可能消耗付费计算单元（余额 ${account.balance??"未知"}）。默认 3 小时后自动停止并释放。确定开始吗？`))return;confirmPaid=true;}}const r=await planRequest<{revision:number;job:Record<string,string>}>(`/plans/${draft.id}/launch`,"POST",{revision:draft.revision,compute,confirmPaid});setJob({compute,revision:r.revision,id:r.job.runName||r.job.run||r.job.id||draft.id!});setNotice("训练已提交，使用已保存的方案版本。");})}>{busy?"处理中…":"▶ 开始训练"}</button></div>
       </>}</section>
     </div>
   </main>;

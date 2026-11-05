@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { CloudGuard } from "@/components/CloudGuard";
 
 export const metadata: Metadata = {
   title: "Microduck Lab",
@@ -10,7 +11,10 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, background: "#101216" }}>{children}</body>
+      <body style={{ margin: 0, background: "#101216" }}>
+        {children}
+        <CloudGuard />
+      </body>
     </html>
   );
 }

@@ -41,6 +41,7 @@ import { planRequest, plansHref, type Plan } from "@/lib/plans";
 import { loadClip } from "@/lib/anim";
 import { localizeBehavior, rewardMetricLabel } from "@/lib/teachLocalization";
 import {
+  CLOUD_ACTIVE_STATES,
   cloudTaskFor,
   type CloudAccount,
   type ComputeSource,
@@ -100,7 +101,7 @@ function greetingFor(r: { noun?: string; title?: string; kind?: string }): strin
 }
 const MSG_CAP = 50;
 const COLAB_GPUS = ["T4", "L4", "A100", "H100"];
-const ACTIVE_CLOUD_STATES = new Set(["allocating", "starting", "running", "finalizing", "detached", "stopping"]);
+const ACTIVE_CLOUD_STATES = CLOUD_ACTIVE_STATES;
 
 async function cloudRequest(path: string, init?: RequestInit) {
   const response = await fetch(`${LAB_HTTP}${path}`, { cache: "no-store", ...init });
@@ -1214,7 +1215,9 @@ export function TeachPanel({
   const [colabGpu, setColabGpu] = useState("T4");
   const [hfFlavor, setHfFlavor] = useState("l4x1");
   const [cloudIterations, setCloudIterations] = useState(1000);
-  const [cloudEnvs, setCloudEnvs] = useState(64);
+  const [cloudEnvs, setCloudEnvs] = useState(4096);
+  const [cloudMaxMinutes, setCloudMaxMinutes] = useState(180);
+  const [cloudMaxCcu, setCloudMaxCcu] = useState("");
   const [cloudBusy, setCloudBusy] = useState(false);
   const launchPending = useRef(false);
   const [cloudError, setCloudError] = useState("");
@@ -1524,12 +1527,21 @@ export function TeachPanel({
       return;
     }
 
+    // Anything on the account can be drawn on, T4 included; ask before spending it.
+    const balance = colabAccount.balance;
+    const mayCharge = compute === "colab" && !(typeof balance === "number" && balance <= 0);
+    if (mayCharge && !window.confirm(tr(
+      `This may use your paid compute units (balance: ${balance ?? "unknown"}). It stops automatically after ${cloudMaxMinutes} minutes. Start?`,
+      `本次训练可能消耗付费计算单元（余额 ${balance ?? "未知"}）。到达 ${cloudMaxMinutes} 分钟上限后会自动停止。确定开始吗？`,
+    ))) return;
+
     launchPending.current = true;
     setCloudBusy(true);
     setCloudError("");
     try {
       const body = compute === "colab"
-        ? { task: cloudTask, gpu: colabGpu, iterations: cloudIterations, envs: cloudEnvs }
+        ? { task: cloudTask, gpu: colabGpu, iterations: cloudIterations, envs: cloudEnvs,
+            maxMinutes: cloudMaxMinutes, maxCcu: Number(cloudMaxCcu) > 0 ? Number(cloudMaxCcu) : null, confirmPaid: mayCharge }
         : { task: cloudTask, flavor: hfFlavor, iterations: cloudIterations, envs: cloudEnvs };
       await cloudRequest(`/cloud/${compute}/jobs`, {
         method: "POST",
@@ -2202,7 +2214,10 @@ export function TeachPanel({
                   {compute === "colab" ? (
                     <select value={colabGpu} onChange={(e) => setColabGpu(e.target.value)} style={computeInputStyle}>
                       {COLAB_GPUS.map((gpu) => <option key={gpu} value={gpu} disabled={gpu !== "T4" && !(typeof colabAccount.balance === "number" && colabAccount.balance > 0)}>
-                        {gpu === "T4" ? tr("T4 · free tier", "T4 · 可尝试免费层") : gpu}
+                        {gpu !== "T4" ? gpu
+                          : typeof colabAccount.balance === "number" && colabAccount.balance > 0
+                            ? tr("T4 · may use compute units", "T4 · 可能消耗计算单元")
+                            : tr("T4 · free tier", "T4 · 可尝试免费层")}
                       </option>)}
                     </select>
                   ) : (
@@ -2220,6 +2235,26 @@ export function TeachPanel({
                   <input type="number" min={1} max={4096} value={cloudEnvs} onChange={(e) => setCloudEnvs(Number(e.target.value))} style={computeInputStyle}/>
                 </label>
               </div>
+              {compute === "colab" && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginTop: 5 }}>
+                  <label style={{ color: "#7f8997", fontSize: 9 }}>
+                    {tr("time limit (min)", "时长上限（分钟）")}
+                    <input type="number" min={5} max={720} value={cloudMaxMinutes} onChange={(e) => setCloudMaxMinutes(Number(e.target.value))} style={computeInputStyle}/>
+                  </label>
+                  {typeof colabAccount.balance === "number" && colabAccount.balance > 0 && (
+                    <label style={{ color: "#7f8997", fontSize: 9 }}>
+                      {tr("CCU limit (optional)", "计算单元上限（可选）")}
+                      <input type="number" min={0} step="any" value={cloudMaxCcu} placeholder={tr("none", "不限")} onChange={(e) => setCloudMaxCcu(e.target.value)} style={computeInputStyle}/>
+                    </label>
+                  )}
+                </div>
+              )}
+              {compute === "colab" && (
+                <div style={{ color: "#747e8d", fontSize: 10, marginTop: 6 }}>
+                  {tr("At the limit, progress is saved and the GPU is released automatically.", "到达上限后会自动保存进度并释放算力。")}
+                  {cloudEnvs < 1024 ? tr(" Few envs leave a paid GPU mostly idle; the official setting is 4096.", " 环境数过少时 GPU 利用率很低，官方配置为 4096。") : ""}
+                </div>
+              )}
               {compute === "colab" && colabAccount.connected && !(typeof colabAccount.balance === "number" && colabAccount.balance > 0) && (
                 <div style={{ color: "#9fb4d8", fontSize: 10, marginTop: 6 }}>
                   {tr("0 paid CCU does not block a free T4 request. Google decides availability and may end the session at any time.", "0 付费 CCU 不影响尝试免费 T4；能否分配及会话时长由 Google 动态决定。")}

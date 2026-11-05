@@ -153,6 +153,7 @@ class ImportReq(BaseModel):
 class LaunchReq(BaseModel):
     revision: int
     compute: str
+    confirmPaid: bool = False
 
 
 class AiReq(BaseModel):
@@ -235,7 +236,7 @@ def mount_plans(app, *, behaviors, clean_clip, atomic_write, launch_local, launc
             out.append({"version": 1, "id": "template-" + task, "title": title,
                         "robot": "microduck", "description": title + "，使用官方 mjlab GPU 训练框架",
                         "success": "评估速度跟踪、稳定性与实际动作表现", "source": "template", "local": None,
-                        "cloud": {"task": task, "iterations": 1000, "envs": 64, "gpu": "T4", "flavor": "l4x1"}})
+                        "cloud": {"task": task, "iterations": 1000, "envs": 4096, "gpu": "T4", "flavor": "l4x1"}})
         return {"templates": out, "behaviors": [{**behaviors.behavior_card(b), "robot": b.robot} for b in behaviors.BEHAVIORS.values()]}
 
     @app.post("/plans")
@@ -309,7 +310,8 @@ def mount_plans(app, *, behaviors, clean_clip, atomic_write, launch_local, launc
             c = p["cloud"]
             if req.compute == "colab":
                 result = await asyncio.to_thread(launch_colab,
-                    colab_req(task=c["task"], gpu=c["gpu"], iterations=c["iterations"], envs=c["envs"]), request)
+                    colab_req(task=c["task"], gpu=c["gpu"], iterations=c["iterations"], envs=c["envs"],
+                              confirmPaid=req.confirmPaid), request)
             else:
                 result = await asyncio.to_thread(launch_hf,
                     hf_req(task=c["task"], flavor=c["flavor"], iterations=c["iterations"], envs=c["envs"]), request)

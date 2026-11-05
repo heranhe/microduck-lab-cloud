@@ -4,7 +4,20 @@ import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from
 import Link from "next/link";
 import { plansHref } from "@/lib/plans";
 import { displayedTraining, LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings, type LabClient } from "@/lib/lab";
-import type { CloudAccount as Account, CloudHardware as Hardware, HfCloudAccount as HfAccount, CloudProvider as Provider } from "@/lib/cloudCompute";
+import {
+  canSaveAndDisconnect,
+  cloudBudgetLeft,
+  cloudHeartbeatStale,
+  cloudPhaseText,
+  cloudProgressPercent,
+  needsRelease,
+  type CloudAccount as Account,
+  type CloudHardware as Hardware,
+  type CloudJob as Job,
+  type ColabServerView,
+  type HfCloudAccount as HfAccount,
+  type CloudProvider as Provider,
+} from "@/lib/cloudCompute";
 import { useI18n, type Locale } from "@/lib/i18n";
 import { localizeBehavior } from "@/lib/teachLocalization";
 import { requestCloudOpen, requestPolicyToggle, requestTeachOpen, usePolicyOpen } from "@/lib/ui";
@@ -15,14 +28,6 @@ import { usePanelDrag } from "./usePanelDrag";
 
 import { useSelectedDuck } from "@/lib/select";
 
-type Job = {
-  id: string; platform: Provider; task: string; gpu: string; device?: string; vram?: string;
-  flavor?: string; state: string; remote_state?: string; started?: number; allocated_at?: number | null;
-  released?: boolean; released_at?: number; message?: string; url?: string;
-};
-
-const ACTIVE = new Set(["allocating", "starting", "running", "finalizing", "detached", "stopping"]);
-function needsRelease(job: Job) { return job.released !== true && (ACTIVE.has(job.state) || job.released === false); }
 function clock(start: number | null | undefined, now: number) {
   if (!start) return "00:00:00";
   const s = Math.max(0, Math.floor(now / 1000 - start));
@@ -32,10 +37,11 @@ function duration(seconds: number | null | undefined) {
   const s = Math.max(0, Math.floor(seconds ?? 0));
   return `${String(Math.floor(s / 3600)).padStart(2,"0")}:${String(Math.floor(s % 3600 / 60)).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
 }
-function stateText(state: string, locale: Locale) {
-  const en: Record<string,string> = { allocating:"Allocating GPU", starting:"Starting", running:"Training", finalizing:"Downloading", stopping:"Disconnecting", stopped:"Stopped", done:"Completed", failed:"Failed", detached:"Needs attention" };
-  const zh: Record<string,string> = { allocating:"正在分配 GPU", starting:"正在启动", running:"训练中", finalizing:"下载结果中", stopping:"正在断开", stopped:"已停止", done:"已完成", failed:"失败", detached:"需要检查" };
-  return (locale === "en" ? en : zh)[state] ?? state;
+function accountReasonText(account: Account, locale: Locale) {
+  if (account.reason === "auth_expired") return locale === "en" ? "Google sign-in has expired. Connect again." : "Google 授权已失效，请重新连接。";
+  if (account.reason === "network") return locale === "en" ? "Can't reach Google Colab. Check the network or proxy, then refresh." : "无法连接 Google Colab，请检查网络或代理后点击刷新。";
+  if (account.reason === "not_installed") return locale === "en" ? "Colab CLI is not installed. Run `uv sync` in microduck_local." : "未安装 Colab CLI，请在 microduck_local 目录运行 `uv sync`。";
+  return account.message;
 }
 function errorText(value: unknown, locale: Locale) {
   const raw = value instanceof Error ? value.message : String(value);
@@ -73,6 +79,9 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const [hf, setHf] = useState<HfAccount>({ connected:false, hardware:[] });
   const [hfSettings, setHfSettings] = useState<HfSettings | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [server, setServer] = useState<ColabServerView | null>(null);
+  const [authUrl, setAuthUrl] = useState("");
+  const [authCode, setAuthCode] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState("");
@@ -80,16 +89,19 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const [refreshError, setRefreshError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const refresh = useCallback(async () => {
+  const updateJobs = useCallback((platform: Provider) => (data: { jobs?: Job[]; server?: ColabServerView }) => {
+    if (data.server) setServer(data.server);
+    setJobs((previous) => [
+      ...previous.filter((job) => job.platform !== platform),
+      ...(data.jobs ?? []).map((job) => ({ ...job, platform })),
+    ]);
+  }, []);
+
+  const refresh = useCallback(async (force = false) => {
     // Publish each provider immediately: account lookup must never delay
     // showing another provider's billable jobs and emergency stop control.
-    const updateJobs = (platform: Provider) => (data: { jobs?: Job[] }) =>
-      setJobs((previous) => [
-        ...previous.filter((job) => job.platform !== platform),
-        ...(data.jobs ?? []).map((job) => ({ ...job, platform })),
-      ]);
     const results = await Promise.allSettled([
-      jsonRequest("/cloud/colab/account").then(setColab),
+      jsonRequest(`/cloud/colab/account${force ? "?refresh=true" : ""}`).then(setColab),
       jsonRequest("/cloud/colab/jobs").then(updateJobs("colab")),
       jsonRequest("/cloud/hf/account").then(setHf),
       jsonRequest("/cloud/hf/jobs").then(updateJobs("hf")),
@@ -97,7 +109,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
     ]);
     const failed = results.find((result) => result.status === "rejected");
     setRefreshError(failed?.status === "rejected" ? errorText(failed.reason, locale) : "");
-  }, [locale]);
+  }, [locale, updateJobs]);
 
   useEffect(() => {
     const first = window.setTimeout(() => void refresh(), 0);
@@ -127,6 +139,16 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   }, [open]);
 
   const cloudActive = useMemo(() => jobs.filter(needsRelease), [jobs]);
+  const hasCloudActive = cloudActive.length > 0;
+  // Reading job state is a local dictionary lookup, so a paid run can tick faster
+  // than the account check without spawning anything.
+  useEffect(() => {
+    if (!hasCloudActive) return;
+    const poll = window.setInterval(() => {
+      void jsonRequest("/cloud/colab/jobs").then(updateJobs("colab")).catch(() => {});
+    }, 5000);
+    return () => clearInterval(poll);
+  }, [hasCloudActive, updateJobs]);
   const primary = cloudActive.find((j) => j.allocated_at) ?? cloudActive[0];
   const selectedDuck = useSelectedDuck();
   const local = displayedTraining(clientRef.current?.frame, selectedDuck);
@@ -151,7 +173,73 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
       ? tr(`This computer · CPU · ${local.behavior.title}`, `本机 · CPU · ${localizeBehavior(local.behavior, locale).title}`)
       : tr("Training compute idle", "训练算力未开启");
 
+  const canSave = !!primary && canSaveAndDisconnect(primary);
+  const savingNow = primary?.state === "saving";
+  const primaryPercent = primary ? cloudProgressPercent(primary) : null;
+  const primaryBudget = primary ? cloudBudgetLeft(primary, now) : null;
+  const primaryStale = !!primary && cloudHeartbeatStale(primary, now);
+
+  const saveAndDisconnect = async (job: Job) => {
+    setBusy("disconnect"); setError(""); setNotice("");
+    try {
+      await jsonRequest(`/cloud/colab/jobs/${job.id}/stop?rescue=true`, { method: "POST" });
+      setNotice(tr("Saving the latest progress, then releasing the GPU automatically.", "正在保存最新进度，完成后自动释放算力（最多约 7 分钟）。"));
+      window.dispatchEvent(new CustomEvent("microduck:cloud-refresh"));
+    } catch (e) { setError(errorText(e, locale)); requestCloudOpen(); }
+    finally { setBusy(""); }
+  };
+
+  const connectColab = async () => {
+    setBusy("auth"); setError(""); setNotice("");
+    try {
+      const started = await jsonRequest("/cloud/colab/auth/start", { method: "POST" });
+      if (started.url) {
+        setAuthUrl(started.url);
+        window.open(started.url, "_blank", "noopener,noreferrer");
+      } else {
+        setNotice(tr("Google account is already connected.", "Google 账号已连接。"));
+        await refresh(true);
+      }
+    } catch (e) { setError(errorText(e, locale)); }
+    finally { setBusy(""); }
+  };
+
+  const finishConnect = async () => {
+    setBusy("auth"); setError("");
+    try {
+      setColab(await jsonRequest("/cloud/colab/auth/finish", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: authCode }) }));
+      setAuthUrl(""); setAuthCode("");
+      setNotice(tr("Google account connected.", "Google 账号已连接。"));
+    } catch (e) { setError(errorText(e, locale)); }
+    finally { setBusy(""); }
+  };
+
+  const cancelConnect = async () => {
+    setAuthUrl(""); setAuthCode("");
+    await jsonRequest("/cloud/colab/auth/cancel", { method: "POST" }).catch(() => {});
+  };
+
+  const releaseOrphan = async (endpoint: string) => {
+    if (!window.confirm(tr(
+      "This runtime is not owned by the lab. It may be a notebook you opened on the Colab website, and releasing it ends that work. Release it?",
+      "这个会话不属于本实验室，也可能是你在 Colab 网页打开的 Notebook，释放后其中的工作会结束。确定释放吗？",
+    ))) return;
+    setBusy(endpoint); setError("");
+    try {
+      const result = await jsonRequest("/cloud/colab/orphans/release", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint }) });
+      setServer(result.server);
+      await refresh(true);
+    } catch (e) { setError(errorText(e, locale)); }
+    finally { setBusy(""); }
+  };
+
   const stopActiveCompute = async () => {
+    if (canSave || savingNow) {
+      if (!window.confirm(tr(
+        "Disconnect now? Training progress on the runtime that has not been downloaded will be lost.",
+        "立即断开？云端尚未下载的训练进度都会丢失。",
+      ))) return;
+    }
     setBusy("disconnect"); setError(""); setNotice("");
     try {
       const requests: Promise<unknown>[] = [];
@@ -178,6 +266,10 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   };
 
   const stopOne = async (job: Job) => {
+    if ((canSaveAndDisconnect(job) || job.state === "saving") && !window.confirm(tr(
+      "Disconnect now? Training progress on the runtime that has not been downloaded will be lost.",
+      "立即断开？云端尚未下载的训练进度都会丢失。",
+    ))) return;
     setBusy(job.id); setError("");
     try {
       await jsonRequest(`/cloud/${job.platform === "hf" ? "hf" : "colab"}/jobs/${job.id}/stop`, { method:"POST" });
@@ -217,8 +309,11 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
         <button className={styles.monitorLink} onClick={requestTeachOpen} title={local?.runName}>{device}</button>
         {hasActiveCompute && <span className={styles.timer}>{elapsed}</span>}
         {!hasActiveCompute && <button className={styles.monitorLink} onClick={requestTeachOpen}>{tr("New training", "新建训练")}</button>}
+        {canSave && primary && <button className={styles.disconnect} disabled={busy === "disconnect"} onClick={() => void saveAndDisconnect(primary)} title={tr("Keep the latest checkpoint, then release the GPU", "保留最新检查点，然后释放算力")}>
+          {tr("⏸ Save and disconnect", "⏸ 保存并断开")}
+        </button>}
         {hasActiveCompute && <button className={styles.disconnect} disabled={saving || busy === "disconnect"} onClick={stopActiveCompute}>
-          {saving ? tr("Saving…", "保存中…") : busy === "disconnect" ? tr("Stopping…", "停止中…") : primary ? tr("■ Disconnect", "■ 断开云算力") : tr("⏸ Save and stop", "⏸ 保存并停止")}
+          {saving ? tr("Saving…", "保存中…") : busy === "disconnect" ? tr("Stopping…", "停止中…") : (canSave || savingNow) ? tr("■ Disconnect now", "■ 立即断开") : primary ? tr("■ Disconnect", "■ 断开云算力") : tr("⏸ Save and stop", "⏸ 保存并停止")}
         </button>}
         {localActive && <details className={styles.more}>
           <summary aria-label={tr("Training actions", "训练操作")}>⋯</summary>
@@ -248,7 +343,26 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           <span style={{ width: `${percent}%` }}/>
         </div>
       </>}
-      {primary && <div className={styles.snapshotLine}>{tr("Cloud progress is not available yet ·", "云端进度暂不可用 ·")} {stateText(primary.state, locale)}</div>}
+      {primary && <>
+        <div className={styles.progressLine}>
+          <strong>{cloudPhaseText(primary, locale)}</strong>
+          {primaryPercent != null && <span>{primary.progress?.iteration}/{primary.progress?.iterations} {tr("iterations", "迭代")} · {primaryPercent.toFixed(1)}%</span>}
+          {primary.progress?.eta && <span>{tr("Remaining ≈", "剩余约")}{primary.progress.eta}</span>}
+        </div>
+        {primaryPercent != null && <div className={styles.progressTrack} role="progressbar" aria-label={tr("Cloud training progress", "云端训练进度")} aria-valuenow={primaryPercent} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${primaryPercent}%` }}/>
+        </div>}
+        <div className={styles.snapshotLine}>
+          {primary.progress?.reward != null && <span>{tr("Score", "得分")} {primary.progress.reward}</span>}
+          {primary.progress?.gpu_util != null && <span>GPU {primary.progress.gpu_util}%</span>}
+          {primaryBudget != null && <span>{tr("Time limit in", "距时长上限")} {duration(primaryBudget)}</span>}
+          {primary.rate != null && <span>{primary.rate} CCU/h</span>}
+          {primary.ccu_spent != null && <span>{tr("Spent", "已用")} {primary.ccu_spent} CCU</span>}
+        </div>
+        <div className={styles.snapshotLine}>{tr("Keep this Mac open: it finishes and releases the job.", "请勿合上电脑：结果下载和算力释放都由本机完成。")}</div>
+        {primaryStale && <div className={styles.error} role="alert">{tr("No answer from the runtime for a while. The GPU may still be billing.", "云端已有一段时间没有响应，算力可能仍在计费。")}</div>}
+        {primary.message && <div className={styles.error} role="alert">{errorText(primary.message, locale)}</div>}
+      </>}
       {error && <div className={styles.error} role="alert">{error}</div>}
       </div>
       {localActive && <div className={styles.scoreChart}>
@@ -280,9 +394,12 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
             </div>}
             {provider === "colab" && colab.connected && <div className={styles.muted}>{tr("Paid balance", "付费余额")} {colab.balance ?? "—"} CCU{colab.rate != null ? ` · ${colab.rate} CCU/h` : ""}</div>}
             {provider === "hf" && hfSettings?.configured && <div className={styles.muted}>{hfSettings.username} · {hfSettings.masked}</div>}
-            {account.message && <div className={styles.muted}>{account.message}</div>}
+            {provider === "colab" && colab.connected && colab.active_assignments != null && <div className={colab.active_assignments > 0 ? styles.good : styles.muted}>
+              {tr("Active runtimes on Google", "Google 侧活动会话")}：{colab.active_assignments}
+            </div>}
+            {provider === "colab" ? (!colab.connected && colab.reason ? <div className={styles.muted}>{accountReasonText(colab, locale)}</div> : null) : (account.message && <div className={styles.muted}>{account.message}</div>)}
           </div>
-          {provider === "colab" && <button className={styles.refreshButton} disabled={busy === "refresh"} onClick={async () => { setBusy("refresh"); await refresh(); setBusy(""); }}>{busy === "refresh" ? tr("Checking…", "检查中…") : tr("Refresh", "刷新")}</button>}
+          {provider === "colab" && <button className={styles.refreshButton} disabled={busy === "refresh"} onClick={async () => { setBusy("refresh"); await refresh(true); setBusy(""); }}>{busy === "refresh" ? tr("Checking…", "检查中…") : tr("Refresh", "刷新")}</button>}
           {provider === "hf" && hfSettings?.configured && <button className={styles.dangerLink} disabled={busy === "token"} onClick={disconnectHf}>{tr("remove token", "移除 Token")}</button>}
         </div>
 
@@ -296,7 +413,30 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           <div className={styles.tokenRow}><input className={styles.input} type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="hf_…"/><button className={styles.smallButton} disabled={!token || busy === "token"} onClick={connectHf}>{busy === "token" ? tr("Checking…", "验证中…") : tr("Connect", "连接")}</button></div>
           <div className={styles.help}>{tr("Use a fine-grained token with Jobs and model write access.", "请使用具有 Jobs 和模型写入权限的细粒度 Token。")} <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">{tr("Create token", "创建 Token")}</a></div>
         </>}
-        {provider === "colab" && !colab.connected && <div className={styles.help}>{tr("Run `uv run colab usage` once in Terminal to authorize your Google account.", "请先在终端运行 `uv run colab usage`，通过 Google 官方流程完成授权。")}</div>}
+        {provider === "colab" && !colab.connected && colab.reason !== "network" && colab.reason !== "not_installed" && (authUrl ? <>
+          <div className={styles.help}>{tr("Approve access in the Google page, then paste the code it shows. The code only goes to the local Colab CLI.", "请在 Google 页面完成授权，再把页面显示的授权码粘贴到这里。授权码只会交给本机的 Colab CLI。")} <a href={authUrl} target="_blank" rel="noreferrer">{tr("Open the Google page", "打开 Google 授权页面")}</a></div>
+          <div className={styles.tokenRow}>
+            <input className={styles.input} autoComplete="off" value={authCode} onChange={(e) => setAuthCode(e.target.value)} placeholder={tr("Authorization code", "授权码")}/>
+            <button className={styles.smallButton} disabled={!authCode.trim() || busy === "auth"} onClick={finishConnect}>{busy === "auth" ? tr("Checking…", "验证中…") : tr("Finish", "完成")}</button>
+            <button className={styles.refreshButton} onClick={cancelConnect}>{tr("Cancel", "取消")}</button>
+          </div>
+        </> : <>
+          <div className={styles.tokenRow}><button className={styles.smallButton} disabled={busy === "auth"} onClick={connectColab}>{busy === "auth" ? tr("Opening…", "正在打开…") : tr("Connect Google account", "连接 Google 账号")}</button></div>
+          <div className={styles.help}>{tr("Uses Google's official sign-in. The lab never sees your password or tokens.", "使用 Google 官方授权，本应用不接触你的密码和令牌。")}</div>
+        </>)}
+        {provider === "colab" && server?.ok === false && cloudActive.some((job) => job.platform === "colab") && <div className={styles.balanceWarning}>
+          <strong>{tr("Can't check Google's session list", "暂时无法向 Google 查询会话")}</strong>
+          <span>{tr("If this continues, end the runtime from Runtime → Manage sessions on the Colab website.", "如果一直如此，请在 Colab 网页的“代码执行程序 → 管理会话”中手动终止。")}</span>
+          <a href="https://colab.research.google.com/" target="_blank" rel="noreferrer">{tr("Open Colab ↗", "打开 Colab ↗")}</a>
+        </div>}
+        {provider === "colab" && (server?.orphans.length ?? 0) > 0 && <div className={styles.balanceWarning}>
+          <strong>{tr("Runtime not owned by any lab job", "发现不属于任何实验室任务的会话")}</strong>
+          <span>{tr("It may still be billing. It could also be a notebook you opened yourself.", "它可能仍在计费，也可能是你自己在网页打开的 Notebook。")}</span>
+          {server?.orphans.map((orphan) => <span key={orphan.endpoint}>
+            {orphan.hardware} · {orphan.endpoint}{" "}
+            <button className={styles.dangerLink} disabled={busy === orphan.endpoint} onClick={() => void releaseOrphan(orphan.endpoint)}>{tr("release", "释放")}</button>
+          </span>)}
+        </div>}
         {provider === "hf" && hf.hardware.length > 0 && <div className={styles.resources}>
           <div className={styles.formTitle}>{tr("Available hardware", "可用算力卡")}</div>
           {hf.hardware.slice(0, 5).map((h: Hardware) => <div className={styles.resource} key={h.id}>
@@ -310,12 +450,14 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
           <div className={styles.formTitle} style={{marginTop:0}}>{tr("Recent jobs", "最近任务")}</div>
           {!providerJobs.length && <div className={styles.muted}>{tr("No cloud jobs yet.", "暂无云端任务。")}</div>}
           {providerJobs.slice(0,6).map((job) => <div className={styles.job} key={`${job.platform}-${job.id}`}>
-            <div><span className={styles.jobState}>{stateText(job.state, locale)}</span> · {job.device ?? job.gpu}{job.vram ? ` · ${job.vram}` : ""}</div>
+            <div><span className={styles.jobState}>{cloudPhaseText(job, locale)}</span> · {job.device ?? job.gpu}{job.vram ? ` · ${job.vram}` : ""}</div>
             <div className={styles.jobMeta}>{clock(job.allocated_at, job.released_at ? job.released_at * 1000 : now)} · {job.id}{job.message ? ` · ${errorText(job.message, locale)}` : ""}</div>
             <div className={styles.jobActions}>
               {job.url && <a className={styles.jobLink} href={job.url} target="_blank" rel="noreferrer">↗</a>}
-              {job.state === "done" && <a className={styles.jobLink} href={`${LAB_HTTP}/cloud/${job.platform === "hf" ? "hf" : "colab"}/jobs/${job.id}/policy.onnx`}>↓ ONNX</a>}
-              {needsRelease(job) && <button className={styles.dangerLink} disabled={busy === job.id} onClick={() => stopOne(job)}>{tr("stop", "断开")}</button>}
+              {(job.state === "done" || job.artifacts?.includes("policy.onnx")) && <a className={styles.jobLink} href={`${LAB_HTTP}/cloud/${job.platform === "hf" ? "hf" : "colab"}/jobs/${job.id}/policy.onnx`}>↓ ONNX</a>}
+              {job.platform === "colab" && job.artifacts?.includes("checkpoint.pt") && <a className={styles.jobLink} href={`${LAB_HTTP}/cloud/colab/jobs/${job.id}/artifacts/checkpoint.pt`} title={tr("Training checkpoint, for resuming; deploy the ONNX", "训练检查点，用于续训；部署请使用 ONNX")}>↓ {tr("checkpoint", "检查点")}</a>}
+              {canSaveAndDisconnect(job) && <button className={styles.dangerLink} disabled={busy === "disconnect"} onClick={() => void saveAndDisconnect(job)}>{tr("save & stop", "保存并断开")}</button>}
+              {needsRelease(job) && <button className={styles.dangerLink} disabled={busy === job.id} onClick={() => stopOne(job)}>{canSaveAndDisconnect(job) || job.state === "saving" ? tr("stop now", "立即断开") : tr("stop", "断开")}</button>}
             </div>
           </div>)}
         </div>
