@@ -680,6 +680,30 @@ export function displayedTraining(
     ?? frame.training ?? null;
 }
 
+/** What the always-visible status bar tracks: the selected job if it is running,
+ *  else the newest running one, and never a finished job someone clicked on.
+ *  `displayedTraining` is right for a panel that shows the run you picked; a bar
+ *  whose job is to show "training is happening" must not be hidden by that pick. */
+export function liveTraining(
+  frame: Frame | null | undefined,
+  duckId?: string | null,
+): TrainingPayload | null {
+  if (!frame) return null;
+  const jobs = frame.trainings ?? (frame.training ? [frame.training] : []);
+  const isLive = (t: TrainingPayload) => t.status === "training" || t.status === "stopping" || !!t.restarting;
+  const selected = duckId ? jobs.find((t) => (t.trainee ?? "trainee") === duckId) : null;
+  if (selected && isLive(selected)) return selected;
+  return jobs.findLast(isLive) ?? null;
+}
+
+/** Every run that is training right now. Several can run at once, so a readout
+ *  that shows one must say the others exist. */
+export function liveTrainings(frame: Frame | null | undefined): TrainingPayload[] {
+  if (!frame) return [];
+  const jobs = frame.trainings ?? (frame.training ? [frame.training] : []);
+  return jobs.filter((t) => t.status === "training" || t.status === "stopping" || !!t.restarting);
+}
+
 /** WebSocket with auto-reconnect; latest frame lands in a mutable ref. */
 export class LabClient {
   frame: Frame | null = null;

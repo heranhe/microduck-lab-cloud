@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from "react";
 import Link from "next/link";
 import { plansHref } from "@/lib/plans";
-import { displayedTraining, LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings, type LabClient } from "@/lib/lab";
+import { liveTraining, liveTrainings, LAB_HTTP, deleteHfToken, fetchHfSettings, saveHfToken, type HfSettings, type LabClient } from "@/lib/lab";
 import {
   canSaveAndDisconnect,
   cloudHeartbeatStale,
@@ -19,7 +19,7 @@ import {
 import { useI18n, type Locale } from "@/lib/i18n";
 import { localizeBehavior } from "@/lib/teachLocalization";
 import { requestCloudOpen, requestCloudTraining, requestPolicyToggle, requestTeachOpen, usePolicyOpen } from "@/lib/ui";
-import { appendCloudScore, cloudProgressView, localProgressView } from "@/lib/trainProgress";
+import { appendCloudScore, cloudProgressView, localJobView, localProgressView } from "@/lib/trainProgress";
 import { TrainProgress } from "./TrainProgress";
 import { TrainingScoreChart } from "./TrainingScoreChart";
 import { useTrainingScoreHistory } from "./useTrainingScoreHistory";
@@ -69,7 +69,8 @@ async function jsonRequest(path: string, init?: RequestInit) {
 }
 
 export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClient | null> }) {
-  const scoreHistory = useTrainingScoreHistory(clientRef);
+  // The bar reports what is running, whichever duck happens to be selected.
+  const scoreHistory = useTrainingScoreHistory(clientRef, liveTraining);
   const panelDrag = usePanelDrag("cloud");
   const { tr, locale } = useI18n();
   const policyOpen = usePolicyOpen();
@@ -158,7 +159,7 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   }, [hasCloudActive, updateJobs]);
   const primary = cloudActive.find((j) => j.allocated_at) ?? cloudActive[0];
   const selectedDuck = useSelectedDuck();
-  const local = displayedTraining(clientRef.current?.frame, selectedDuck);
+  const local = liveTraining(clientRef.current?.frame, selectedDuck);
   const localActive = local?.status === "training" || local?.status === "stopping";
   const saving = local?.status === "stopping";
   const progress = local?.progress;
@@ -186,6 +187,8 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
   const progressView = localActive && progress && local
     ? localProgressView({ status: local.status === "stopping" ? "stopping" : "training", steps, total, etaSeconds: progress.etaSeconds, score: progress.ep_rew }, locale)
     : primary ? cloudProgressView(primary, now, locale) : null;
+  // Several runs can train at once; the bar shows one in full and lists the rest.
+  const otherLive = liveTrainings(clientRef.current?.frame).filter((job) => job.runName !== local?.runName);
   const chartPoints = localActive ? scoreHistory : cloudScore.points;
   const showChart = localActive || (!!primary && cloudScore.points.length > 0);
 
@@ -377,6 +380,15 @@ export function CloudPanel({ clientRef }: { clientRef: MutableRefObject<LabClien
         </details>}
       </div>
       {progressView && <TrainProgress view={progressView}/>}
+      {otherLive.map((job) => {
+        const v = localJobView(job, locale);
+        return <div key={job.runName} className={styles.snapshotLine}>
+          <span>▶ {localizeBehavior(job.behavior, locale).title}</span>
+          {v.percent != null && <span>{v.percent.toFixed(1)}%</span>}
+          {v.score != null && <span>{tr("Score", "得分")} {v.score}</span>}
+          {v.remaining && <span>{tr("Remaining ≈", "剩余约")}{v.remaining}</span>}
+        </div>;
+      })}
       {primary && <>
         <div className={styles.snapshotLine}>{tr("Keep this Mac open: it finishes and releases the job.", "请勿合上电脑：结果下载和算力释放都由本机完成。")}</div>
         {primaryStale && <div className={styles.error} role="alert">{tr("No answer from the runtime for a while. The GPU may still be billing.", "云端已有一段时间没有响应，算力可能仍在计费。")}</div>}

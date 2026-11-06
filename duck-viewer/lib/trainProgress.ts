@@ -82,3 +82,20 @@ export function appendCloudScore(
   if (last && last.x === x) return last.y === y ? base : { jobId: job.id, points: [...base.points.slice(0, -1), { x, y }] };
   return { jobId: job.id, points: [...base.points, { x, y }] };
 }
+
+/** The progress fields every trainer payload carries, whichever job it is. */
+export type LocalJobProgress = {
+  overallSteps?: number | null; steps?: number | null; overallTotal?: number | null; total?: number | null;
+  etaSeconds?: number | null; ep_rew?: number | null;
+};
+
+export function localJobView(job: { status: string; progress: LocalJobProgress }, locale: Locale): ProgressView {
+  const p = job.progress;
+  return localProgressView({
+    status: job.status === "stopping" ? "stopping" : "training",
+    steps: p.overallSteps ?? p.steps ?? 0,
+    total: p.overallTotal ?? p.total ?? 0,
+    etaSeconds: p.etaSeconds,
+    score: p.ep_rew,
+  }, locale);
+}

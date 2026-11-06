@@ -51,6 +51,13 @@ export function usePanelDrag(key: string) {
           ? (hit.left === hit.top ? "nwse-resize" : "nesw-resize")
           : (hit.left || hit.right) ? "ew-resize" : "ns-resize";
       if (!active) return;
+      // The button is no longer down: the release happened somewhere this panel never heard it
+      // (outside the window, on another element, after capture was lost). Stop following the mouse.
+      if (!(e.buttons & 1)) {
+        resize.current = null;
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* capture already gone */ }
+        return;
+      }
       const r = active.rect;
       const minW = Math.min(key === "policy" ? 220 : 300, window.innerWidth - 16);
       const minH = Math.min(180, window.innerHeight - 16);
@@ -69,6 +76,7 @@ export function usePanelDrag(key: string) {
       e.stopPropagation();
     },
     onPointerCancelCapture: () => { resize.current = null; },
+    onLostPointerCaptureCapture: () => { resize.current = null; },
   };
   const resizeStyle: React.CSSProperties = size ? {
     width: size.width, height: size.height, maxWidth: "calc(100vw - 16px)",
@@ -92,6 +100,11 @@ export function usePanelDrag(key: string) {
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLElement>) => {
     const active = drag.current;
     if (!active || active.id !== e.pointerId) return;
+    if (!(e.buttons & 1)) {
+      drag.current = null;
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* capture already gone */ }
+      return;
+    }
     const panel = e.currentTarget.parentElement;
     if (!panel) return;
     const rect = panel.getBoundingClientRect();
@@ -102,6 +115,19 @@ export function usePanelDrag(key: string) {
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLElement>) => {
     if (drag.current?.id === e.pointerId) drag.current = null;
   }, []);
+  // A release outside the window or over another element never reaches the panel, so listen on the
+  // window too. Without this the panel kept moving or shrinking with the mouse after the button was up.
+  useEffect(() => {
+    const end = () => { drag.current = null; resize.current = null; };
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    window.addEventListener("blur", end);
+    return () => {
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      window.removeEventListener("blur", end);
+    };
+  }, []);
   const reset = useCallback(() => setPoint(null), []);
-  return { point, size, panelProps, resizeStyle, dragHandle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, style: { touchAction: "none" } }, reset };
+  return { point, size, panelProps, resizeStyle, dragHandle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onLostPointerCapture: onPointerUp, style: { touchAction: "none" } }, reset };
 }

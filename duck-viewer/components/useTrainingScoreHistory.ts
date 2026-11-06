@@ -1,21 +1,24 @@
 "use client";
 
 import { useEffect, useState, type MutableRefObject } from "react";
-import { displayedTraining, type LabClient } from "@/lib/lab";
+import { displayedTraining, type LabClient, type TrainingPayload, type Frame } from "@/lib/lab";
 
 import { getSelectedDuck } from "@/lib/select";
 
 type Point = { x: number; y: number };
 
 /** Track the full job across curriculum stages, including warm restarts. */
-export function useTrainingScoreHistory(clientRef: MutableRefObject<LabClient | null>) {
+export function useTrainingScoreHistory(
+  clientRef: MutableRefObject<LabClient | null>,
+  pick: (frame: Frame | null | undefined, duckId?: string | null) => TrainingPayload | null = displayedTraining,
+) {
   const [points, setPoints] = useState<Point[]>([]);
   useEffect(() => {
     let job = "";
     let lastSteps = -1;
     let history: Point[] = [];
     const sample = () => {
-      const training = displayedTraining(clientRef.current?.frame, getSelectedDuck());
+      const training = pick(clientRef.current?.frame, getSelectedDuck());
       if (!training) {
         if (history.length) setPoints([]);
         history = [];
@@ -42,6 +45,6 @@ export function useTrainingScoreHistory(clientRef: MutableRefObject<LabClient | 
     };
     const timer = window.setInterval(sample, 500);
     return () => window.clearInterval(timer);
-  }, [clientRef]);
+  }, [clientRef, pick]);
   return points;
 }

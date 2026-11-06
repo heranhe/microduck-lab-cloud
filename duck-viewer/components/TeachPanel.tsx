@@ -13,6 +13,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionPicker, type ActionPick } from "./ActionPicker";
 import { TrainProgress } from "./TrainProgress";
 import { AiPlanner } from "./AiPlanner";
+import { ResultCard, type ResultAction } from "./ResultCard";
+import { TrainHistory } from "./TrainHistory";
 import { ServoChoice } from "./ServoChoice";
 import { DEFAULT_SERVO, cloudServoNote, isServo, type Servo } from "@/lib/servo";
 import { TrainingScoreChart } from "./TrainingScoreChart";
@@ -26,6 +28,7 @@ import {
   clampStepBudget,
   fetchLab,
   displayedTraining,
+  liveTrainings,
   isRunPolicy,
   loadTeachRun,
   policyTitle,
@@ -65,10 +68,11 @@ import {
   type CloudPreset,
   type TrainMode,
 } from "@/lib/actionCatalog";
-import { cloudProgressView } from "@/lib/trainProgress";
+import { cloudProgressView, localJobView } from "@/lib/trainProgress";
+import { cloudResultToShow, elapsedText, finishHeadline, isFinish, justFinished, toastFor } from "@/lib/trainResult";
 import { bestRunFor } from "@/lib/tricks";
 import { getSelectedDuck, useSelectedDuck } from "@/lib/select";
-import { modalIsOpen, requestCloudOpen } from "@/lib/ui";
+import { modalIsOpen, requestCloudOpen, requestPolicyOpen } from "@/lib/ui";
 import { pushToast } from "./Toasts";
 
 const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -1283,6 +1287,17 @@ export function TeachPanel({
   // M steps used to stand between a newcomer and the trick chips.
   const [budgetOpen, setBudgetOpen] = useState(false);
   const [training, setTraining] = useState<TrainingPayload | null>(null);
+  // The run actually training, which the card above may not be showing: it follows the duck you picked.
+  const [liveJobs, setLiveJobs] = useState<TrainingPayload[]>([]);
+  // Runs that ended while this page was watching: each earns a toast and a result card until dismissed.
+  const [finishedRuns, setFinishedRuns] = useState<string[]>([]);
+  const [finishedJobs, setFinishedJobs] = useState<TrainingPayload[]>([]);
+  const seenStatus = useRef<Record<string, string>>({});
+  const [cloudSeen, setCloudSeen] = useState<string[]>(() => {
+    const saved = loadJSON<unknown>("teachCloudResultsSeen", []);
+    return Array.isArray(saved) ? saved.filter((v): v is string => typeof v === "string").slice(-50) : [];
+  });
+  const cloudState = useRef<Record<string, string>>({});
   // Read off the streamed roster rather than the trainer: the trainee duck in
   // the scene runs the newest snapshot, so this is the speed the user is
   // actually watching.
@@ -1302,6 +1317,7 @@ export function TeachPanel({
   useEffect(() => saveJSON("teachOpen", open), [open]);
   useEffect(() => saveJSON("teachCloudProvider", cloudProvider), [cloudProvider]);
   useEffect(() => saveJSON("teachServo", servo), [servo]);
+  useEffect(() => saveJSON("teachCloudResultsSeen", cloudSeen), [cloudSeen]);
   useEffect(() => {
     const openPanel = () => setOpen(true);
     const closePanel = () => setOpen(false);
@@ -1394,6 +1410,18 @@ export function TeachPanel({
       .catch(() => { if (!stale) setPrereq(null); });
     return () => { stale = true; };
   }, [open, pickedCloudTask, cloudProvider, labOnline]);
+  // A cloud job ending is announced too, once, when it was seen running first.
+  useEffect(() => {
+    const seen = cloudState.current;
+    for (const job of colabJobList) {
+      const ended = job.state === "done" || job.state === "stopped" || job.state === "failed";
+      if (ended && job.released === true && seen[job.id] === "running") {
+        const title = rows.find((r) => r.cloud?.task === job.task)?.title ?? job.task;
+        pushToast(toastFor(job.state as "done" | "stopped" | "failed", title, locale));
+      }
+      seen[job.id] = needsRelease(job) ? "running" : "ended";
+    }
+  }, [colabJobList, rows, locale]);
   // A running cloud job reports every few seconds; the account lookups stay slow.
   const cloudRunning = activeCloudJobs > 0;
   useEffect(() => {
@@ -1428,6 +1456,20 @@ export function TeachPanel({
       if (!frame) return;
       const t = displayedTraining(frame, getSelectedDuck());
       setTraining(t);
+      setLiveJobs(liveTrainings(frame));
+      // Say so when a run ends, whichever duck is selected.
+      const jobs = frame.trainings ?? (frame.training ? [frame.training] : []);
+      const ended = justFinished(seenStatus.current, jobs);
+      seenStatus.current = Object.fromEntries(jobs.map((j) => [j.runName, j.status]));
+      if (ended.length) {
+        for (const e of ended) {
+          const job = jobs.find((j) => j.runName === e.runName);
+          if (job) pushToast(toastFor(e.status, localizeBehavior(job.behavior, locale).title, locale));
+        }
+        setFinishedRuns((prev) => [...prev.filter((r) => !ended.some((e) => e.runName === r)), ...ended.map((e) => e.runName)]);
+        setFinishedJobs((prev) => [...prev.filter((j) => !ended.some((e) => e.runName === j.runName)),
+          ...jobs.filter((j) => ended.some((e) => e.runName === j.runName))]);
+      }
       setTraineeSpeed(frame.ducks.find((d) => d.id === (t?.trainee ?? "trainee"))?.speed ?? null);
       // Pending budget edits belong to the trick on screen: a different one
       // has different stages, and its own remembered budget.
@@ -1446,7 +1488,7 @@ export function TeachPanel({
       }
     }, 500);
     return () => clearInterval(id);
-  }, [clientRef]);
+  }, [clientRef, locale]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -2262,6 +2304,55 @@ export function TeachPanel({
             })}
           </div>
         )}
+        {finishedRuns.length > 0 && (() => {
+          const runName = finishedRuns[finishedRuns.length - 1];
+          const job = finishedJobs.find((j) => j.runName === runName);
+          if (!job || !isFinish(job.status)) return null;
+          const title = localizeBehavior(job.behavior, locale).title;
+          const head = finishHeadline(job.status, title, locale);
+          const p = job.progress;
+          const details = [
+            p.ep_rew != null ? `${tr("Score", "得分")} ${p.ep_rew}` : "",
+            elapsedText(p.overallElapsed) ? `${tr("Took", "用时")} ${elapsedText(p.overallElapsed)}` : "",
+            `${(p.overallSteps ?? p.steps ?? 0).toLocaleString()} ${tr("steps", "步")}`,
+          ].filter(Boolean);
+          const failed = job.status === "failed";
+          const actions: ResultAction[] = failed ? [] : [
+            { label: tr("▶ Try it on stage", "▶ 放到舞台看看"), primary: true, onClick: () => {
+              clientRef.current?.sendSpawnDuck(`run:${runName}`, (job.stage?.count ?? 1) > 1);
+              pushToast(`⚡ spawning ${title}…`);
+            } },
+            { label: tr("⤓ Download ONNX", "⤓ 下载 ONNX"), href: `${LAB_HTTP}/runs/${encodeURIComponent(runName)}/policy.onnx` },
+            { label: tr("🧠 See it in Models", "🧠 在“模型”里查看"), onClick: requestPolicyOpen },
+          ];
+          return (
+            <ResultCard tone={head.tone} headline={head.text} details={details} actions={actions}
+              note={failed ? tr(`See runs/${runName}/train.log for the reason.`, `原因见 runs/${runName}/train.log。`)
+                : job.status === "stopped" ? tr("Stopped early; this is the last saved snapshot, not a finished run.", "提前停止，这是最近保存的快照，不是完整训练的结果。")
+                : tr("Watch it first: a high score does not always mean the motion is right. Use the training card below to fine-tune.", "先看一眼动作再下结论：得分高不一定动作对。想继续改进，用下方的训练卡片微调。")}
+              onDismiss={() => setFinishedRuns((prev) => prev.filter((r) => r !== runName))} />
+          );
+        })()}
+        {(() => {
+          const job = cloudResultToShow(colabJobList, cloudSeen, Date.now());
+          if (!job) return null;
+          const title = rows.find((r) => r.cloud?.task === job.task)?.title ?? job.task;
+          const status = job.state as "done" | "stopped" | "failed";
+          const head = finishHeadline(status, `${title} · Colab`, locale);
+          const base = `${LAB_HTTP}/cloud/colab/jobs/${job.id}/artifacts`;
+          const actions: ResultAction[] = [
+            ...(job.artifacts?.includes("policy.onnx") ? [{ label: tr("⤓ Download ONNX", "⤓ 下载 ONNX"), href: `${base}/policy.onnx`, primary: true }] : []),
+            ...(job.artifacts?.includes("checkpoint.pt") ? [{ label: tr("⤓ Checkpoint", "⤓ 检查点"), href: `${base}/checkpoint.pt` }] : []),
+          ];
+          return (
+            <ResultCard tone={head.tone} headline={head.text}
+              details={[job.ccu_spent != null ? `${tr("Spent", "已用")} ${job.ccu_spent} CCU` : "", tr("GPU released", "算力已释放")].filter(Boolean)}
+              actions={actions}
+              note={job.state === "failed" ? (job.message || tr("The run failed.", "训练失败。"))
+                : tr("Cloud results can't be put on the stage directly yet. Download the ONNX first.", "云端结果还不能直接放到舞台，请先下载 ONNX。")}
+              onDismiss={() => setCloudSeen((prev) => [...prev, job.id].slice(-50))} />
+          );
+        })()}
         {liveCloud && (
           <div style={{ margin: "0 0 8px", padding: 8, borderRadius: 8, border: "1px solid rgba(112,184,216,0.35)", background: "rgba(24,44,57,0.55)" }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>☁ {tr("Cloud training", "云端训练")} · {liveTitle}</div>
@@ -2271,6 +2362,14 @@ export function TeachPanel({
             </div>
           </div>
         )}
+        {liveJobs.filter((job) => job.runName !== training?.runName).map((job) => (
+          <div key={job.runName} style={{ margin: "0 0 8px", padding: 8, borderRadius: 8, border: "1px solid rgba(125,216,160,0.35)", background: "rgba(24,57,40,0.45)" }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>
+              ▶ {tr("Training now", "正在训练")} · {localizeBehavior(job.behavior, locale).title}
+            </div>
+            <TrainProgress view={localJobView(job, locale)} />
+          </div>
+        ))}
         <AiPlanner
           robot={robot.id}
           catalog={catalog}
@@ -2304,6 +2403,11 @@ export function TeachPanel({
           onPick={(next) => { setPicked(next); setCloudError(""); }}
           renderConfig={renderConfig}
         />
+        <TrainHistory online={labOnline === true} refreshKey={finishedRuns.length}
+          onWatch={(row) => {
+            clientRef.current?.sendSpawnDuck(`run:${row.run}`, (row.stages ?? 1) > 1);
+            pushToast(`⚡ spawning ${row.title}…`);
+          }} />
         {!activePick && (cloudError || labError) && (
           <div role="alert" style={{ color: "#ef957d", fontSize: 10, marginTop: 6 }}>{cloudError || labError}</div>
         )}

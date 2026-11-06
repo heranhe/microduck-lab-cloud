@@ -4095,6 +4095,17 @@ def make_app(ducks: list[Duck], idle_exit_s: float = 0.0):
                 "shipped": lab_robots.shipped_groups(),
                 "tricks": trick_names(policies)}
 
+    @app.get("/train/history")
+    def get_train_history(limit: int = 40) -> dict:
+        """Past local trainings: how long each ran, how far it got and what it scored."""
+        from .run_history import run_history
+        live = {j.run_name for j in st.training_jobs()}
+        rows = run_history(RUNS_DIR, live=live, limit=limit)
+        titles = {b.id: b.title for b in behaviors_mod.BEHAVIORS.values()}
+        for row in rows:
+            row["title"] = titles.get(row.get("behavior") or "", row.get("behavior") or row["run"])
+        return {"history": rows}
+
     @app.post("/robots/{robot}/fetch")
     def fetch_robot(robot: str) -> dict:
         """Download a robot's assets from the palette. Returns at once; poll
